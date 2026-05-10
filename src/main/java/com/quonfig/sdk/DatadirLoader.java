@@ -226,6 +226,9 @@ public final class DatadirLoader {
 
   private static ValueType parseValueType(String s) {
     if (s == null) return ValueType.STRING;
+    // Workspace JSON uses snake_case (`string_list`, `weighted_values`); legacy Prefab payloads
+    // and a handful of round-tripped configs use camelCase. Accept both so the same SDK code
+    // serves the integration-test-data corpus and customer-authored datadirs alike.
     switch (s) {
       case "bool":
         return ValueType.BOOL;
@@ -236,14 +239,17 @@ public final class DatadirLoader {
       case "string":
         return ValueType.STRING;
       case "stringList":
+      case "string_list":
         return ValueType.STRING_LIST;
       case "logLevel":
+      case "log_level":
         return ValueType.LOG_LEVEL;
       case "duration":
         return ValueType.DURATION;
       case "json":
         return ValueType.JSON;
       case "weightedValues":
+      case "weighted_values":
         return ValueType.WEIGHTED_VALUES;
       case "schema":
         return ValueType.SCHEMA;

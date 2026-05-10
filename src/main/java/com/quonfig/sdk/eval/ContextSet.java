@@ -32,10 +32,17 @@ public final class ContextSet {
     }
 
     int dot = propertyName.indexOf('.');
-    if (dot < 0) return Lookup.absent();
-
-    String contextName = propertyName.substring(0, dot);
-    String key = propertyName.substring(dot + 1);
+    String contextName;
+    String key;
+    if (dot < 0) {
+      // Bare property name → look up in the unnamed ("") context. Mirrors
+      // sdk-go's splitAtFirstDot, which treats `foo` as `("", "foo")`.
+      contextName = "";
+      key = propertyName;
+    } else {
+      contextName = propertyName.substring(0, dot);
+      key = propertyName.substring(dot + 1);
+    }
     Map<String, Object> nc = data.get(contextName);
     if (nc == null) return Lookup.absent();
     if (!nc.containsKey(key)) return Lookup.absent();
