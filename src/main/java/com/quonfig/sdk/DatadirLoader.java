@@ -22,16 +22,18 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Reads a workspace directory tree (configs/, feature-flags/, segments/, log-levels/, schemas/)
- * into a list of {@link ConfigRow} objects suitable for an in-memory store.
+ * Reads a workspace directory tree (configs/, feature-flags/, segments/, log-levels/) into a list
+ * of {@link ConfigRow} objects suitable for an in-memory store.
  *
- * <p>Mirrors {@code sdk-go/workspace_loader.go}: walks each subdirectory, parses every {@code
- * *.json} file, skips dotfiles. Feature flags always materialize with {@code sendToClientSdk=true}.
+ * <p>Mirrors {@code api-delivery/internal/config/loader.go}: {@code schemas/} is intentionally
+ * excluded — those files are raw JSON Schema documents, not configs, and SDKs do not consume them
+ * (qfg-uzsl). Walks each subdirectory, parses every {@code *.json} file, skips dotfiles. Feature
+ * flags always materialize with {@code sendToClientSdk=true}.
  */
 public final class DatadirLoader {
 
   private static final List<String> SUBDIRS =
-      List.of("configs", "feature-flags", "segments", "log-levels", "schemas");
+      List.of("configs", "feature-flags", "segments", "log-levels");
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private DatadirLoader() {}
