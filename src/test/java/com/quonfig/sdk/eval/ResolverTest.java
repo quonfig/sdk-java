@@ -1,10 +1,12 @@
 package com.quonfig.sdk.eval;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -128,6 +130,82 @@ class ResolverTest {
     Value out = r.resolve(provided, cfg, "", new ContextSet());
     assertEquals(ValueType.BOOL, out.type());
     assertEquals(true, out.value());
+  }
+
+  @Test
+  void resolve_providedEnvVar_coercesBoolUppercaseTrue() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_BOOL"));
+    ConfigRow cfg = rowNoRules("k", ValueType.BOOL);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("TRUE"));
+    Value out = r.resolve(provided, cfg, "", new ContextSet());
+    assertEquals(ValueType.BOOL, out.type());
+    assertEquals(true, out.value());
+  }
+
+  @Test
+  void resolve_providedEnvVar_throwsUnableToCoerceWhenBoolGarbage() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_BOOL"));
+    ConfigRow cfg = rowNoRules("k", ValueType.BOOL);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("definitely-not-a-bool"));
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_COERCE, ex.kind());
+  }
+
+  @Test
+  void resolve_providedEnvVar_coercesStringList() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_LIST"));
+    ConfigRow cfg = rowNoRules("k", ValueType.STRING_LIST);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("a, b ,c"));
+    Value out = r.resolve(provided, cfg, "", new ContextSet());
+    assertEquals(ValueType.STRING_LIST, out.type());
+    assertInstanceOf(List.class, out.value());
+    assertEquals(List.of("a", "b", "c"), out.value());
+  }
+
+  @Test
+  void resolve_providedEnvVar_coercesJsonObject() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_JSON"));
+    ConfigRow cfg = rowNoRules("k", ValueType.JSON);
+    Resolver r =
+        new Resolver(new MapStore(), null, key -> Optional.of("{\"a\":1,\"b\":[true,\"x\"]}"));
+    Value out = r.resolve(provided, cfg, "", new ContextSet());
+    assertEquals(ValueType.JSON, out.type());
+    assertInstanceOf(Map.class, out.value());
+    @SuppressWarnings("unchecked")
+    Map<String, Object> m = (Map<String, Object>) out.value();
+    assertEquals(1, ((Number) m.get("a")).intValue());
+    assertInstanceOf(List.class, m.get("b"));
+  }
+
+  @Test
+  void resolve_providedEnvVar_throwsUnableToCoerceWhenJsonInvalid() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "BAD_JSON"));
+    ConfigRow cfg = rowNoRules("k", ValueType.JSON);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("{not-json"));
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_COERCE, ex.kind());
+  }
+
+  @Test
+  void resolve_providedEnvVar_coercesDurationIso8601() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_DURATION"));
+    ConfigRow cfg = rowNoRules("k", ValueType.DURATION);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("PT90S"));
+    Value out = r.resolve(provided, cfg, "", new ContextSet());
+    assertEquals(ValueType.DURATION, out.type());
+    assertEquals(Duration.ofSeconds(90), out.value());
+  }
+
+  @Test
+  void resolve_providedEnvVar_throwsUnableToCoerceWhenDurationInvalid() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "BAD_DURATION"));
+    ConfigRow cfg = rowNoRules("k", ValueType.DURATION);
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("ninety seconds"));
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_COERCE, ex.kind());
   }
 
   @Test

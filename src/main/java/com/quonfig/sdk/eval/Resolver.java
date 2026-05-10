@@ -1,10 +1,17 @@
 package com.quonfig.sdk.eval;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
+import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Post-evaluation value resolution: ENV_VAR provided values, AES-GCM decryption of confidential
@@ -26,6 +33,8 @@ public final class Resolver {
 
   /** Reads from the JVM's environment via {@link System#getenv(String)}. */
   public static final EnvLookup DEFAULT_ENV_LOOKUP = key -> Optional.ofNullable(System.getenv(key));
+
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   private final ConfigStore configStore;
   private final Evaluator evaluator;
@@ -160,15 +169,18 @@ public final class Resolver {
           if ("true".equalsIgnoreCase(envValue) || "1".equals(envValue)) return Boolean.TRUE;
           if ("false".equalsIgnoreCase(envValue) || "0".equals(envValue)) return Boolean.FALSE;
           throw new IllegalArgumentException("not a boolean");
-        case STRING:
         case STRING_LIST:
-        case LOG_LEVEL:
-        case DURATION:
+          return splitStringList(envValue);
         case JSON:
+          return JSON.readValue(envValue, Object.class);
+        case DURATION:
+          return Duration.parse(envValue);
+        case STRING:
+        case LOG_LEVEL:
         default:
           return envValue;
       }
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException | DateTimeParseException | JsonProcessingException e) {
       throw new ResolverException(
           ResolverException.Kind.UNABLE_TO_COERCE,
           "cannot convert \""
@@ -181,6 +193,13 @@ public final class Resolver {
               + e.getMessage(),
           e);
     }
+  }
+
+  private static List<String> splitStringList(String envValue) {
+    if (envValue.isEmpty()) return List.of();
+    return Arrays.stream(envValue.split(",", -1))
+        .map(String::trim)
+        .collect(Collectors.toUnmodifiableList());
   }
 
   private static String stringOf(Object value) {
