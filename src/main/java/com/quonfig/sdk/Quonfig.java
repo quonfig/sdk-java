@@ -317,10 +317,11 @@ public final class Quonfig implements AutoCloseable {
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.FLAG_NOT_FOUND,
           "config \"" + key + "\" not found",
-          baseMetadata(null, key, null, -1, -1));
+          baseMetadata(null, key, null, Reason.ERROR, -1, -1));
     }
 
     if (shapeCollector != null) shapeCollector.push(effective);
@@ -330,10 +331,11 @@ public final class Quonfig implements AutoCloseable {
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.TYPE_MISMATCH,
           "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType,
-          metadataFor(cfg, -1, -1));
+          metadataFor(cfg, Reason.ERROR, -1, -1));
     }
 
     EvaluationMatch match;
@@ -343,15 +345,22 @@ public final class Quonfig implements AutoCloseable {
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.GENERAL,
           "evaluation failed for \"" + key + "\": " + e.getMessage(),
-          metadataFor(cfg, -1, -1));
+          metadataFor(cfg, Reason.ERROR, -1, -1));
     }
 
     if (!match.isMatch()) {
       return new EvaluationDetails<>(
-          def, Reason.DEFAULT, null, null, null, metadataFor(cfg, -1, -1));
+          def,
+          Reason.DEFAULT,
+          variantFor(Reason.DEFAULT, -1, -1),
+          null,
+          null,
+          null,
+          metadataFor(cfg, Reason.DEFAULT, -1, -1));
     }
 
     Value resolvedVal;
@@ -361,10 +370,11 @@ public final class Quonfig implements AutoCloseable {
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.GENERAL,
           "resolve failed for \"" + key + "\": " + e.getMessage(),
-          metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+          metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     }
 
     Reason r = match.weightedValueIndex() >= 0 ? Reason.SPLIT : mapEngineReason(match.reason());
@@ -377,10 +387,11 @@ public final class Quonfig implements AutoCloseable {
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.TYPE_MISMATCH,
           "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage(),
-          metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+          metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     }
 
     if (summaryCollector != null) {
@@ -401,10 +412,11 @@ public final class Quonfig implements AutoCloseable {
     return new EvaluationDetails<>(
         typed,
         r,
+        variantFor(r, match.ruleIndex(), match.weightedValueIndex()),
         variantIndex,
         null,
         null,
-        metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+        metadataFor(cfg, r, match.ruleIndex(), match.weightedValueIndex()));
   }
 
   private static int reasonNumber(Reason r) {
@@ -418,8 +430,30 @@ public final class Quonfig implements AutoCloseable {
       case DEFAULT:
         return 4;
       case ERROR:
-      default:
         return 5;
+      case UNKNOWN:
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * Per project/plans/openfeature-resolution-details.md §2: variant is a synthetic
+   * OpenFeature-style identifier always set on every {@link EvaluationDetails}.
+   */
+  private static String variantFor(Reason r, int ruleIndex, int weightedValueIndex) {
+    switch (r) {
+      case STATIC:
+        return "static";
+      case TARGETING_MATCH:
+        return ruleIndex >= 0 ? "targeting:" + ruleIndex : "targeting";
+      case SPLIT:
+        return weightedValueIndex >= 0 ? "split:" + weightedValueIndex : "split";
+      case DEFAULT:
+      case ERROR:
+      case UNKNOWN:
+      default:
+        return "default";
     }
   }
 
@@ -463,20 +497,37 @@ public final class Quonfig implements AutoCloseable {
     }
   }
 
+  /**
+   * Per qfg-ypcu / project/plans/openfeature-resolution-details.md §3: ruleIndex is included only
+   * when reason is {@link Reason#TARGETING_MATCH} or {@link Reason#SPLIT}; weightedValueIndex only
+   * on {@link Reason#SPLIT}; environment omitted when not known.
+   */
   private Map<String, Object> baseMetadata(
-      String configId, String configKey, String configType, int ruleIndex, int weightedIndex) {
+      String configId,
+      String configKey,
+      String configType,
+      Reason reason,
+      int ruleIndex,
+      int weightedIndex) {
     Map<String, Object> m = new LinkedHashMap<>();
     if (configId != null) m.put("configId", configId);
     if (configKey != null) m.put("configKey", configKey);
     if (configType != null) m.put("configType", configType);
-    if (ruleIndex >= 0) m.put("ruleIndex", ruleIndex);
-    if (weightedIndex >= 0) m.put("weightedValueIndex", weightedIndex);
-    if (options.environment() != null) m.put("environment", options.environment());
+    if (ruleIndex >= 0 && (reason == Reason.TARGETING_MATCH || reason == Reason.SPLIT)) {
+      m.put("ruleIndex", ruleIndex);
+    }
+    if (weightedIndex >= 0 && reason == Reason.SPLIT) {
+      m.put("weightedValueIndex", weightedIndex);
+    }
+    if (options.environment() != null && !options.environment().isEmpty()) {
+      m.put("environment", options.environment());
+    }
     return m;
   }
 
-  private Map<String, Object> metadataFor(ConfigRow cfg, int ruleIndex, int weightedIndex) {
-    return baseMetadata(cfg.id(), cfg.key(), cfg.type().name(), ruleIndex, weightedIndex);
+  private Map<String, Object> metadataFor(
+      ConfigRow cfg, Reason reason, int ruleIndex, int weightedIndex) {
+    return baseMetadata(cfg.id(), cfg.key(), cfg.type().name(), reason, ruleIndex, weightedIndex);
   }
 
   private void awaitInit() {

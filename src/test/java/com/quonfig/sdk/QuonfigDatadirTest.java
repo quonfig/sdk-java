@@ -78,6 +78,7 @@ class QuonfigDatadirTest {
       EvaluationDetails<String> d = q.getStringDetails("greeting", "fallback");
       assertEquals("hello", d.value());
       assertEquals(Reason.STATIC, d.reason());
+      assertEquals("static", d.variant());
       assertNull(d.errorCode());
       assertNull(d.errorMessage());
       assertNull(d.variantIndex());
@@ -85,7 +86,9 @@ class QuonfigDatadirTest {
       assertEquals("cfg-1", meta.get("configId"));
       assertEquals("greeting", meta.get("configKey"));
       assertEquals("CONFIG", meta.get("configType"));
-      assertEquals(0, meta.get("ruleIndex"));
+      // Per qfg-ypcu spec, ruleIndex is omitted unless reason is TARGETING_MATCH or SPLIT.
+      assertFalse(meta.containsKey("ruleIndex"));
+      assertFalse(meta.containsKey("weightedValueIndex"));
       assertEquals("production", meta.get("environment"));
     }
   }
@@ -107,6 +110,7 @@ class QuonfigDatadirTest {
       EvaluationDetails<String> d = q.getStringDetails("tier", "fallback", ctx);
       assertEquals("premium", d.value());
       assertEquals(Reason.TARGETING_MATCH, d.reason());
+      assertEquals("targeting:0", d.variant());
       assertEquals(0, d.metadata().get("ruleIndex"));
     }
   }
@@ -126,6 +130,7 @@ class QuonfigDatadirTest {
       EvaluationDetails<String> d = q.getStringDetails("tier", "anonymous");
       assertEquals("anonymous", d.value());
       assertEquals(Reason.DEFAULT, d.reason());
+      assertEquals("default", d.variant());
     }
   }
 
@@ -135,6 +140,7 @@ class QuonfigDatadirTest {
       EvaluationDetails<String> d = q.getStringDetails("missing", "fallback");
       assertEquals("fallback", d.value());
       assertEquals(Reason.ERROR, d.reason());
+      assertEquals("default", d.variant());
       assertEquals(ErrorCode.FLAG_NOT_FOUND, d.errorCode());
       assertNotNull(d.errorMessage());
     }
@@ -328,6 +334,7 @@ class QuonfigDatadirTest {
       EvaluationDetails<String> d = q.getStringDetails("ab", "fallback");
       assertEquals("b", d.value());
       assertEquals(Reason.SPLIT, d.reason());
+      assertEquals("split:1", d.variant());
       assertEquals(Integer.valueOf(1), d.variantIndex());
       assertEquals(1, d.metadata().get("weightedValueIndex"));
     }
