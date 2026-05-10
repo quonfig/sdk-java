@@ -62,6 +62,15 @@ public final class DatadirLoader {
 
   private static ConfigRow parseConfigFile(Path file) throws IOException {
     JsonNode root = MAPPER.readTree(Files.readAllBytes(file));
+    return parseConfigNode(root);
+  }
+
+  /**
+   * Parses a single per-config JSON node into a {@link ConfigRow}. Same shape that {@link
+   * com.quonfig.sdk.wire.ConfigEnvelope#configs()} carries from api-delivery, so this is the bridge
+   * from an HTTP/SSE envelope into the in-memory store.
+   */
+  public static ConfigRow parseConfigNode(JsonNode root) {
     String id = root.hasNonNull("id") ? root.get("id").asText() : root.get("key").asText();
     String key = root.get("key").asText();
     ConfigType type = parseConfigType(root.get("type").asText());

@@ -42,6 +42,7 @@ public final class Options {
   private final String sdkKey;
   private final String domain;
   private final List<String> apiUrls;
+  private final List<String> streamUrlsOverride;
   private final String telemetryUrl;
   private final String environment;
   private final Duration initTimeout;
@@ -78,6 +79,7 @@ public final class Options {
         b.apiUrls != null
             ? List.copyOf(b.apiUrls)
             : List.of("https://primary." + d, "https://secondary." + d);
+    this.streamUrlsOverride = b.streamUrls != null ? List.copyOf(b.streamUrls) : null;
     this.telemetryUrl = b.telemetryUrl != null ? b.telemetryUrl : "https://telemetry." + d;
 
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
@@ -206,11 +208,13 @@ public final class Options {
   }
 
   /**
-   * The stream-base URLs derived from the api URLs (each {@code primary.X}/{@code secondary.X} →
-   * {@code stream.primary.X}/{@code stream.secondary.X}). Returns the explicit override if {@link
-   * Builder#apiUrls(List)} was called.
+   * Stream-base URLs for SSE. Resolution order: {@link Builder#streamUrls(List)} explicit override
+   * → derived from {@link #apiUrls()} (each {@code primary.X}/{@code secondary.X} → {@code
+   * stream.primary.X}/{@code stream.secondary.X}). The explicit override exists for cases where the
+   * derivation rule doesn't fit (local dev pointed at {@code 127.0.0.1:port}, custom proxy hosts).
    */
   public List<String> streamUrls() {
+    if (streamUrlsOverride != null) return streamUrlsOverride;
     return apiUrls.stream().map(Options::toStreamUrl).toList();
   }
 
@@ -230,6 +234,7 @@ public final class Options {
     private String sdkKey;
     private String domain;
     private List<String> apiUrls;
+    private List<String> streamUrls;
     private String telemetryUrl;
     private String environment;
     private Duration initTimeout;
@@ -264,6 +269,15 @@ public final class Options {
 
     public Builder apiUrls(List<String> v) {
       this.apiUrls = Objects.requireNonNull(v, "apiUrls");
+      return this;
+    }
+
+    /**
+     * Explicit override for the SSE stream URLs. When unset, stream URLs are derived from {@link
+     * #apiUrls(List)} by prefixing {@code stream.} to the host portion.
+     */
+    public Builder streamUrls(List<String> v) {
+      this.streamUrls = Objects.requireNonNull(v, "streamUrls");
       return this;
     }
 

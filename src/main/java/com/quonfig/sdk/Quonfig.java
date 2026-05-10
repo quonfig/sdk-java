@@ -1,5 +1,7 @@
 package com.quonfig.sdk;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.eval.ConfigRow;
 import com.quonfig.sdk.eval.ConfigStore;
 import com.quonfig.sdk.eval.ContextSet;
@@ -17,7 +19,12 @@ import com.quonfig.sdk.telemetry.ExampleContextCollector;
 import com.quonfig.sdk.telemetry.HttpTelemetrySender;
 import com.quonfig.sdk.telemetry.TelemetryReporter;
 import com.quonfig.sdk.telemetry.TelemetrySender;
+import com.quonfig.sdk.transport.HttpTransport;
+import com.quonfig.sdk.transport.SseClient;
+import com.quonfig.sdk.wire.ConfigEnvelope;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -29,6 +36,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
@@ -39,9 +48,10 @@ import java.util.function.Consumer;
  * <ul>
  *   <li><b>datadir</b> — load configs synchronously from a workspace directory tree (configs/,
  *       feature-flags/, segments/, log-levels/, schemas/). Typical local-dev mode.
- *   <li><b>datafile</b> — TODO (qfg-mol-d51 / follow-up bead).
- *   <li><b>http</b> — TODO (qfg-oi0j.4 / qfg-mol-d51): poll {@link Options#apiUrls()} and stream
- *       updates over SSE. Constructor returns immediately and init runs in the background.
+ *   <li><b>http</b> (default when neither datadir nor datafile is set) — fetch the initial envelope
+ *       from {@link Options#apiUrls()} and stream updates over SSE from {@link
+ *       Options#streamUrls()}. Constructor returns immediately; init runs in a background thread.
+ *   <li><b>datafile</b> — TODO (follow-up bead).
  * </ul>
  *
  * <p>Lifecycle: typed getters block on {@link #initFuture()} (with {@link Options#initTimeout()})
@@ -52,6 +62,9 @@ import java.util.function.Consumer;
  */
 public final class Quonfig implements AutoCloseable {
 
+  private static final ObjectMapper ENVELOPE_MAPPER = new ObjectMapper();
+  private static final String CONFIGS_PATH = "/api/v2/configs";
+
   private final Options options;
   private final CompletableFuture<Void> initFuture;
   private final CopyOnWriteArrayList<Runnable> configUpdateListeners = new CopyOnWriteArrayList<>();
@@ -61,6 +74,7 @@ public final class Quonfig implements AutoCloseable {
   private volatile Evaluator evaluator;
   private volatile Resolver resolver;
   private volatile boolean closed;
+  private volatile SseClient sseClient;
 
   private final EvaluationSummaryCollector summaryCollector;
   private final ContextShapeCollector shapeCollector;
@@ -89,9 +103,18 @@ public final class Quonfig implements AutoCloseable {
       throw new IllegalStateException(
           "datafile mode not yet implemented (tracked by qfg-mol-d51 / follow-up bead)");
     } else {
-      throw new IllegalStateException(
-          "Quonfig requires either Options.datadir(...) or Options.datafile(...). HTTP/SSE mode "
-              + "is tracked by qfg-oi0j.4 and not yet wired in this build.");
+      // HTTP+SSE mode: initial fetch on a background thread so the constructor returns
+      // immediately. Getters block on initFuture (with Options.initTimeout); on init failure
+      // they return the caller's default with Reason.ERROR. Once init succeeds, SSE starts
+      // streaming envelopes which atomically swap the in-memory store.
+      if (options.sdkKey() == null || options.sdkKey().isEmpty()) {
+        throw new IllegalStateException(
+            "sdkKey required for HTTP mode; set Options.builder().sdkKey(...) or QUONFIG_BACKEND_SDK_KEY");
+      }
+      this.initFuture = new CompletableFuture<>();
+      Thread t = new Thread(this::runInit, "quonfig-init");
+      t.setDaemon(true);
+      t.start();
     }
 
     TelemetrySender sender = resolveTelemetrySender(options);
@@ -132,6 +155,72 @@ public final class Quonfig implements AutoCloseable {
     this.store = s;
     this.evaluator = e;
     this.resolver = r;
+  }
+
+  private void runInit() {
+    try {
+      List<URI> urls = new ArrayList<>(options.apiUrls().size());
+      for (String u : options.apiUrls()) urls.add(URI.create(u));
+      HttpTransport http =
+          HttpTransport.builder()
+              .urls(urls)
+              .sdkKey(options.sdkKey())
+              .timeout(options.initTimeout())
+              .build();
+      HttpResponse<String> resp =
+          http.get(URI.create(CONFIGS_PATH), null)
+              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
+      installEnvelope(resp.body());
+      initFuture.complete(null);
+      fireConfigUpdate();
+      startSse();
+    } catch (TimeoutException e) {
+      initFuture.completeExceptionally(
+          new IllegalStateException("client initialization exceeded " + options.initTimeout(), e));
+    } catch (Exception e) {
+      Throwable cause = e.getCause() != null ? e.getCause() : e;
+      initFuture.completeExceptionally(
+          new IllegalStateException("client initialization failed: " + cause.getMessage(), cause));
+    }
+  }
+
+  private void installEnvelope(String body) throws IOException {
+    ConfigEnvelope envelope = ENVELOPE_MAPPER.readValue(body, ConfigEnvelope.class);
+    List<ConfigRow> rows = new ArrayList<>(envelope.configs().size());
+    for (JsonNode cfg : envelope.configs()) {
+      rows.add(DatadirLoader.parseConfigNode(cfg));
+    }
+    installRows(rows);
+  }
+
+  private void startSse() {
+    if (closed) return;
+    List<URI> streams = new ArrayList<>(options.streamUrls().size());
+    for (String u : options.streamUrls()) streams.add(URI.create(u));
+    SseClient sse = SseClient.builder().streamUrls(streams).sdkKey(options.sdkKey()).build();
+    sse.onEnvelope(
+        env -> {
+          try {
+            List<ConfigRow> rows = new ArrayList<>(env.configs().size());
+            for (JsonNode cfg : env.configs()) rows.add(DatadirLoader.parseConfigNode(cfg));
+            installRows(rows);
+            fireConfigUpdate();
+          } catch (RuntimeException ignored) {
+            // Bad envelope is non-fatal — keep the prior store in place.
+          }
+        });
+    sse.onConnectionStateChange(
+        connected -> {
+          for (Consumer<Boolean> l : sseListeners) {
+            try {
+              l.accept(connected);
+            } catch (RuntimeException ignored) {
+              // user code; never tear down the client
+            }
+          }
+        });
+    this.sseClient = sse;
+    sse.start();
   }
 
   public Options options() {
@@ -180,6 +269,8 @@ public final class Quonfig implements AutoCloseable {
   @Override
   public void close() {
     closed = true;
+    SseClient sse = sseClient;
+    if (sse != null) sse.stop();
     if (telemetryReporter != null) telemetryReporter.close();
   }
 
@@ -309,7 +400,18 @@ public final class Quonfig implements AutoCloseable {
   @SuppressWarnings("unchecked")
   private <T> EvaluationDetails<T> typedDetails(
       String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
-    awaitInit();
+    try {
+      awaitInit();
+    } catch (IllegalStateException e) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
+          null,
+          ErrorCode.GENERAL,
+          e.getMessage(),
+          baseMetadata(null, key, null, Reason.ERROR, -1, -1));
+    }
     ContextSet effective = merge(options.globalContext(), ctx);
 
     ConfigRow cfg = store.getConfig(key);
@@ -533,12 +635,15 @@ public final class Quonfig implements AutoCloseable {
   private void awaitInit() {
     if (closed) throw new IllegalStateException("Quonfig client is closed");
     try {
-      initFuture.get(options.initTimeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+      initFuture.get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("interrupted while awaiting init", e);
-    } catch (Exception e) {
-      throw new IllegalStateException("Quonfig init did not complete in time", e);
+    } catch (TimeoutException e) {
+      throw new IllegalStateException("client initialization exceeded " + options.initTimeout(), e);
+    } catch (java.util.concurrent.ExecutionException e) {
+      Throwable cause = e.getCause() != null ? e.getCause() : e;
+      throw new IllegalStateException(cause.getMessage(), cause);
     }
   }
 
