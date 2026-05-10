@@ -3,6 +3,8 @@ package com.quonfig.sdk;
 import com.quonfig.sdk.eval.ContextSet;
 import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.WeightedValueResolver;
+import com.quonfig.sdk.telemetry.ContextUploadMode;
+import com.quonfig.sdk.telemetry.TelemetrySender;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -53,6 +55,14 @@ public final class Options {
   private final Runnable onConfigUpdate;
   private final Consumer<Boolean> onSseConnectionStateChange;
   private final WeightedValueResolver weightedValueResolver;
+  private final boolean disableTelemetry;
+  private final boolean collectEvaluationSummaries;
+  private final ContextUploadMode contextUploadMode;
+  private final TelemetrySender telemetrySender;
+  private final Duration telemetryInitialDelay;
+  private final Duration telemetryFlushInterval;
+  private final Duration telemetryMaxInterval;
+  private final String instanceHash;
 
   private Options(Builder b) {
     Resolver.EnvLookup env = b.envLookup != null ? b.envLookup : Resolver.DEFAULT_ENV_LOOKUP;
@@ -80,6 +90,19 @@ public final class Options {
     this.onConfigUpdate = b.onConfigUpdate;
     this.onSseConnectionStateChange = b.onSseConnectionStateChange;
     this.weightedValueResolver = b.weightedValueResolver;
+    this.disableTelemetry = b.disableTelemetry;
+    this.collectEvaluationSummaries = b.collectEvaluationSummaries;
+    this.contextUploadMode =
+        b.contextUploadMode != null ? b.contextUploadMode : ContextUploadMode.PERIODIC_EXAMPLE;
+    this.telemetrySender = b.telemetrySender;
+    this.telemetryInitialDelay =
+        b.telemetryInitialDelay != null ? b.telemetryInitialDelay : Duration.ofSeconds(8);
+    this.telemetryFlushInterval =
+        b.telemetryFlushInterval != null ? b.telemetryFlushInterval : Duration.ofSeconds(60);
+    this.telemetryMaxInterval =
+        b.telemetryMaxInterval != null ? b.telemetryMaxInterval : Duration.ofSeconds(600);
+    this.instanceHash =
+        b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
   }
 
   public String sdkKey() {
@@ -150,6 +173,38 @@ public final class Options {
     return weightedValueResolver;
   }
 
+  public boolean disableTelemetry() {
+    return disableTelemetry;
+  }
+
+  public boolean collectEvaluationSummaries() {
+    return collectEvaluationSummaries;
+  }
+
+  public ContextUploadMode contextUploadMode() {
+    return contextUploadMode;
+  }
+
+  public TelemetrySender telemetrySender() {
+    return telemetrySender;
+  }
+
+  public Duration telemetryInitialDelay() {
+    return telemetryInitialDelay;
+  }
+
+  public Duration telemetryFlushInterval() {
+    return telemetryFlushInterval;
+  }
+
+  public Duration telemetryMaxInterval() {
+    return telemetryMaxInterval;
+  }
+
+  public String instanceHash() {
+    return instanceHash;
+  }
+
   /**
    * The stream-base URLs derived from the api URLs (each {@code primary.X}/{@code secondary.X} →
    * {@code stream.primary.X}/{@code stream.secondary.X}). Returns the explicit override if {@link
@@ -188,6 +243,14 @@ public final class Options {
     private Runnable onConfigUpdate;
     private Consumer<Boolean> onSseConnectionStateChange;
     private WeightedValueResolver weightedValueResolver;
+    private boolean disableTelemetry;
+    private boolean collectEvaluationSummaries = true;
+    private ContextUploadMode contextUploadMode;
+    private TelemetrySender telemetrySender;
+    private Duration telemetryInitialDelay;
+    private Duration telemetryFlushInterval;
+    private Duration telemetryMaxInterval;
+    private String instanceHash;
 
     public Builder sdkKey(String v) {
       this.sdkKey = v;
@@ -266,6 +329,46 @@ public final class Options {
 
     public Builder weightedValueResolver(WeightedValueResolver v) {
       this.weightedValueResolver = v;
+      return this;
+    }
+
+    public Builder disableTelemetry(boolean v) {
+      this.disableTelemetry = v;
+      return this;
+    }
+
+    public Builder collectEvaluationSummaries(boolean v) {
+      this.collectEvaluationSummaries = v;
+      return this;
+    }
+
+    public Builder contextUploadMode(ContextUploadMode v) {
+      this.contextUploadMode = v;
+      return this;
+    }
+
+    public Builder telemetrySender(TelemetrySender v) {
+      this.telemetrySender = v;
+      return this;
+    }
+
+    public Builder telemetryInitialDelay(Duration v) {
+      this.telemetryInitialDelay = v;
+      return this;
+    }
+
+    public Builder telemetryFlushInterval(Duration v) {
+      this.telemetryFlushInterval = v;
+      return this;
+    }
+
+    public Builder telemetryMaxInterval(Duration v) {
+      this.telemetryMaxInterval = v;
+      return this;
+    }
+
+    public Builder instanceHash(String v) {
+      this.instanceHash = v;
       return this;
     }
 

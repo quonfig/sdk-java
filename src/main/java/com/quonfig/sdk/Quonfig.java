@@ -9,6 +9,15 @@ import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
+import com.quonfig.sdk.telemetry.ContextShapeCollector;
+import com.quonfig.sdk.telemetry.ContextUploadMode;
+import com.quonfig.sdk.telemetry.EvaluationStat;
+import com.quonfig.sdk.telemetry.EvaluationSummaryCollector;
+import com.quonfig.sdk.telemetry.ExampleContextCollector;
+import com.quonfig.sdk.telemetry.HttpTelemetrySender;
+import com.quonfig.sdk.telemetry.TelemetryReporter;
+import com.quonfig.sdk.telemetry.TelemetrySender;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -53,6 +62,11 @@ public final class Quonfig implements AutoCloseable {
   private volatile Resolver resolver;
   private volatile boolean closed;
 
+  private final EvaluationSummaryCollector summaryCollector;
+  private final ContextShapeCollector shapeCollector;
+  private final ExampleContextCollector exampleCollector;
+  private final TelemetryReporter telemetryReporter;
+
   public Quonfig(Options options) {
     this.options = Objects.requireNonNull(options, "options");
     if (options.onConfigUpdate() != null) {
@@ -79,6 +93,36 @@ public final class Quonfig implements AutoCloseable {
           "Quonfig requires either Options.datadir(...) or Options.datafile(...). HTTP/SSE mode "
               + "is tracked by qfg-oi0j.4 and not yet wired in this build.");
     }
+
+    TelemetrySender sender = resolveTelemetrySender(options);
+    if (sender != null && !options.disableTelemetry()) {
+      ContextUploadMode mode = options.contextUploadMode();
+      this.summaryCollector = new EvaluationSummaryCollector(options.collectEvaluationSummaries());
+      this.shapeCollector = new ContextShapeCollector(mode);
+      this.exampleCollector = new ExampleContextCollector(mode);
+      this.telemetryReporter =
+          new TelemetryReporter(
+              sender,
+              options.instanceHash(),
+              summaryCollector,
+              shapeCollector,
+              exampleCollector,
+              options.telemetryInitialDelay(),
+              options.telemetryFlushInterval(),
+              options.telemetryMaxInterval());
+      this.telemetryReporter.start();
+    } else {
+      this.summaryCollector = null;
+      this.shapeCollector = null;
+      this.exampleCollector = null;
+      this.telemetryReporter = null;
+    }
+  }
+
+  private static TelemetrySender resolveTelemetrySender(Options options) {
+    if (options.telemetrySender() != null) return options.telemetrySender();
+    if (options.sdkKey() == null || options.sdkKey().isEmpty()) return null;
+    return new HttpTelemetrySender(options.telemetryUrl(), options.sdkKey());
   }
 
   private void installRows(List<ConfigRow> rows) {
@@ -120,17 +164,23 @@ public final class Quonfig implements AutoCloseable {
     if (listener != null) sseListeners.add(listener);
   }
 
-  /**
-   * Drains pending telemetry without closing. No-op until telemetry pipeline lands (qfg-mol-3yg).
-   */
+  /** Drains pending telemetry synchronously and posts it. No-op when telemetry is disabled. */
   public void flush() {
     awaitInit();
+    if (telemetryReporter != null) {
+      try {
+        telemetryReporter.flush();
+      } catch (IOException e) {
+        // Surface as unchecked so callers don't have to declare; the reporter itself logs.
+        throw new IllegalStateException("telemetry flush failed: " + e.getMessage(), e);
+      }
+    }
   }
 
   @Override
   public void close() {
     closed = true;
-    // SSE / polling / telemetry shutdown handled here once those wires land.
+    if (telemetryReporter != null) telemetryReporter.close();
   }
 
   // ---- typed getters (no context) ----
@@ -273,6 +323,9 @@ public final class Quonfig implements AutoCloseable {
           baseMetadata(null, key, null, -1, -1));
     }
 
+    if (shapeCollector != null) shapeCollector.push(effective);
+    if (exampleCollector != null) exampleCollector.push(effective);
+
     if (!isCompatible(cfg.valueType(), expectedType)) {
       return new EvaluationDetails<>(
           def,
@@ -330,6 +383,20 @@ public final class Quonfig implements AutoCloseable {
           metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
     }
 
+    if (summaryCollector != null) {
+      String reportable = Resolver.reportableValueFor(match.value()).orElse(null);
+      summaryCollector.push(
+          new EvaluationStat(
+              cfg.id(),
+              cfg.key(),
+              cfg.type().name(),
+              match.ruleIndex(),
+              match.weightedValueIndex(),
+              typed,
+              reportable,
+              reasonNumber(r)));
+    }
+
     Integer variantIndex = r == Reason.SPLIT ? match.weightedValueIndex() : null;
     return new EvaluationDetails<>(
         typed,
@@ -338,6 +405,22 @@ public final class Quonfig implements AutoCloseable {
         null,
         null,
         metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+  }
+
+  private static int reasonNumber(Reason r) {
+    switch (r) {
+      case STATIC:
+        return 1;
+      case TARGETING_MATCH:
+        return 2;
+      case SPLIT:
+        return 3;
+      case DEFAULT:
+        return 4;
+      case ERROR:
+      default:
+        return 5;
+    }
   }
 
   private static boolean isCompatible(ValueType actual, ValueType requested) {
