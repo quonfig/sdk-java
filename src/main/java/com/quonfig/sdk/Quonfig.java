@@ -1,0 +1,456 @@
+package com.quonfig.sdk;
+
+import com.quonfig.sdk.eval.ConfigRow;
+import com.quonfig.sdk.eval.ConfigStore;
+import com.quonfig.sdk.eval.ContextSet;
+import com.quonfig.sdk.eval.EvaluationMatch;
+import com.quonfig.sdk.eval.Evaluator;
+import com.quonfig.sdk.eval.Resolver;
+import com.quonfig.sdk.eval.ResolverException;
+import com.quonfig.sdk.eval.Value;
+import com.quonfig.sdk.eval.ValueType;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
+/**
+ * Main public client for the Quonfig Java SDK.
+ *
+ * <p>Construction modes (mutually exclusive):
+ *
+ * <ul>
+ *   <li><b>datadir</b> — load configs synchronously from a workspace directory tree (configs/,
+ *       feature-flags/, segments/, log-levels/, schemas/). Typical local-dev mode.
+ *   <li><b>datafile</b> — TODO (qfg-mol-d51 / follow-up bead).
+ *   <li><b>http</b> — TODO (qfg-oi0j.4 / qfg-mol-d51): poll {@link Options#apiUrls()} and stream
+ *       updates over SSE. Constructor returns immediately and init runs in the background.
+ * </ul>
+ *
+ * <p>Lifecycle: typed getters block on {@link #initFuture()} (with {@link Options#initTimeout()})
+ * before returning. {@link #close()} stops background SSE / polling / telemetry threads. {@link
+ * #flush()} drains telemetry without closing.
+ *
+ * <p>Thread-safety: all public methods are safe to call from any thread.
+ */
+public final class Quonfig implements AutoCloseable {
+
+  private final Options options;
+  private final CompletableFuture<Void> initFuture;
+  private final CopyOnWriteArrayList<Runnable> configUpdateListeners = new CopyOnWriteArrayList<>();
+  private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
+
+  private volatile InMemoryConfigStore store;
+  private volatile Evaluator evaluator;
+  private volatile Resolver resolver;
+  private volatile boolean closed;
+
+  public Quonfig(Options options) {
+    this.options = Objects.requireNonNull(options, "options");
+    if (options.onConfigUpdate() != null) {
+      configUpdateListeners.add(options.onConfigUpdate());
+    }
+    if (options.onSseConnectionStateChange() != null) {
+      sseListeners.add(options.onSseConnectionStateChange());
+    }
+
+    if (options.datadir() != null && !options.datadir().isEmpty()) {
+      if (options.environment() == null || options.environment().isEmpty()) {
+        throw new IllegalStateException(
+            "environment required for datadir mode; set Options.builder().environment(...) or QUONFIG_ENVIRONMENT");
+      }
+      List<ConfigRow> rows = DatadirLoader.load(Path.of(options.datadir()));
+      installRows(rows);
+      this.initFuture = CompletableFuture.completedFuture(null);
+      fireConfigUpdate();
+    } else if (options.datafile() != null && !options.datafile().isEmpty()) {
+      throw new IllegalStateException(
+          "datafile mode not yet implemented (tracked by qfg-mol-d51 / follow-up bead)");
+    } else {
+      throw new IllegalStateException(
+          "Quonfig requires either Options.datadir(...) or Options.datafile(...). HTTP/SSE mode "
+              + "is tracked by qfg-oi0j.4 and not yet wired in this build.");
+    }
+  }
+
+  private void installRows(List<ConfigRow> rows) {
+    InMemoryConfigStore s = new InMemoryConfigStore(rows);
+    Evaluator e = new Evaluator(s, options.weightedValueResolver());
+    Resolver r = new Resolver(s, e, options.envLookup());
+    this.store = s;
+    this.evaluator = e;
+    this.resolver = r;
+  }
+
+  public Options options() {
+    return options;
+  }
+
+  public CompletableFuture<Void> initFuture() {
+    return initFuture;
+  }
+
+  public Set<String> keys() {
+    awaitInit();
+    return store.keys();
+  }
+
+  public boolean featureIsOn(String key, ContextSet ctx) {
+    EvaluationDetails<Boolean> d = getBooleanDetails(key, Boolean.FALSE, ctx);
+    return Boolean.TRUE.equals(d.value());
+  }
+
+  public BoundQuonfig withContext(ContextSet ctx) {
+    return new BoundQuonfig(this, ctx == null ? new ContextSet() : ctx);
+  }
+
+  public void onConfigUpdate(Runnable listener) {
+    if (listener != null) configUpdateListeners.add(listener);
+  }
+
+  public void onSseConnectionStateChange(Consumer<Boolean> listener) {
+    if (listener != null) sseListeners.add(listener);
+  }
+
+  /**
+   * Drains pending telemetry without closing. No-op until telemetry pipeline lands (qfg-mol-3yg).
+   */
+  public void flush() {
+    awaitInit();
+  }
+
+  @Override
+  public void close() {
+    closed = true;
+    // SSE / polling / telemetry shutdown handled here once those wires land.
+  }
+
+  // ---- typed getters (no context) ----
+
+  public String getString(String key, String def) {
+    return getString(key, def, null);
+  }
+
+  public Boolean getBoolean(String key, Boolean def) {
+    return getBoolean(key, def, null);
+  }
+
+  public Long getInt(String key, Long def) {
+    return getInt(key, def, null);
+  }
+
+  public Double getDouble(String key, Double def) {
+    return getDouble(key, def, null);
+  }
+
+  public List<String> getStringList(String key, List<String> def) {
+    return getStringList(key, def, null);
+  }
+
+  public Duration getDuration(String key, Duration def) {
+    return getDuration(key, def, null);
+  }
+
+  public Object getJson(String key, Object def) {
+    return getJson(key, def, null);
+  }
+
+  // ---- typed getters (with context) ----
+
+  public String getString(String key, String def, ContextSet ctx) {
+    return getStringDetails(key, def, ctx).value();
+  }
+
+  public Boolean getBoolean(String key, Boolean def, ContextSet ctx) {
+    return getBooleanDetails(key, def, ctx).value();
+  }
+
+  public Long getInt(String key, Long def, ContextSet ctx) {
+    return getIntDetails(key, def, ctx).value();
+  }
+
+  public Double getDouble(String key, Double def, ContextSet ctx) {
+    return getDoubleDetails(key, def, ctx).value();
+  }
+
+  public List<String> getStringList(String key, List<String> def, ContextSet ctx) {
+    return getStringListDetails(key, def, ctx).value();
+  }
+
+  public Duration getDuration(String key, Duration def, ContextSet ctx) {
+    return getDurationDetails(key, def, ctx).value();
+  }
+
+  public Object getJson(String key, Object def, ContextSet ctx) {
+    return getJsonDetails(key, def, ctx).value();
+  }
+
+  // ---- detail variants ----
+
+  public EvaluationDetails<String> getStringDetails(String key, String def) {
+    return getStringDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def) {
+    return getBooleanDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Long> getIntDetails(String key, Long def) {
+    return getIntDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Double> getDoubleDetails(String key, Double def) {
+    return getDoubleDetails(key, def, null);
+  }
+
+  public EvaluationDetails<List<String>> getStringListDetails(String key, List<String> def) {
+    return getStringListDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Duration> getDurationDetails(String key, Duration def) {
+    return getDurationDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Object> getJsonDetails(String key, Object def) {
+    return getJsonDetails(key, def, null);
+  }
+
+  public EvaluationDetails<String> getStringDetails(String key, String def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.STRING, String.class);
+  }
+
+  public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.BOOL, Boolean.class);
+  }
+
+  public EvaluationDetails<Long> getIntDetails(String key, Long def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.INT, Long.class);
+  }
+
+  public EvaluationDetails<Double> getDoubleDetails(String key, Double def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.DOUBLE, Double.class);
+  }
+
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  public EvaluationDetails<List<String>> getStringListDetails(
+      String key, List<String> def, ContextSet ctx) {
+    return (EvaluationDetails<List<String>>)
+        (EvaluationDetails) typedDetails(key, def, ctx, ValueType.STRING_LIST, List.class);
+  }
+
+  public EvaluationDetails<Duration> getDurationDetails(String key, Duration def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.DURATION, Duration.class);
+  }
+
+  public EvaluationDetails<Object> getJsonDetails(String key, Object def, ContextSet ctx) {
+    return typedDetails(key, def, ctx, ValueType.JSON, Object.class);
+  }
+
+  // ---- core evaluation ----
+
+  @SuppressWarnings("unchecked")
+  private <T> EvaluationDetails<T> typedDetails(
+      String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
+    awaitInit();
+    ContextSet effective = merge(options.globalContext(), ctx);
+
+    ConfigRow cfg = store.getConfig(key);
+    if (cfg == null) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          null,
+          ErrorCode.FLAG_NOT_FOUND,
+          "config \"" + key + "\" not found",
+          baseMetadata(null, key, null, -1, -1));
+    }
+
+    if (!isCompatible(cfg.valueType(), expectedType)) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          null,
+          ErrorCode.TYPE_MISMATCH,
+          "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType,
+          metadataFor(cfg, -1, -1));
+    }
+
+    EvaluationMatch match;
+    try {
+      match = evaluator.evaluate(cfg, options.environment(), effective);
+    } catch (RuntimeException e) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          null,
+          ErrorCode.GENERAL,
+          "evaluation failed for \"" + key + "\": " + e.getMessage(),
+          metadataFor(cfg, -1, -1));
+    }
+
+    if (!match.isMatch()) {
+      return new EvaluationDetails<>(
+          def, Reason.DEFAULT, null, null, null, metadataFor(cfg, -1, -1));
+    }
+
+    Value resolvedVal;
+    try {
+      resolvedVal = resolver.resolve(match.value(), cfg, options.environment(), effective);
+    } catch (ResolverException e) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          null,
+          ErrorCode.GENERAL,
+          "resolve failed for \"" + key + "\": " + e.getMessage(),
+          metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+    }
+
+    Reason r = match.weightedValueIndex() >= 0 ? Reason.SPLIT : mapEngineReason(match.reason());
+
+    Object payload = resolvedVal != null ? resolvedVal.value() : null;
+    T typed;
+    try {
+      typed = (T) coerceToJavaType(payload, expectedType, javaType);
+    } catch (ClassCastException | IllegalArgumentException e) {
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          null,
+          ErrorCode.TYPE_MISMATCH,
+          "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage(),
+          metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+    }
+
+    Integer variantIndex = r == Reason.SPLIT ? match.weightedValueIndex() : null;
+    return new EvaluationDetails<>(
+        typed,
+        r,
+        variantIndex,
+        null,
+        null,
+        metadataFor(cfg, match.ruleIndex(), match.weightedValueIndex()));
+  }
+
+  private static boolean isCompatible(ValueType actual, ValueType requested) {
+    if (actual == requested) return true;
+    // log_level is stored as STRING-style enum; allow string getters to read it.
+    if (requested == ValueType.STRING && actual == ValueType.LOG_LEVEL) return true;
+    if (requested == ValueType.STRING && actual == ValueType.DURATION) return true;
+    return false;
+  }
+
+  private static Object coerceToJavaType(Object payload, ValueType vt, Class<?> javaType) {
+    if (payload == null) return null;
+    if (vt == ValueType.DURATION) {
+      if (payload instanceof Duration) return payload;
+      if (payload instanceof String) return Duration.parse((String) payload);
+    }
+    if (vt == ValueType.INT) {
+      if (payload instanceof Long) return payload;
+      if (payload instanceof Number) return ((Number) payload).longValue();
+    }
+    if (vt == ValueType.DOUBLE) {
+      if (payload instanceof Double) return payload;
+      if (payload instanceof Number) return ((Number) payload).doubleValue();
+    }
+    if (vt == ValueType.JSON) return payload;
+    if (vt == ValueType.STRING_LIST) return payload;
+    if (javaType.isInstance(payload)) return payload;
+    throw new ClassCastException(payload.getClass() + " is not " + javaType);
+  }
+
+  private static Reason mapEngineReason(EvaluationMatch.Reason r) {
+    switch (r) {
+      case STATIC:
+        return Reason.STATIC;
+      case TARGETING_MATCH:
+        return Reason.TARGETING_MATCH;
+      case DEFAULT:
+      default:
+        return Reason.DEFAULT;
+    }
+  }
+
+  private Map<String, Object> baseMetadata(
+      String configId, String configKey, String configType, int ruleIndex, int weightedIndex) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    if (configId != null) m.put("configId", configId);
+    if (configKey != null) m.put("configKey", configKey);
+    if (configType != null) m.put("configType", configType);
+    if (ruleIndex >= 0) m.put("ruleIndex", ruleIndex);
+    if (weightedIndex >= 0) m.put("weightedValueIndex", weightedIndex);
+    if (options.environment() != null) m.put("environment", options.environment());
+    return m;
+  }
+
+  private Map<String, Object> metadataFor(ConfigRow cfg, int ruleIndex, int weightedIndex) {
+    return baseMetadata(cfg.id(), cfg.key(), cfg.type().name(), ruleIndex, weightedIndex);
+  }
+
+  private void awaitInit() {
+    if (closed) throw new IllegalStateException("Quonfig client is closed");
+    try {
+      initFuture.get(options.initTimeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException("interrupted while awaiting init", e);
+    } catch (Exception e) {
+      throw new IllegalStateException("Quonfig init did not complete in time", e);
+    }
+  }
+
+  private void fireConfigUpdate() {
+    for (Runnable r : configUpdateListeners) {
+      try {
+        r.run();
+      } catch (RuntimeException ignored) {
+        // listeners are user code; never let one tear down the client
+      }
+    }
+  }
+
+  /** Per-call merge — bound + per-call. Per-call wins on key collision. */
+  static ContextSet merge(ContextSet base, ContextSet overlay) {
+    if (base == null && overlay == null) return new ContextSet();
+    if (base == null) return overlay;
+    if (overlay == null) return base;
+    ContextSet out = new ContextSet();
+    for (Map.Entry<String, Map<String, Object>> e : base.data().entrySet()) {
+      out.withNamedContext(e.getKey(), e.getValue());
+    }
+    for (Map.Entry<String, Map<String, Object>> e : overlay.data().entrySet()) {
+      out.withNamedContext(e.getKey(), e.getValue());
+    }
+    return out;
+  }
+
+  /** Read-only in-memory ConfigStore backed by a map of key → ConfigRow. */
+  private static final class InMemoryConfigStore implements ConfigStore {
+    private final Map<String, ConfigRow> byKey;
+
+    InMemoryConfigStore(List<ConfigRow> rows) {
+      Map<String, ConfigRow> m = new LinkedHashMap<>(rows.size());
+      List<ConfigRow> ordered = new ArrayList<>(rows);
+      for (ConfigRow r : ordered) m.put(r.key(), r);
+      this.byKey = Map.copyOf(m);
+    }
+
+    @Override
+    public ConfigRow getConfig(String key) {
+      return byKey.get(key);
+    }
+
+    Set<String> keys() {
+      return new LinkedHashSet<>(byKey.keySet());
+    }
+  }
+}
