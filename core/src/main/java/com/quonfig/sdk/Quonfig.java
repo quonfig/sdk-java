@@ -63,7 +63,7 @@ import org.slf4j.event.Level;
  *
  * <p>Thread-safety: all public methods are safe to call from any thread.
  */
-public final class Quonfig implements AutoCloseable {
+public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private static final ObjectMapper ENVELOPE_MAPPER = new ObjectMapper();
   private static final String CONFIGS_PATH = "/api/v2/configs";
@@ -279,6 +279,23 @@ public final class Quonfig implements AutoCloseable {
     Objects.requireNonNull(loggerPath, "loggerPath");
     Objects.requireNonNull(level, "level");
 
+    Optional<String> resolved = resolveLogLevelString(loggerPath, ctx);
+    return resolved.map(s -> compareLevel(s, level)).orElse(true);
+  }
+
+  /**
+   * Resolves the configured {@link LogLevel} for {@code loggerPath} (with optional context),
+   * walking up dotted parents per {@link #shouldLog} semantics. Returns {@link Optional#empty()}
+   * when no log-level config exists or the resolved value is unparseable — filters use that signal
+   * as "no opinion" and defer to whatever the underlying logging library would do.
+   */
+  @Override
+  public Optional<LogLevel> getLogLevel(String loggerPath, ContextSet ctx) {
+    Objects.requireNonNull(loggerPath, "loggerPath");
+    return resolveLogLevelString(loggerPath, ctx).flatMap(LogLevel::fromString);
+  }
+
+  private Optional<String> resolveLogLevelString(String loggerPath, ContextSet ctx) {
     ContextSet loggerCtx =
         new ContextSet()
             .withNamedContext(QUONFIG_SDK_LOGGING_CONTEXT_NAME, Map.of("key", loggerPath));
@@ -286,19 +303,14 @@ public final class Quonfig implements AutoCloseable {
 
     String configuredKey = options.loggerKey();
     if (configuredKey != null && !configuredKey.isEmpty()) {
-      Optional<String> resolved = lookupLogLevel(configuredKey, merged);
-      return resolved.map(s -> compareLevel(s, level)).orElse(true);
+      return lookupLogLevel(configuredKey, merged);
     }
 
     String key = loggerPath;
     while (true) {
       Optional<String> resolved = lookupLogLevel(key, merged);
-      if (resolved.isPresent()) {
-        return compareLevel(resolved.get(), level);
-      }
-      if (key.isEmpty()) {
-        return true;
-      }
+      if (resolved.isPresent()) return resolved;
+      if (key.isEmpty()) return Optional.empty();
       int dot = key.lastIndexOf('.');
       key = dot < 0 ? "" : key.substring(0, dot);
     }

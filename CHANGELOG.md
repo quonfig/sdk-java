@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.2 - 2026-05-10
+
+Multi-module restructure that ships transparent dynamic-log-level integrations for Logback, Log4j2, and Micronaut. Customers add one filter at startup and every logger picks up Quonfig log levels — no per-call-site `shouldLog` wrapping. Tracks [qfg-wgfu](https://github.com/quonfig/sdk-java/issues).
+
+- Multi-module Gradle restructure: `:core`, `:logback`, `:log4j2`, `:micronaut`. Existing `com.quonfig:sdk-java` artifact unchanged in coordinates and contents (qfg-wgfu)
+- New artifacts published in lock-step from this repo: `com.quonfig:sdk-java-logback`, `com.quonfig:sdk-java-log4j2`, `com.quonfig:sdk-java-micronaut` (qfg-wgfu)
+- Public `LogLevel` enum + `LoggerClient` interface; `Quonfig` implements `LoggerClient` and exposes `getLogLevel(loggerPath, ContextSet) -> Optional<LogLevel>` (qfg-wgfu)
+- `QuonfigLogbackTurboFilter.install(loggerClient)` — Logback turbo filter with hierarchical logger-path fallback and recursion guard (qfg-wgfu)
+- `QuonfigLog4j2Filter.install(loggerClient)` — Log4j2 context-level filter with the same semantics (qfg-wgfu)
+- `MicronautContextStore` — request-scoped `ContextSet` storage backed by `ServerRequestContext` for Micronaut event-loop apps (qfg-wgfu)
+
 ## 0.0.1 - 2026-05-10
 
 First public release of the Quonfig Java SDK. Greenfield port of the Quonfig client targeting Java 17+, published to Maven Central as `com.quonfig:sdk-java`. Tracks the [qfg-oi0j epic](https://github.com/quonfig/sdk-java/issues).

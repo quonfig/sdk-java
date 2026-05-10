@@ -4,6 +4,14 @@ name: Publish
 # Maven Central via the Sonatype Central Portal. No tag = no publish.
 # The job verifies tag matches gradle.properties VERSION_NAME on the
 # tagged commit, so version drift can never silently ship.
+#
+# As of 0.0.2, this is a multi-module Gradle build. `./gradlew
+# publishToMavenCentral` aggregates the per-subproject tasks, so the
+# four artifacts go out in lock-step from one tag:
+#   com.quonfig:sdk-java
+#   com.quonfig:sdk-java-logback
+#   com.quonfig:sdk-java-log4j2
+#   com.quonfig:sdk-java-micronaut
 
 on:
   push:
