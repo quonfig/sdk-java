@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `Options.Builder.datafile(String)` and `Options.Builder.datafileEnvelope(ConfigEnvelope)` now load configs from a serialized envelope (filesystem path or pre-parsed object), matching sdk-node's `datafile?: string | object` shape. The envelope's `meta.environment` supplies the evaluation environment when the caller does not set `Options.environment()` explicitly. Replaces the previous `IllegalStateException` thrown at construct time. (qfg-9hre)
+
 ## 0.0.2 - 2026-05-10
 
 Multi-module restructure that ships transparent dynamic-log-level integrations for Logback, Log4j2, and Micronaut. Customers add one filter at startup and every logger picks up Quonfig log levels — no per-call-site `shouldLog` wrapping. Tracks [qfg-wgfu](https://github.com/quonfig/sdk-java/issues).

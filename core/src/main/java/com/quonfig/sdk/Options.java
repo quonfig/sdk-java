@@ -5,6 +5,7 @@ import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.WeightedValueResolver;
 import com.quonfig.sdk.telemetry.ContextUploadMode;
 import com.quonfig.sdk.telemetry.TelemetrySender;
+import com.quonfig.sdk.wire.ConfigEnvelope;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
@@ -52,6 +53,7 @@ public final class Options {
   private final Logger logger;
   private final String datadir;
   private final String datafile;
+  private final ConfigEnvelope datafileEnvelope;
   private final Resolver.EnvLookup envLookup;
   private final Runnable onConfigUpdate;
   private final Consumer<Boolean> onSseConnectionStateChange;
@@ -90,6 +92,7 @@ public final class Options {
     this.logger = b.logger != null ? b.logger : LoggerFactory.getLogger("com.quonfig.sdk");
     this.datadir = b.datadir;
     this.datafile = b.datafile;
+    this.datafileEnvelope = b.datafileEnvelope;
     this.onConfigUpdate = b.onConfigUpdate;
     this.onSseConnectionStateChange = b.onSseConnectionStateChange;
     this.weightedValueResolver = b.weightedValueResolver;
@@ -155,6 +158,16 @@ public final class Options {
 
   public String datafile() {
     return datafile;
+  }
+
+  /**
+   * Pre-parsed datafile envelope. Mutually exclusive with {@link #datafile()} and {@link
+   * #datadir()}. Mirrors sdk-node's object-form {@code datafile?: string | object} — supply a
+   * {@link ConfigEnvelope} you've already deserialized (e.g., from a CDN-bundled JSON blob) to skip
+   * the file read.
+   */
+  public ConfigEnvelope datafileEnvelope() {
+    return datafileEnvelope;
   }
 
   public Resolver.EnvLookup envLookup() {
@@ -257,6 +270,7 @@ public final class Options {
     private Logger logger;
     private String datadir;
     private String datafile;
+    private ConfigEnvelope datafileEnvelope;
     private Resolver.EnvLookup envLookup;
     private Runnable onConfigUpdate;
     private Consumer<Boolean> onSseConnectionStateChange;
@@ -337,6 +351,15 @@ public final class Options {
 
     public Builder datafile(String v) {
       this.datafile = v;
+      return this;
+    }
+
+    /**
+     * Pre-parsed datafile envelope (sdk-node's object-form datafile). Mutually exclusive with
+     * {@link #datafile(String)} and {@link #datadir(String)}.
+     */
+    public Builder datafileEnvelope(ConfigEnvelope v) {
+      this.datafileEnvelope = v;
       return this;
     }
 

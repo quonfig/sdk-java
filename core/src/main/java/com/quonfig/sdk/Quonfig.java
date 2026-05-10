@@ -25,6 +25,7 @@ import com.quonfig.sdk.wire.ConfigEnvelope;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -54,7 +55,11 @@ import org.slf4j.event.Level;
  *   <li><b>http</b> (default when neither datadir nor datafile is set) — fetch the initial envelope
  *       from {@link Options#apiUrls()} and stream updates over SSE from {@link
  *       Options#streamUrls()}. Constructor returns immediately; init runs in a background thread.
- *   <li><b>datafile</b> — TODO (follow-up bead).
+ *   <li><b>datafile</b> — load a pre-serialized {@link ConfigEnvelope} from {@link
+ *       Options#datafile()} (filesystem path) or {@link Options#datafileEnvelope()} (in-memory).
+ *       Mirrors sdk-node's {@code datafile?: string | object} shape; the envelope's {@code
+ *       meta.environment} supplies the evaluation environment when the caller did not set one
+ *       explicitly. Synchronous like datadir mode.
  * </ul>
  *
  * <p>Lifecycle: typed getters block on {@link #initFuture()} (with {@link Options#initTimeout()})
@@ -80,6 +85,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final CopyOnWriteArrayList<Runnable> configUpdateListeners = new CopyOnWriteArrayList<>();
   private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
 
+  /**
+   * Environment used for evaluation and emitted in metadata. Defaults to {@link
+   * Options#environment()}; in datafile mode without an explicit environment, falls back to {@code
+   * envelope.meta.environment} (sdk-node parity, see qfg-9hre).
+   */
+  private volatile String effectiveEnvironment;
+
   private volatile InMemoryConfigStore store;
   private volatile Evaluator evaluator;
   private volatile Resolver resolver;
@@ -100,6 +112,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       sseListeners.add(options.onSseConnectionStateChange());
     }
 
+    this.effectiveEnvironment = options.environment();
+
     if (options.datadir() != null && !options.datadir().isEmpty()) {
       if (options.environment() == null || options.environment().isEmpty()) {
         throw new IllegalStateException(
@@ -109,9 +123,21 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       installRows(rows);
       this.initFuture = CompletableFuture.completedFuture(null);
       fireConfigUpdate();
-    } else if (options.datafile() != null && !options.datafile().isEmpty()) {
-      throw new IllegalStateException(
-          "datafile mode not yet implemented (tracked by qfg-mol-d51 / follow-up bead)");
+    } else if ((options.datafile() != null && !options.datafile().isEmpty())
+        || options.datafileEnvelope() != null) {
+      ConfigEnvelope envelope = loadDatafileEnvelope(options);
+      // Per sdk-node: caller's explicit Options.environment() wins; otherwise fall back to
+      // envelope.meta.environment so a self-contained datafile evaluates against the
+      // environment it was generated for.
+      if ((effectiveEnvironment == null || effectiveEnvironment.isEmpty())
+          && envelope.meta() != null
+          && envelope.meta().environment() != null
+          && !envelope.meta().environment().isEmpty()) {
+        this.effectiveEnvironment = envelope.meta().environment();
+      }
+      installEnvelopeRows(envelope);
+      this.initFuture = CompletableFuture.completedFuture(null);
+      fireConfigUpdate();
     } else {
       // HTTP+SSE mode: initial fetch on a background thread so the constructor returns
       // immediately. Getters block on initFuture (with Options.initTimeout); on init failure
@@ -196,11 +222,27 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private void installEnvelope(String body) throws IOException {
     ConfigEnvelope envelope = ENVELOPE_MAPPER.readValue(body, ConfigEnvelope.class);
+    installEnvelopeRows(envelope);
+  }
+
+  private void installEnvelopeRows(ConfigEnvelope envelope) {
     List<ConfigRow> rows = new ArrayList<>(envelope.configs().size());
     for (JsonNode cfg : envelope.configs()) {
       rows.add(DatadirLoader.parseConfigNode(cfg));
     }
     installRows(rows);
+  }
+
+  private static ConfigEnvelope loadDatafileEnvelope(Options options) {
+    if (options.datafileEnvelope() != null) {
+      return options.datafileEnvelope();
+    }
+    Path file = Path.of(options.datafile());
+    try {
+      return ENVELOPE_MAPPER.readValue(Files.readAllBytes(file), ConfigEnvelope.class);
+    } catch (IOException e) {
+      throw new IllegalStateException("failed to read datafile " + file + ": " + e.getMessage(), e);
+    }
   }
 
   private void startSse() {
@@ -532,7 +574,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
     EvaluationMatch match;
     try {
-      match = evaluator.evaluate(cfg, options.environment(), effective);
+      match = evaluator.evaluate(cfg, effectiveEnvironment, effective);
     } catch (RuntimeException e) {
       return new EvaluationDetails<>(
           def,
@@ -557,7 +599,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
     Value resolvedVal;
     try {
-      resolvedVal = resolver.resolve(match.value(), cfg, options.environment(), effective);
+      resolvedVal = resolver.resolve(match.value(), cfg, effectiveEnvironment, effective);
     } catch (ResolverException e) {
       return new EvaluationDetails<>(
           def,
@@ -711,8 +753,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (weightedIndex >= 0 && reason == Reason.SPLIT) {
       m.put("weightedValueIndex", weightedIndex);
     }
-    if (options.environment() != null && !options.environment().isEmpty()) {
-      m.put("environment", options.environment());
+    if (effectiveEnvironment != null && !effectiveEnvironment.isEmpty()) {
+      m.put("environment", effectiveEnvironment);
     }
     return m;
   }
