@@ -31,14 +31,17 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import org.slf4j.event.Level;
 
 /**
  * Main public client for the Quonfig Java SDK.
@@ -64,6 +67,13 @@ public final class Quonfig implements AutoCloseable {
 
   private static final ObjectMapper ENVELOPE_MAPPER = new ObjectMapper();
   private static final String CONFIGS_PATH = "/api/v2/configs";
+
+  /**
+   * Top-level context name used by {@link #shouldLog(String, Level)} to inject the logger path for
+   * per-logger rule evaluation. Load-bearing for api-telemetry's example-context auto-capture; do
+   * not rename without updating the matching constants in the other SDKs.
+   */
+  static final String QUONFIG_SDK_LOGGING_CONTEXT_NAME = "quonfig-sdk-logging";
 
   private final Options options;
   private final CompletableFuture<Void> initFuture;
@@ -243,6 +253,74 @@ public final class Quonfig implements AutoCloseable {
 
   public BoundQuonfig withContext(ContextSet ctx) {
     return new BoundQuonfig(this, ctx == null ? new ContextSet() : ctx);
+  }
+
+  /**
+   * Returns {@code true} iff a message at {@code level} should be emitted for {@code loggerPath}.
+   *
+   * <p>Always injects {@code quonfig-sdk-logging.key=loggerPath} into the evaluation context.
+   * Lookup order:
+   *
+   * <ul>
+   *   <li>If {@link Options#loggerKey()} is set, evaluate that single config — rules in it dispatch
+   *       on the injected logger-path context (sdk-node / sdk-go pattern).
+   *   <li>Otherwise, look up a config keyed by {@code loggerPath}; on miss, walk up dotted parents
+   *       ({@code com.foo.MyClass} → {@code com.foo} → {@code com} → {@code ""}).
+   * </ul>
+   *
+   * <p>Returns {@code true} when no log-level config exists at any level — never silently swallow
+   * logs.
+   */
+  public boolean shouldLog(String loggerPath, Level level) {
+    return shouldLog(loggerPath, level, null);
+  }
+
+  public boolean shouldLog(String loggerPath, Level level, ContextSet ctx) {
+    Objects.requireNonNull(loggerPath, "loggerPath");
+    Objects.requireNonNull(level, "level");
+
+    ContextSet loggerCtx =
+        new ContextSet()
+            .withNamedContext(QUONFIG_SDK_LOGGING_CONTEXT_NAME, Map.of("key", loggerPath));
+    ContextSet merged = merge(ctx, loggerCtx);
+
+    String configuredKey = options.loggerKey();
+    if (configuredKey != null && !configuredKey.isEmpty()) {
+      Optional<String> resolved = lookupLogLevel(configuredKey, merged);
+      return resolved.map(s -> compareLevel(s, level)).orElse(true);
+    }
+
+    String key = loggerPath;
+    while (true) {
+      Optional<String> resolved = lookupLogLevel(key, merged);
+      if (resolved.isPresent()) {
+        return compareLevel(resolved.get(), level);
+      }
+      if (key.isEmpty()) {
+        return true;
+      }
+      int dot = key.lastIndexOf('.');
+      key = dot < 0 ? "" : key.substring(0, dot);
+    }
+  }
+
+  private Optional<String> lookupLogLevel(String key, ContextSet merged) {
+    EvaluationDetails<String> d = getStringDetails(key, null, merged);
+    if (d.reason() == Reason.ERROR || d.value() == null) {
+      return Optional.empty();
+    }
+    return Optional.of(d.value());
+  }
+
+  private static boolean compareLevel(String resolvedLevel, Level desired) {
+    Level resolved;
+    try {
+      resolved = Level.valueOf(resolvedLevel.toUpperCase(Locale.ROOT));
+    } catch (IllegalArgumentException e) {
+      // Unparseable config value — don't drop logs.
+      return true;
+    }
+    return resolved.toInt() <= desired.toInt();
   }
 
   public void onConfigUpdate(Runnable listener) {

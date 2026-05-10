@@ -3,6 +3,7 @@ package com.quonfig.sdk;
 import com.quonfig.sdk.eval.ContextSet;
 import java.time.Duration;
 import java.util.List;
+import org.slf4j.event.Level;
 
 /**
  * A {@link Quonfig} client view with a fixed {@link ContextSet} pre-applied. Returned by {@link
@@ -110,5 +111,14 @@ public final class BoundQuonfig {
 
   public boolean featureIsOn(String key) {
     return client.featureIsOn(key, bound);
+  }
+
+  /** See {@link Quonfig#shouldLog(String, Level)} — bound context is merged with the loggerPath. */
+  public boolean shouldLog(String loggerPath, Level level) {
+    return client.shouldLog(loggerPath, level, bound);
+  }
+
+  public boolean shouldLog(String loggerPath, Level level, ContextSet ctx) {
+    return client.shouldLog(loggerPath, level, Quonfig.merge(bound, ctx));
   }
 }

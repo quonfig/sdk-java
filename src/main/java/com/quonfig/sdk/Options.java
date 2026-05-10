@@ -64,6 +64,7 @@ public final class Options {
   private final Duration telemetryFlushInterval;
   private final Duration telemetryMaxInterval;
   private final String instanceHash;
+  private final String loggerKey;
 
   private Options(Builder b) {
     Resolver.EnvLookup env = b.envLookup != null ? b.envLookup : Resolver.DEFAULT_ENV_LOOKUP;
@@ -105,6 +106,7 @@ public final class Options {
         b.telemetryMaxInterval != null ? b.telemetryMaxInterval : Duration.ofSeconds(600);
     this.instanceHash =
         b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
+    this.loggerKey = b.loggerKey;
   }
 
   public String sdkKey() {
@@ -208,6 +210,17 @@ public final class Options {
   }
 
   /**
+   * Optional config key used by {@link Quonfig#shouldLog(String, org.slf4j.event.Level)} for the
+   * single-config dispatch pattern. When set, that config is evaluated against a context with
+   * {@code quonfig-sdk-logging.key=loggerPath} so a single log-level config can drive per-logger
+   * rules. When unset, {@code shouldLog} looks up a config keyed by the loggerPath itself, walking
+   * up dotted parents on miss.
+   */
+  public String loggerKey() {
+    return loggerKey;
+  }
+
+  /**
    * Stream-base URLs for SSE. Resolution order: {@link Builder#streamUrls(List)} explicit override
    * → derived from {@link #apiUrls()} (each {@code primary.X}/{@code secondary.X} → {@code
    * stream.primary.X}/{@code stream.secondary.X}). The explicit override exists for cases where the
@@ -256,6 +269,7 @@ public final class Options {
     private Duration telemetryFlushInterval;
     private Duration telemetryMaxInterval;
     private String instanceHash;
+    private String loggerKey;
 
     public Builder sdkKey(String v) {
       this.sdkKey = v;
@@ -383,6 +397,11 @@ public final class Options {
 
     public Builder instanceHash(String v) {
       this.instanceHash = v;
+      return this;
+    }
+
+    public Builder loggerKey(String v) {
+      this.loggerKey = v;
       return this;
     }
 
