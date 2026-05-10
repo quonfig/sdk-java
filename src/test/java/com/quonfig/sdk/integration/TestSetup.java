@@ -7,11 +7,10 @@ import com.quonfig.sdk.eval.ConfigStore;
 import com.quonfig.sdk.eval.ContextSet;
 import com.quonfig.sdk.eval.EvaluationMatch;
 import com.quonfig.sdk.eval.Evaluator;
+import com.quonfig.sdk.eval.Murmur3WeightedValueResolver;
 import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
-import com.quonfig.sdk.eval.ValueType;
-import com.quonfig.sdk.eval.WeightedValueResolver.Resolved;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
@@ -839,113 +838,6 @@ final class TestSetup {
     // EvaluationStat.configType is already the upstream-serialized name (CONFIG / FEATURE_FLAG /
     // LOG_LEVEL / SEGMENT / SCHEMA) because it comes from ConfigType.name().
     return s.toUpperCase();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Murmur3-based weighted value resolver — picks a bucket deterministically
-  // by hashing `<configKey><contextValue>` (mirrors sdk-go/evalcore/weighted.go +
-  // hashing.go). qfg-oi0j.5 will move this implementation onto a real SDK
-  // class; for now it lives at test scope so the integration corpus can run.
-  // ---------------------------------------------------------------------------
-
-  private static final class Murmur3WeightedValueResolver
-      implements com.quonfig.sdk.eval.WeightedValueResolver {
-    @Override
-    public Resolved resolve(String configKey, Value weightedValuesValue, ContextSet contexts) {
-      Object payload = weightedValuesValue == null ? null : weightedValuesValue.value();
-      if (!(payload instanceof Map)) return null;
-      Map<?, ?> wvData = (Map<?, ?>) payload;
-      Object weighted = wvData.get("weightedValues");
-      if (!(weighted instanceof List) || ((List<?>) weighted).isEmpty()) return null;
-
-      String hashByProperty =
-          wvData.get("hashByPropertyName") instanceof String
-              ? (String) wvData.get("hashByPropertyName")
-              : null;
-      double fraction = userFraction(configKey, hashByProperty, contexts);
-
-      long total = 0;
-      List<Map<String, Object>> entries = new ArrayList<>();
-      for (Object e : (List<?>) weighted) {
-        if (!(e instanceof Map)) continue;
-        Map<String, Object> entry = (Map<String, Object>) e;
-        Object w = entry.get("weight");
-        long weight = w instanceof Number ? ((Number) w).longValue() : 0;
-        total += weight;
-        entries.add(entry);
-      }
-      if (total <= 0) return null;
-      double threshold = fraction * (double) total;
-
-      long running = 0;
-      for (int i = 0; i < entries.size(); i++) {
-        Map<String, Object> entry = entries.get(i);
-        Object w = entry.get("weight");
-        long weight = w instanceof Number ? ((Number) w).longValue() : 0;
-        running += weight;
-        if ((double) running >= threshold) {
-          Value subValue = parseSubValue(entry.get("value"));
-          if (subValue == null) return null;
-          return new Resolved(subValue, i);
-        }
-      }
-      // Fallback: first entry.
-      Value first = parseSubValue(entries.get(0).get("value"));
-      return first == null ? null : new Resolved(first, 0);
-    }
-
-    private static double userFraction(String configKey, String hashByProperty, ContextSet ctx) {
-      if (hashByProperty == null || hashByProperty.isEmpty() || ctx == null) {
-        // No deterministic hash available — fall back to a stable 0 so tests don't depend on
-        // wall-clock RNG. Real production code would use a per-instance random seed.
-        return 0.0;
-      }
-      ContextSet.Lookup lookup = ctx.getContextValue(hashByProperty);
-      if (!lookup.exists()) return 0.0;
-      String input = configKey + String.valueOf(lookup.value());
-      return murmur3HashZeroToOne(input);
-    }
-
-    /** Mirrors {@code float64(murmur3.Sum32(value)) / float64(math.MaxUint32)}. */
-    private static double murmur3HashZeroToOne(String value) {
-      int h =
-          com.google.common.hash.Hashing.murmur3_32_fixed()
-              .hashString(value, java.nio.charset.StandardCharsets.UTF_8)
-              .asInt();
-      long unsigned = ((long) h) & 0xFFFFFFFFL;
-      return (double) unsigned / (double) 0xFFFFFFFFL;
-    }
-
-    /** Parse a {@code {type: <vt>, value: <raw>}} blob into a typed {@link Value}. */
-    private static Value parseSubValue(Object raw) {
-      if (!(raw instanceof Map)) return null;
-      Map<?, ?> m = (Map<?, ?>) raw;
-      String typeStr = m.get("type") instanceof String ? (String) m.get("type") : "string";
-      Object payload = m.get("value");
-      switch (typeStr) {
-        case "int":
-          return new Value(
-              ValueType.INT,
-              payload instanceof Number
-                  ? ((Number) payload).longValue()
-                  : payload instanceof String ? Long.parseLong((String) payload) : 0L);
-        case "double":
-          return new Value(
-              ValueType.DOUBLE,
-              payload instanceof Number
-                  ? ((Number) payload).doubleValue()
-                  : payload instanceof String ? Double.parseDouble((String) payload) : 0.0d);
-        case "bool":
-          if (payload instanceof Boolean) return new Value(ValueType.BOOL, payload);
-          return new Value(ValueType.BOOL, Boolean.parseBoolean(String.valueOf(payload)));
-        case "string_list":
-        case "stringList":
-          if (payload instanceof List) return new Value(ValueType.STRING_LIST, payload);
-          return new Value(ValueType.STRING_LIST, List.of());
-        default:
-          return new Value(ValueType.STRING, payload == null ? "" : String.valueOf(payload));
-      }
-    }
   }
 
   // ---------------------------------------------------------------------------
