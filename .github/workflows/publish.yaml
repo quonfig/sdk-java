@@ -1,0 +1,81 @@
+name: Publish
+
+# Tag-triggered: pushing a tag like v0.0.1 publishes that exact ref to
+# Maven Central via the Sonatype Central Portal. No tag = no publish.
+# The job verifies tag matches gradle.properties VERSION_NAME on the
+# tagged commit, so version drift can never silently ship.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          path: sdk-java
+          persist-credentials: false
+
+      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12  # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@94baf225fe0a508e581a564467443d0e2379123b  # v4
+
+      - name: Verify tag matches VERSION_NAME
+        working-directory: sdk-java
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          gradle_version="$(grep -E '^VERSION_NAME=' gradle.properties | cut -d= -f2)"
+          echo "tag=${tag_version} gradle=${gradle_version}"
+          if [ "$tag_version" != "$gradle_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match VERSION_NAME=${gradle_version}"
+            exit 1
+          fi
+
+      - name: Publish to Maven Central (Sonatype Central Portal)
+        working-directory: sdk-java
+        env:
+          # Vanniktech maven-publish reads these env vars (via the
+          # ORG_GRADLE_PROJECT_ prefix Gradle injects) for in-memory GPG signing
+          # and Sonatype Central Portal credentials. All four secrets must be
+          # set in the `release` environment in GitHub repo settings:
+          #   SIGNING_KEY              - ASCII-armored GPG private key
+          #   SIGNING_PASSWORD         - GPG key passphrase
+          #   MAVEN_CENTRAL_USERNAME   - Sonatype Central Portal user token name
+          #   MAVEN_CENTRAL_PASSWORD   - Sonatype Central Portal user token value
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+        run: ./gradlew publishToMavenCentral --no-configuration-cache
+
+      - name: Create GitHub Release
+        working-directory: sdk-java
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ -f CHANGELOG.md ]; then
+            notes=$(awk -v v="$version" '
+              $0 ~ "^## " v " "{flag=1; next}
+              /^## /{flag=0}
+              flag
+            ' CHANGELOG.md)
+          else
+            notes="Release ${GITHUB_REF_NAME}"
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "${notes:-Release ${GITHUB_REF_NAME}}" \
+            --repo "${GITHUB_REPOSITORY}"
