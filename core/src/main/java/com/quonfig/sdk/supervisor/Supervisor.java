@@ -1,5 +1,6 @@
 package com.quonfig.sdk.supervisor;
 
+import com.quonfig.sdk.ConnectionState;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -32,27 +33,6 @@ import org.slf4j.LoggerFactory;
 public final class Supervisor {
 
   private static final Logger LOG = LoggerFactory.getLogger(Supervisor.class);
-
-  /**
-   * Customer-visible health surface; values match the cross-SDK spec in {@code
-   * project/plans/sdk-hardening-and-verification.md}.
-   */
-  public enum ConnectionState {
-    /**
-     * Pre-{@link #start()} state and the state during the first connection attempt before any
-     * worker has reported success.
-     */
-    INITIALIZING,
-    /** An SSE stream (Layer 1) is live. */
-    CONNECTED,
-    /**
-     * The Layer 1 worker is between connection attempts (after a drop, before the next reconnect
-     * succeeds).
-     */
-    DISCONNECTED,
-    /** Layer 1 is unable to maintain a connection and the Layer 2 fallback poller is active. */
-    FALLING_BACK
-  }
 
   /**
    * One supervised unit of background work. {@link #run} is invoked on a dedicated thread; the

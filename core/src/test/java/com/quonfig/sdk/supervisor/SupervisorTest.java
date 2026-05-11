@@ -7,7 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-import com.quonfig.sdk.supervisor.Supervisor.ConnectionState;
+import com.quonfig.sdk.ConnectionState;
 import com.quonfig.sdk.supervisor.Supervisor.WorkerSpec;
 import java.time.Duration;
 import java.time.Instant;

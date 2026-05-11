@@ -30,6 +30,7 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -102,6 +103,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private volatile Supervisor supervisor;
   private volatile FallbackPoller fallbackPoller;
   private volatile HttpTransport httpTransport;
+
+  /**
+   * Wall-clock stamp of the most recent successful install (datadir/datafile constructor or any
+   * later envelope install). {@code null} before the first install. Exposed via {@link
+   * #lastSuccessfulRefresh()} (qfg-47c2.23).
+   */
+  private volatile Instant lastRefreshAt;
 
   private final EvaluationSummaryCollector summaryCollector;
   private final ContextShapeCollector shapeCollector;
@@ -196,6 +204,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     this.store = s;
     this.evaluator = e;
     this.resolver = r;
+    this.lastRefreshAt = Instant.now();
   }
 
   private void runInit() {
@@ -276,7 +285,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               .onEngage(
                   () -> {
                     Supervisor s = supBox[0];
-                    if (s != null) s.setConnectionState(Supervisor.ConnectionState.FALLING_BACK);
+                    if (s != null) s.setConnectionState(ConnectionState.FALLING_BACK);
                     options
                         .logger()
                         .warn(
@@ -298,7 +307,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                     // set CONNECTED on the supervisor; re-asserting it is harmless and guards
                     // the rare ordering where the poller's tick beats the SSE callback.
                     Supervisor s = supBox[0];
-                    if (s != null) s.setConnectionState(Supervisor.ConnectionState.CONNECTED);
+                    if (s != null) s.setConnectionState(ConnectionState.CONNECTED);
                     options
                         .logger()
                         .info("quonfig: Layer 2 fallback poller disengaged (SSE recovered)");
@@ -359,11 +368,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             fpRef.setSseConnected(connected);
           }
           if (connected) {
-            sup.setConnectionState(Supervisor.ConnectionState.CONNECTED);
+            sup.setConnectionState(ConnectionState.CONNECTED);
           } else if (fpRef == null || !fpRef.active()) {
             // Skip the DISCONNECTED edge while fallback is already engaged so the visible
             // state stays "falling_back" rather than flickering between the two.
-            sup.setConnectionState(Supervisor.ConnectionState.DISCONNECTED);
+            sup.setConnectionState(ConnectionState.DISCONNECTED);
           }
           for (Consumer<Boolean> l : sseListeners) {
             try {
@@ -538,6 +547,36 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   public void onSseConnectionStateChange(Consumer<Boolean> listener) {
     if (listener != null) sseListeners.add(listener);
+  }
+
+  /**
+   * Wall-clock time of the most recent successful envelope install (any source: initial HTTP fetch,
+   * SSE update, fallback poll, datadir, or datafile). {@code null} before the first install.
+   *
+   * <p>Diagnostic surface only — do not wire into a Kubernetes liveness probe. See {@link
+   * ConnectionState} for the rationale.
+   */
+  public Instant lastSuccessfulRefresh() {
+    return lastRefreshAt;
+  }
+
+  /**
+   * Current transport health. In HTTP+SSE mode this tracks the {@link Supervisor}'s view of the SSE
+   * worker (CONNECTED / DISCONNECTED / FALLING_BACK). In datadir/datafile mode the constructor
+   * installs synchronously so the value is {@link ConnectionState#CONNECTED} once construction
+   * returns. Before any install completes, returns {@link ConnectionState#INITIALIZING}.
+   *
+   * <p>Diagnostic surface only — do not wire into a Kubernetes liveness probe. See {@link
+   * ConnectionState} for the rationale.
+   */
+  public ConnectionState connectionState() {
+    Supervisor sup = this.supervisor;
+    if (sup != null) {
+      return sup.connectionState();
+    }
+    // No supervisor — either HTTP mode before startSse() runs, or datadir/datafile mode (where
+    // a supervisor is never built). The install timestamp tells the two apart.
+    return lastRefreshAt != null ? ConnectionState.CONNECTED : ConnectionState.INITIALIZING;
   }
 
   /** Drains pending telemetry synchronously and posts it. No-op when telemetry is disabled. */
