@@ -6,4 +6,8 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    // Chaos test runner (com.quonfig.sdk.chaos) — reads scenario YAML files
+    // from integration-test-data/chaos/scenarios. Gated on CHAOS_RUN=1, so
+    // this is test-only and never pulled into the published artifact.
+    testImplementation("org.yaml:snakeyaml:2.3")
 }
