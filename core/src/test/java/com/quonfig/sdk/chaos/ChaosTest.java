@@ -156,7 +156,8 @@ final class ChaosTest {
             // the 30s server heartbeat, so chaos uses a short watchdog. Production default
             // (90s) is unchanged. Mirrors sdk-go's withTestSSEReadTimeout pattern.
             .sseReadWatchdog(Duration.ofSeconds(5))
-            .onSseConnectionStateChange(probe::onSseState);
+            .onSseConnectionStateChange(probe::onSseState)
+            .onFallbackPollerStateChange(probe::onFallbackState);
 
     if ("throw".equals(run.setup != null ? run.setup.userCallback : null)) {
       // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches

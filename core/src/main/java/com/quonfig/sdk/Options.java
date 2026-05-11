@@ -47,8 +47,10 @@ public final class Options {
   private final String telemetryUrl;
   private final String environment;
   private final Duration initTimeout;
-  private final boolean enablePolling;
-  private final Duration pollInterval;
+  private final boolean fallbackPollEnabled;
+  private final long fallbackPollIntervalMs;
+  private final Duration fallbackPollThreshold;
+  private final Consumer<Boolean> onFallbackPollerStateChange;
   private final ContextSet globalContext;
   private final Logger logger;
   private final String datadir;
@@ -87,8 +89,10 @@ public final class Options {
     this.telemetryUrl = b.telemetryUrl != null ? b.telemetryUrl : "https://telemetry." + d;
 
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
-    this.enablePolling = b.enablePolling;
-    this.pollInterval = b.pollInterval;
+    this.fallbackPollEnabled = b.fallbackPollEnabled;
+    this.fallbackPollIntervalMs = b.fallbackPollIntervalMs;
+    this.fallbackPollThreshold = b.fallbackPollThreshold;
+    this.onFallbackPollerStateChange = b.onFallbackPollerStateChange;
     this.globalContext = b.globalContext;
     this.logger = b.logger != null ? b.logger : LoggerFactory.getLogger("com.quonfig.sdk");
     this.datadir = b.datadir;
@@ -138,12 +142,41 @@ public final class Options {
     return initTimeout;
   }
 
-  public boolean enablePolling() {
-    return enablePolling;
+  /**
+   * Whether the Layer 2 fallback poller engages when SSE has been disconnected past {@link
+   * com.quonfig.sdk.supervisor.FallbackPoller#DEFAULT_THRESHOLD}. Defaults to {@code true} (cross-
+   * SDK parity with sdk-go/sdk-node). When false, an SSE-only client never falls back to HTTP
+   * polling during an outage.
+   */
+  public boolean fallbackPollEnabled() {
+    return fallbackPollEnabled;
   }
 
-  public Duration pollInterval() {
-    return pollInterval;
+  /**
+   * Poll cadence (milliseconds) once the Layer 2 fallback poller has engaged. Default 60000 (60s);
+   * cross-SDK parity with sdk-node's {@code fallbackPollIntervalMs}. Ignored when {@link
+   * #fallbackPollEnabled()} is false.
+   */
+  public long fallbackPollIntervalMs() {
+    return fallbackPollIntervalMs;
+  }
+
+  /**
+   * Disconnect duration before the Layer 2 fallback poller engages. {@code null} means use the
+   * cross-SDK default ({@link com.quonfig.sdk.supervisor.FallbackPoller#DEFAULT_THRESHOLD}, 120s).
+   * Surfaced for tests and the chaos harness — production should leave this unset.
+   */
+  public Duration fallbackPollThreshold() {
+    return fallbackPollThreshold;
+  }
+
+  /**
+   * Optional callback invoked with {@code true} when the Layer 2 fallback poller engages and {@code
+   * false} when it disengages. Mostly useful for tests and the chaos harness; production code
+   * should prefer {@code Quonfig.connectionState()} (qfg-47c2.23).
+   */
+  public Consumer<Boolean> onFallbackPollerStateChange() {
+    return onFallbackPollerStateChange;
   }
 
   public ContextSet globalContext() {
@@ -277,8 +310,10 @@ public final class Options {
     private String telemetryUrl;
     private String environment;
     private Duration initTimeout;
-    private boolean enablePolling;
-    private Duration pollInterval;
+    private boolean fallbackPollEnabled = true;
+    private long fallbackPollIntervalMs = 60_000L;
+    private Duration fallbackPollThreshold;
+    private Consumer<Boolean> onFallbackPollerStateChange;
     private ContextSet globalContext;
     private Logger logger;
     private String datadir;
@@ -338,13 +373,44 @@ public final class Options {
       return this;
     }
 
-    public Builder enablePolling(boolean v) {
-      this.enablePolling = v;
+    /**
+     * Whether to engage the Layer 2 fallback poller after SSE has been disconnected past the
+     * cross-SDK 120s threshold. Defaults to {@code true}. Disable for SSE-only deployments where an
+     * HTTP fallback poll is unwanted (e.g. dataplanes where each fetch is metered).
+     */
+    public Builder fallbackPollEnabled(boolean v) {
+      this.fallbackPollEnabled = v;
       return this;
     }
 
-    public Builder pollInterval(Duration v) {
-      this.pollInterval = v;
+    /**
+     * Poll cadence (in milliseconds) once the Layer 2 fallback poller engages. Default 60000 (60s).
+     * Cross-SDK parity with sdk-node's {@code fallbackPollIntervalMs} option.
+     */
+    public Builder fallbackPollIntervalMs(long v) {
+      this.fallbackPollIntervalMs = v;
+      return this;
+    }
+
+    /**
+     * Overrides the disconnect duration before the Layer 2 fallback poller engages. Default (when
+     * null) is {@link com.quonfig.sdk.supervisor.FallbackPoller#DEFAULT_THRESHOLD} (120s). Tests
+     * use a sub-second value to verify wire-up without burning real time; production should leave
+     * this unset.
+     */
+    public Builder fallbackPollThreshold(Duration v) {
+      this.fallbackPollThreshold = v;
+      return this;
+    }
+
+    /**
+     * Optional listener invoked with {@code true} when the Layer 2 fallback poller engages (SSE
+     * down past threshold) and {@code false} when it disengages (SSE recovered or client closed).
+     * Surfaced primarily for the chaos harness; production should read polling state via {@code
+     * Quonfig.connectionState()} once qfg-47c2.23 lands.
+     */
+    public Builder onFallbackPollerStateChange(Consumer<Boolean> v) {
+      this.onFallbackPollerStateChange = v;
       return this;
     }
 

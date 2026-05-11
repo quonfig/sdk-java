@@ -11,6 +11,8 @@ import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
+import com.quonfig.sdk.supervisor.FallbackPoller;
+import com.quonfig.sdk.supervisor.Supervisor;
 import com.quonfig.sdk.telemetry.ContextShapeCollector;
 import com.quonfig.sdk.telemetry.ContextUploadMode;
 import com.quonfig.sdk.telemetry.EvaluationStat;
@@ -97,6 +99,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private volatile Resolver resolver;
   private volatile boolean closed;
   private volatile SseClient sseClient;
+  private volatile Supervisor supervisor;
+  private volatile FallbackPoller fallbackPoller;
+  private volatile HttpTransport httpTransport;
 
   private final EvaluationSummaryCollector summaryCollector;
   private final ContextShapeCollector shapeCollector;
@@ -203,6 +208,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               .sdkKey(options.sdkKey())
               .timeout(options.initTimeout())
               .build();
+      this.httpTransport = http;
       HttpResponse<String> resp =
           http.get(URI.create(CONFIGS_PATH), null)
               .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
@@ -247,6 +253,85 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private void startSse() {
     if (closed) return;
+
+    // Use a one-element array so the lambdas can read the final supervisor reference. We have
+    // to build the FallbackPoller (whose callbacks reference the supervisor) before the
+    // Supervisor (whose worker list contains the poller). Java's "effectively final" rule for
+    // captured locals forces this back-reference trick — sdk-go uses a struct field with the
+    // same intent.
+    Supervisor[] supBox = new Supervisor[1];
+
+    FallbackPoller fp = null;
+    if (options.fallbackPollEnabled() && options.fallbackPollIntervalMs() > 0) {
+      Duration interval = Duration.ofMillis(options.fallbackPollIntervalMs());
+      Duration threshold =
+          options.fallbackPollThreshold() != null
+              ? options.fallbackPollThreshold()
+              : FallbackPoller.DEFAULT_THRESHOLD;
+      fp =
+          FallbackPoller.builder()
+              .interval(interval)
+              .threshold(threshold)
+              .fetch(this::fallbackPollFetchOnce)
+              .onEngage(
+                  () -> {
+                    Supervisor s = supBox[0];
+                    if (s != null) s.setConnectionState(Supervisor.ConnectionState.FALLING_BACK);
+                    options
+                        .logger()
+                        .warn(
+                            "quonfig: Layer 2 fallback poller engaged (SSE disconnected past {}ms threshold); polling /api/v2/configs every {}ms",
+                            threshold.toMillis(),
+                            options.fallbackPollIntervalMs());
+                    Consumer<Boolean> cb = options.onFallbackPollerStateChange();
+                    if (cb != null) {
+                      try {
+                        cb.accept(true);
+                      } catch (RuntimeException ignored) {
+                        // user code; never tear down the client
+                      }
+                    }
+                  })
+              .onDisengage(
+                  () -> {
+                    // Disengage fires only on SSE reconnect — the connect edge has already
+                    // set CONNECTED on the supervisor; re-asserting it is harmless and guards
+                    // the rare ordering where the poller's tick beats the SSE callback.
+                    Supervisor s = supBox[0];
+                    if (s != null) s.setConnectionState(Supervisor.ConnectionState.CONNECTED);
+                    options
+                        .logger()
+                        .info("quonfig: Layer 2 fallback poller disengaged (SSE recovered)");
+                    Consumer<Boolean> cb = options.onFallbackPollerStateChange();
+                    if (cb != null) {
+                      try {
+                        cb.accept(false);
+                      } catch (RuntimeException ignored) {
+                        // user code; never tear down the client
+                      }
+                    }
+                  })
+              .build();
+      this.fallbackPoller = fp;
+    }
+
+    Supervisor.Builder supBuilder = Supervisor.builder();
+    if (fp != null) {
+      supBuilder.workers(List.of(new Supervisor.WorkerSpec("2", fp.worker())));
+    }
+    Supervisor sup = supBuilder.build();
+    supBox[0] = sup;
+    this.supervisor = sup;
+    sup.start();
+
+    final FallbackPoller fpRef = fp;
+    // Arm the disconnect timer at the moment SSE is *meant* to be up. If the first
+    // connection attempt succeeds quickly the SSE callback will clear it; if SSE never
+    // establishes, fallback engages after the 120s threshold.
+    if (fpRef != null) {
+      fpRef.setSseConnected(false);
+    }
+
     List<URI> streams = new ArrayList<>(options.streamUrls().size());
     for (String u : options.streamUrls()) streams.add(URI.create(u));
     SseClient.Builder sseBuilder = SseClient.builder().streamUrls(streams).sdkKey(options.sdkKey());
@@ -260,6 +345,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             List<ConfigRow> rows = new ArrayList<>(env.configs().size());
             for (JsonNode cfg : env.configs()) rows.add(DatadirLoader.parseConfigNode(cfg));
             installRows(rows);
+            sup.recordSuccessfulRefresh();
             fireConfigUpdate();
           } catch (RuntimeException ignored) {
             // Bad envelope is non-fatal — keep the prior store in place.
@@ -267,6 +353,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         });
     sse.onConnectionStateChange(
         connected -> {
+          // Feed the supervisor + fallback poller before invoking user callbacks so
+          // Quonfig.connectionState() (qfg-47c2.23) observes the new state immediately.
+          if (fpRef != null) {
+            fpRef.setSseConnected(connected);
+          }
+          if (connected) {
+            sup.setConnectionState(Supervisor.ConnectionState.CONNECTED);
+          } else if (fpRef == null || !fpRef.active()) {
+            // Skip the DISCONNECTED edge while fallback is already engaged so the visible
+            // state stays "falling_back" rather than flickering between the two.
+            sup.setConnectionState(Supervisor.ConnectionState.DISCONNECTED);
+          }
           for (Consumer<Boolean> l : sseListeners) {
             try {
               l.accept(connected);
@@ -276,7 +374,60 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           }
         });
     this.sseClient = sse;
+    logPollingMode();
     sse.start();
+  }
+
+  /**
+   * Performs one Layer 2 fallback fetch: GET {@code /api/v2/configs}, install rows, mark refresh.
+   * Errors are swallowed — the poller's outer loop keeps ticking; a transient HTTP failure during a
+   * partition is expected and not actionable. Called only when the {@link FallbackPoller} has
+   * engaged.
+   */
+  private void fallbackPollFetchOnce() {
+    HttpTransport http = this.httpTransport;
+    if (http == null) return;
+    try {
+      HttpResponse<String> resp =
+          http.get(URI.create(CONFIGS_PATH), null)
+              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
+      installEnvelope(resp.body());
+      Supervisor sup = this.supervisor;
+      if (sup != null) sup.recordSuccessfulRefresh();
+      fireConfigUpdate();
+    } catch (Exception e) {
+      // Best-effort: HTTP errors during a partition are exactly what fallback polling
+      // exists to weather. The next interval tick will try again.
+      options.logger().debug("quonfig: fallback poll fetch failed: {}", e.getMessage());
+    }
+  }
+
+  /**
+   * One-shot startup log advertising the chosen Layer 1 (SSE) and Layer 2 (fallback poll) modes.
+   * Parity with sdk-go's {@code logPollingMode}. Deployers grep for this line to confirm they're on
+   * the fallback-only semantic after the rename from {@code enablePolling}/{@code pollInterval}.
+   */
+  private void logPollingMode() {
+    String mode = options.fallbackPollEnabled() ? "sse-with-fallback-poll" : "sse-only";
+    if (options.fallbackPollEnabled()) {
+      long thresholdMs =
+          options.fallbackPollThreshold() != null
+              ? options.fallbackPollThreshold().toMillis()
+              : FallbackPoller.DEFAULT_THRESHOLD.toMillis();
+      options
+          .logger()
+          .info(
+              "quonfig: polling configuration mode={} sse_enabled=true fallback_poll_enabled=true fallback_poll_interval_ms={} fallback_poll_threshold_ms={}",
+              mode,
+              options.fallbackPollIntervalMs(),
+              thresholdMs);
+    } else {
+      options
+          .logger()
+          .info(
+              "quonfig: polling configuration mode={} sse_enabled=true fallback_poll_enabled=false",
+              mode);
+    }
   }
 
   public Options options() {
@@ -407,6 +558,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     closed = true;
     SseClient sse = sseClient;
     if (sse != null) sse.stop();
+    Supervisor sup = supervisor;
+    if (sup != null) sup.stop();
     if (telemetryReporter != null) telemetryReporter.close();
   }
 

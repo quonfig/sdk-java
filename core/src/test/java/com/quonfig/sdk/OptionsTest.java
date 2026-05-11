@@ -88,9 +88,24 @@ class OptionsTest {
   }
 
   @Test
-  void enablePolling_defaults_false() {
+  void fallbackPoll_defaults() {
     Options o = Options.builder().envLookup(envFromMap(Map.of())).build();
-    assertTrue(!o.enablePolling());
+    assertTrue(o.fallbackPollEnabled(), "fallbackPollEnabled defaults to true (cross-SDK parity)");
+    assertEquals(60_000L, o.fallbackPollIntervalMs(), "fallbackPollIntervalMs defaults to 60000");
+  }
+
+  @Test
+  void fallbackPollEnabled_explicit_overridesDefault() {
+    Options o =
+        Options.builder().envLookup(envFromMap(Map.of())).fallbackPollEnabled(false).build();
+    assertTrue(!o.fallbackPollEnabled());
+  }
+
+  @Test
+  void fallbackPollIntervalMs_explicit_overridesDefault() {
+    Options o =
+        Options.builder().envLookup(envFromMap(Map.of())).fallbackPollIntervalMs(15_000L).build();
+    assertEquals(15_000L, o.fallbackPollIntervalMs());
   }
 
   @Test

@@ -106,6 +106,28 @@ final class ChaosProbe {
         if (state == State.CONNECTED) {
           restartLayer1++;
         }
+        // Preserve FALLING_BACK if the Layer 2 poller has already engaged. The SSE callback
+        // can fire repeatedly during a long partition (retry/backoff), and we don't want each
+        // attempt to flicker us between FALLING_BACK and RECONNECTING.
+        if (!fallbackActive) {
+          state = State.RECONNECTING;
+        }
+      }
+    }
+  }
+
+  /**
+   * Hook for the SDK's onFallbackPollerStateChange callback (qfg-47c2.21). Drives the probe's
+   * {@code fallbackPollerActive} and FALLING_BACK state — both of which scenarios 5 and 6 assert.
+   */
+  void onFallbackState(boolean engaged) {
+    synchronized (lock) {
+      fallbackActive = engaged;
+      if (engaged) {
+        state = State.FALLING_BACK;
+      } else if (state == State.FALLING_BACK) {
+        // Disengaged but SSE hasn't fired a connect edge yet — treat as reconnecting until
+        // the next SSE event lands.
         state = State.RECONNECTING;
       }
     }
