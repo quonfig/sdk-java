@@ -67,6 +67,7 @@ public final class Options {
   private final Duration telemetryMaxInterval;
   private final String instanceHash;
   private final String loggerKey;
+  private final Duration sseReadWatchdog;
 
   private Options(Builder b) {
     Resolver.EnvLookup env = b.envLookup != null ? b.envLookup : Resolver.DEFAULT_ENV_LOOKUP;
@@ -110,6 +111,7 @@ public final class Options {
     this.instanceHash =
         b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
     this.loggerKey = b.loggerKey;
+    this.sseReadWatchdog = b.sseReadWatchdog;
   }
 
   public String sdkKey() {
@@ -234,6 +236,17 @@ public final class Options {
   }
 
   /**
+   * SSE stall watchdog. When non-null, overrides the SSE transport's default 90s read deadline —
+   * each chunk received resets the timer and the SDK closes the stream on stall. Surfaced mostly
+   * for the chaos harness, which needs a sub-30s value to exercise the deadline-trip mechanism
+   * within scenario expectation windows. Production should leave this null and take the 90s default
+   * (= 3x the 30s server heartbeat).
+   */
+  public Duration sseReadWatchdog() {
+    return sseReadWatchdog;
+  }
+
+  /**
    * Stream-base URLs for SSE. Resolution order: {@link Builder#streamUrls(List)} explicit override
    * → derived from {@link #apiUrls()} (each {@code primary.X}/{@code secondary.X} → {@code
    * stream.primary.X}/{@code stream.secondary.X}). The explicit override exists for cases where the
@@ -284,6 +297,7 @@ public final class Options {
     private Duration telemetryMaxInterval;
     private String instanceHash;
     private String loggerKey;
+    private Duration sseReadWatchdog;
 
     public Builder sdkKey(String v) {
       this.sdkKey = v;
@@ -425,6 +439,16 @@ public final class Options {
 
     public Builder loggerKey(String v) {
       this.loggerKey = v;
+      return this;
+    }
+
+    /**
+     * Overrides the SSE stall watchdog. Default (when null) is 90s. The chaos harness uses a
+     * sub-30s value to exercise the deadline-trip mechanism within the 15s expectation window of
+     * scenario 07; production should leave this unset.
+     */
+    public Builder sseReadWatchdog(Duration v) {
+      this.sseReadWatchdog = v;
       return this;
     }
 

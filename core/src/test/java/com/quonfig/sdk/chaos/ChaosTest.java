@@ -152,6 +152,10 @@ final class ChaosTest {
             .streamUrls(List.of(sseBase))
             .disableTelemetry(true)
             .initTimeout(Duration.ofSeconds(15))
+            // Scenario 07's within_ms=15000 expects the SSE deadline-trip to fire well before
+            // the 30s server heartbeat, so chaos uses a short watchdog. Production default
+            // (90s) is unchanged. Mirrors sdk-go's withTestSSEReadTimeout pattern.
+            .sseReadWatchdog(Duration.ofSeconds(5))
             .onSseConnectionStateChange(probe::onSseState);
 
     if ("throw".equals(run.setup != null ? run.setup.userCallback : null)) {

@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -49,6 +50,10 @@ class SseClientTest {
   private HttpServer start(HttpHandler handler) throws IOException {
     HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     s.createContext("/api/v2/sse/config", handler);
+    // Cached thread pool so reconnect-during-stall tests aren't blocked on a long-running
+    // prior handler. The default null executor processes handlers on the dispatcher thread,
+    // which serializes them.
+    s.setExecutor(Executors.newCachedThreadPool());
     s.start();
     servers.add(s);
     return s;
@@ -249,6 +254,110 @@ class SseClientTest {
     assertEquals("vS", env.meta().version());
     assertTrue(primaryHits.get() >= 1, "expected primary to be tried first");
     assertTrue(secondaryHits.get() >= 1, "expected secondary fallback");
+  }
+
+  /**
+   * Watchdog must drop a silent SSE stream (no bytes, no FIN) and force a reconnect. The watchdog
+   * mirrors the existing {@code activeBody.close()} wakeup pattern used by {@code stop()}:
+   * fire-on-stall closes the body, which unblocks {@code readLine()}, which surfaces as an
+   * IOException to {@link SseClient#connectOnce} and triggers reconnect via the normal loop. Drives
+   * scenarios 02 (silent stall) and 07 (half-open) in the chaos harness.
+   */
+  @Test
+  void watchdogDropsSilentStreamAndReconnects() throws Exception {
+    AtomicInteger attempts = new AtomicInteger(0);
+    BlockingQueue<ConfigEnvelope> received = new LinkedBlockingQueue<>();
+
+    HttpHandler handler =
+        (HttpExchange ex) -> {
+          int n = attempts.incrementAndGet();
+          ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+          ex.sendResponseHeaders(200, 0);
+          OutputStream out = ex.getResponseBody();
+          try {
+            if (n == 1) {
+              // Silent stall: bytes header sent, then nothing. Without the watchdog the SDK
+              // would block here for the full sleep duration.
+              Thread.sleep(10_000);
+            } else {
+              writeFrame(out, "v1", "{\"meta\":{\"version\":\"v1\"},\"configs\":[]}");
+              Thread.sleep(2_000);
+            }
+          } catch (IOException | InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+          } finally {
+            ex.close();
+          }
+        };
+    HttpServer s = start(handler);
+
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s)))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .readWatchdog(Duration.ofMillis(300))
+            .build();
+    client.onEnvelope(received::add);
+    client.start();
+
+    ConfigEnvelope env = received.poll(5, TimeUnit.SECONDS);
+    assertNotNull(env, "expected envelope after watchdog drop; attempts=" + attempts.get());
+    assertEquals("v1", env.meta().version());
+    assertTrue(attempts.get() >= 2, "expected reconnect after stall, got " + attempts.get());
+  }
+
+  /**
+   * Active reads must reset the watchdog so a healthy stream is never dropped. Server sends a
+   * keepalive every 80ms; with a 300ms watchdog the read loop should observe ~12 chunks across 1s
+   * with zero reconnects.
+   */
+  @Test
+  void watchdogResetsOnEachChunk() throws Exception {
+    AtomicInteger attempts = new AtomicInteger(0);
+    BlockingQueue<ConfigEnvelope> received = new LinkedBlockingQueue<>();
+
+    HttpHandler handler =
+        (HttpExchange ex) -> {
+          attempts.incrementAndGet();
+          ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+          ex.sendResponseHeaders(200, 0);
+          OutputStream out = ex.getResponseBody();
+          try {
+            long stopAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1100);
+            while (System.nanoTime() < stopAt) {
+              out.write(": keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              Thread.sleep(80);
+            }
+            writeFrame(out, "v1", "{\"meta\":{\"version\":\"v1\"},\"configs\":[]}");
+            Thread.sleep(500);
+          } catch (IOException | InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+          } finally {
+            ex.close();
+          }
+        };
+    HttpServer s = start(handler);
+
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s)))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .readWatchdog(Duration.ofMillis(300))
+            .build();
+    client.onEnvelope(received::add);
+    client.start();
+
+    ConfigEnvelope env = received.poll(3, TimeUnit.SECONDS);
+    assertNotNull(env, "expected envelope after keepalive stream; attempts=" + attempts.get());
+    assertEquals(
+        1,
+        attempts.get(),
+        "watchdog must not fire while keepalives flow; attempts=" + attempts.get());
   }
 
   /** stop() must unwind a connected reader within a couple of seconds. */

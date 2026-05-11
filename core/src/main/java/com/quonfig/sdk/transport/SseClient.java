@@ -16,8 +16,13 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,7 +64,11 @@ public final class SseClient {
   private final String userAgent;
   private final Duration initialDelay;
   private final Duration maxDelay;
+  private final Duration readWatchdog;
   private final HttpClient http;
+  // Single-thread scheduler that fires the SSE stall watchdog. Daemon-threaded so it
+  // never holds the JVM alive; shut down by stop().
+  private final ScheduledExecutorService watchdogExecutor;
 
   private volatile Consumer<ConfigEnvelope> envelopeHandler;
   private volatile Consumer<Boolean> stateHandler;
@@ -85,6 +94,15 @@ public final class SseClient {
     this.userAgent = b.userAgent != null ? b.userAgent : Version.header();
     this.initialDelay = b.initialDelay != null ? b.initialDelay : Duration.ofMillis(500);
     this.maxDelay = b.maxDelay != null ? b.maxDelay : Duration.ofSeconds(30);
+    // 90s = 3x the api-delivery 30s comment heartbeat (sse.go:67-88).
+    this.readWatchdog = b.readWatchdog != null ? b.readWatchdog : Duration.ofSeconds(90);
+    this.watchdogExecutor =
+        Executors.newSingleThreadScheduledExecutor(
+            r -> {
+              Thread t = new Thread(r, "quonfig-sse-watchdog");
+              t.setDaemon(true);
+              return t;
+            });
     this.http =
         b.httpClient != null
             ? b.httpClient
@@ -150,6 +168,10 @@ public final class SseClient {
     } catch (InterruptedException ignored) {
       Thread.currentThread().interrupt();
     }
+    // Cancel any pending watchdog and tear down the single scheduler thread so the
+    // JVM can exit cleanly after stop(). shutdownNow() is safe even if no task is
+    // running, and the executor is single-use (no restart path).
+    watchdogExecutor.shutdownNow();
   }
 
   private void runLoop() {
@@ -283,26 +305,61 @@ public final class SseClient {
   private void parseStream(InputStream in) throws IOException {
     BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
     StringBuilder dataBuf = new StringBuilder();
-    String line;
-    while ((line = reader.readLine()) != null) {
-      if (Thread.currentThread().isInterrupted()) {
-        return;
-      }
-      if (line.isEmpty()) {
-        flush(dataBuf);
-        continue;
-      }
-      if (line.charAt(0) == ':') {
-        continue;
-      }
-      String rest = stripFieldPrefix(line, "data:");
-      if (rest != null) {
-        if (dataBuf.length() > 0) {
-          dataBuf.append('\n');
+    // Stall watchdog. Java's HttpClient has no per-read deadline; we get the same
+    // effect by scheduling a task to close the body after readWatchdog of silence.
+    // close() unblocks readLine() with EOF or IOException, which falls out to
+    // connectOnce's catch and triggers reconnect. Each non-null readLine() — data,
+    // keepalive, or otherwise — resets the timer. Keepalives (server emits one every
+    // 30s) keep a healthy stream alive against a 90s default.
+    AtomicReference<ScheduledFuture<?>> watchdog = new AtomicReference<>();
+    try {
+      watchdog.set(scheduleWatchdog(in));
+      String line;
+      while ((line = reader.readLine()) != null) {
+        ScheduledFuture<?> prev = watchdog.getAndSet(scheduleWatchdog(in));
+        if (prev != null) {
+          prev.cancel(false);
         }
-        dataBuf.append(rest);
+        if (Thread.currentThread().isInterrupted()) {
+          return;
+        }
+        if (line.isEmpty()) {
+          flush(dataBuf);
+          continue;
+        }
+        if (line.charAt(0) == ':') {
+          continue;
+        }
+        String rest = stripFieldPrefix(line, "data:");
+        if (rest != null) {
+          if (dataBuf.length() > 0) {
+            dataBuf.append('\n');
+          }
+          dataBuf.append(rest);
+        }
+      }
+    } finally {
+      ScheduledFuture<?> prev = watchdog.getAndSet(null);
+      if (prev != null) {
+        prev.cancel(false);
       }
     }
+  }
+
+  private ScheduledFuture<?> scheduleWatchdog(InputStream body) {
+    return watchdogExecutor.schedule(
+        () -> {
+          log.warn(
+              "SSE: read watchdog fired after {}ms of silence — closing stream to force reconnect",
+              readWatchdog.toMillis());
+          try {
+            body.close();
+          } catch (IOException ignored) {
+            // Best-effort: the read in the loop will already be unblocked.
+          }
+        },
+        readWatchdog.toNanos(),
+        TimeUnit.NANOSECONDS);
   }
 
   private void flush(StringBuilder dataBuf) {
@@ -377,6 +434,7 @@ public final class SseClient {
     private String userAgent;
     private Duration initialDelay;
     private Duration maxDelay;
+    private Duration readWatchdog;
     private HttpClient httpClient;
 
     /** Primary stream URL first; subsequent entries are tried on failure of the prior. */
@@ -405,6 +463,18 @@ public final class SseClient {
     /** Default 30s. */
     public Builder maxDelay(Duration maxDelay) {
       this.maxDelay = maxDelay;
+      return this;
+    }
+
+    /**
+     * Stall-detection watchdog. Each chunk received on the SSE body resets the timer; when no bytes
+     * arrive within the window the SDK closes the underlying stream and reconnects. Defaults to 90s
+     * (3x the 30s server heartbeat). The default catches client-side wedges (corp proxy buffering,
+     * dead NAT, half-open TCP) where the server thinks it delivered and the client knows it
+     * received nothing.
+     */
+    public Builder readWatchdog(Duration readWatchdog) {
+      this.readWatchdog = readWatchdog;
       return this;
     }
 

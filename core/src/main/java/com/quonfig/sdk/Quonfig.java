@@ -249,7 +249,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (closed) return;
     List<URI> streams = new ArrayList<>(options.streamUrls().size());
     for (String u : options.streamUrls()) streams.add(URI.create(u));
-    SseClient sse = SseClient.builder().streamUrls(streams).sdkKey(options.sdkKey()).build();
+    SseClient.Builder sseBuilder = SseClient.builder().streamUrls(streams).sdkKey(options.sdkKey());
+    if (options.sseReadWatchdog() != null) {
+      sseBuilder.readWatchdog(options.sseReadWatchdog());
+    }
+    SseClient sse = sseBuilder.build();
     sse.onEnvelope(
         env -> {
           try {
