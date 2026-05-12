@@ -362,10 +362,16 @@ final class ChaosTest {
       return new InjectionState(null, null, List.of("sse", "http"));
     }
     if (inj.sseHalfOpenAfterBytes != null) {
-      Map<String, Object> attrs = new LinkedHashMap<>();
-      attrs.put("bytes", inj.sseHalfOpenAfterBytes);
-      tp.addToxic("sse", name, "limit_data", "downstream", attrs);
-      return new InjectionState("sse", name, Collections.emptyList());
+      // Toxiproxy is TCP-only and can't truly model "server returns 200 then
+      // closes after N bytes" — the limit_data toxic this used to call only
+      // trips on the NEXT upstream byte, which for SSE is the 30s heartbeat,
+      // outside the typical within_ms=15s window. The closest TCP-only analog
+      // is to disable the proxy: existing SSE connections drop, new attempts
+      // are refused. Leave it disabled until the matching `clear` step so the
+      // SDK's reconnect attempts fail visibly (sdk-ruby's ld-eventsource only
+      // fires on_error on ECONNREFUSED, not on clean FIN). qfg-47c2.29.
+      tp.setEnabled("sse", false);
+      return new InjectionState(null, null, List.of("sse"));
     }
     if (inj.sseHttpStatus != null) {
       // Toxiproxy is TCP-only; HTTP-status injection is not supported. Scenario 8 will not
