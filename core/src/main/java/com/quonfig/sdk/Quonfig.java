@@ -979,8 +979,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     for (Runnable r : configUpdateListeners) {
       try {
         r.run();
-      } catch (RuntimeException ignored) {
-        // listeners are user code; never let one tear down the client
+      } catch (RuntimeException ex) {
+        // listeners are user code; never let one tear down the client. Mirror sdk-go's
+        // invokeOnConfigUpdate / sdk-node's invokeOnConfigUpdate by logging at ERROR so
+        // operators (and chaos scenario 10) can observe that the callback panicked.
+        options.logger().error("quonfig: onConfigUpdate callback threw; SDK continuing", ex);
       }
     }
   }

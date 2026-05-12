@@ -2,13 +2,20 @@ package com.quonfig.sdk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.wire.ConfigEnvelope;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.Marker;
+import org.slf4j.event.Level;
+import org.slf4j.helpers.AbstractLogger;
 
 /**
  * Datafile mode (qfg-9hre): match sdk-node's {@code datafile?: string | object} shape — accept a
@@ -82,5 +89,122 @@ class QuonfigDatafileTest {
     assertThrows(
         RuntimeException.class,
         () -> new Quonfig(Options.builder().datafile(missing.toString()).build()));
+  }
+
+  // qfg-srj8 / chaos scenario 10: a RuntimeException thrown by an onConfigUpdate listener
+  // must NOT crash the client and MUST be logged at ERROR with a message matching
+  // /callback|onConfigUpdate/i so the chaos harness's sdkLog matcher can find it. Mirrors
+  // sdk-go's invokeOnConfigUpdate logging and sdk-node's invokeOnConfigUpdate try/catch.
+  @Test
+  void datafile_onConfigUpdateListenerThrows_logsErrorWithCallbackKeyword() throws Exception {
+    ConfigEnvelope envelope = MAPPER.readValue(ENVELOPE_JSON, ConfigEnvelope.class);
+    RecordingLogger recording = new RecordingLogger();
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder()
+                .datafileEnvelope(envelope)
+                .logger(recording)
+                .onConfigUpdate(
+                    () -> {
+                      throw new RuntimeException("simulated user-callback panic");
+                    })
+                .build())) {
+      // Client must remain usable — the throw must not tear down construction.
+      assertEquals("hello-prod", q.getString("greeting", "fallback"));
+    }
+    Pattern keyword = Pattern.compile("callback|onConfigUpdate", Pattern.CASE_INSENSITIVE);
+    long matched =
+        recording.entries.stream()
+            .filter(e -> e.level == Level.ERROR)
+            .filter(e -> keyword.matcher(e.format).find())
+            .count();
+    assertTrue(
+        matched >= 1,
+        "expected >=1 error log matching /callback|onConfigUpdate/i but saw: " + recording.entries);
+  }
+
+  /** Minimal SLF4J logger that captures every call as a (level, format) pair. */
+  static final class RecordingLogger extends AbstractLogger {
+    final List<Entry> entries = new ArrayList<>();
+
+    static final class Entry {
+      final Level level;
+      final String format;
+
+      Entry(Level level, String format) {
+        this.level = level;
+        this.format = format;
+      }
+
+      @Override
+      public String toString() {
+        return level + ":" + format;
+      }
+    }
+
+    @Override
+    protected String getFullyQualifiedCallerName() {
+      return RecordingLogger.class.getName();
+    }
+
+    @Override
+    protected void handleNormalizedLoggingCall(
+        Level level,
+        Marker marker,
+        String messagePattern,
+        Object[] arguments,
+        Throwable throwable) {
+      entries.add(new Entry(level, messagePattern == null ? "" : messagePattern));
+    }
+
+    @Override
+    public boolean isTraceEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isTraceEnabled(Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isDebugEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isDebugEnabled(Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isInfoEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isInfoEnabled(Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isWarnEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isWarnEnabled(Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isErrorEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isErrorEnabled(Marker marker) {
+      return true;
+    }
   }
 }

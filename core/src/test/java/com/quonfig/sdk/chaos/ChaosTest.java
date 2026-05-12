@@ -156,6 +156,9 @@ final class ChaosTest {
             // the 30s server heartbeat, so chaos uses a short watchdog. Production default
             // (90s) is unchanged. Mirrors sdk-go's withTestSSEReadTimeout pattern.
             .sseReadWatchdog(Duration.ofSeconds(5))
+            // Route SDK SLF4J output into the probe so log-matching expectations
+            // (e.g. scenario 10's exp[3] looking for /callback|onConfigUpdate/i) can fire.
+            .logger(new ProbeBridgeLogger(probe))
             .onSseConnectionStateChange(probe::onSseState)
             .onFallbackPollerStateChange(probe::onFallbackState);
 
@@ -525,6 +528,92 @@ final class ChaosTest {
     ExpState(int idx, ChaosScenario.Expectation exp) {
       this.idx = idx;
       this.exp = exp;
+    }
+  }
+
+  /**
+   * SLF4J bridge that forwards every SDK log call into {@link ChaosProbe#log}, so log-matching
+   * scenario expectations (e.g. scenario 10 looking for {@code /callback|onConfigUpdate/i}) can
+   * observe what the SDK actually wrote. Formats SLF4J's {@code {}} placeholders by hand
+   * (qfg-srj8); the SDK is the only writer so {@link org.slf4j.helpers.MessageFormatter} is fine
+   * but pulling it in would mean a runtime dep on slf4j-impl in this test path — string-join keeps
+   * the bridge self-contained.
+   */
+  private static final class ProbeBridgeLogger extends org.slf4j.helpers.AbstractLogger {
+
+    private final ChaosProbe probe;
+
+    ProbeBridgeLogger(ChaosProbe probe) {
+      this.probe = probe;
+    }
+
+    @Override
+    protected String getFullyQualifiedCallerName() {
+      return ProbeBridgeLogger.class.getName();
+    }
+
+    @Override
+    protected void handleNormalizedLoggingCall(
+        org.slf4j.event.Level level,
+        org.slf4j.Marker marker,
+        String messagePattern,
+        Object[] arguments,
+        Throwable throwable) {
+      String msg = org.slf4j.helpers.MessageFormatter.basicArrayFormat(messagePattern, arguments);
+      if (throwable != null) {
+        msg = msg + " | " + throwable;
+      }
+      probe.log(level.name().toLowerCase(), msg);
+    }
+
+    @Override
+    public boolean isTraceEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isTraceEnabled(org.slf4j.Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isDebugEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isDebugEnabled(org.slf4j.Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isInfoEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isInfoEnabled(org.slf4j.Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isWarnEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isWarnEnabled(org.slf4j.Marker marker) {
+      return true;
+    }
+
+    @Override
+    public boolean isErrorEnabled() {
+      return true;
+    }
+
+    @Override
+    public boolean isErrorEnabled(org.slf4j.Marker marker) {
+      return true;
     }
   }
 }
