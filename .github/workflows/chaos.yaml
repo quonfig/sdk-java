@@ -1,0 +1,108 @@
+name: Chaos
+
+# Runs the cross-SDK chaos harness (toxiproxy + scenarios from
+# integration-test-data/chaos) against sdk-java. Boots api-delivery in
+# fixture mode and drives every scenario in scenarios/*.yaml through it.
+#
+# Two modes:
+#   - smoke   : skips 11-null-hypothesis (the 30-minute idle scenario);
+#               runs on every push to main + every PR (~18 min wall clock).
+#   - full    : every scenario; runs on tags + workflow_dispatch (~48 min).
+#
+# Wired via workflow_call so publish.yaml can `needs:` it. Because
+# publish.yaml is tag-triggered, the chaos workflow also reacts to
+# `push: tags: ['v*']` so it shows up alongside publish in the
+# Actions UI for the tagged commit.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_call:
+    inputs:
+      mode:
+        description: "smoke (skip 11) or full"
+        required: false
+        type: string
+        default: smoke
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "smoke (skip 11) or full"
+        required: false
+        type: choice
+        options: [smoke, full]
+        default: smoke
+
+jobs:
+  chaos:
+    name: Chaos (${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) && 'full' || inputs.mode || 'smoke' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout sdk-java
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          path: sdk-java
+
+      - name: Checkout integration-test-data
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          repository: quonfig/integration-test-data
+          path: integration-test-data
+          # Pinned per the 2026-05-13 reliability audit so the chaos
+          # gate moves only when the scenarios are deliberately
+          # rev'd. Bump alongside the matching SDK change.
+          ref: v2026.05.13
+
+      - name: Checkout api-delivery
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # api-delivery is private; the default GITHUB_TOKEN cannot
+          # read it. A PAT or fine-grained token with read access to
+          # quonfig/api-delivery must be configured as the repo secret
+          # QUONFIG_REPO_TOKEN. Without it this step fails fast and
+          # the chaos gate is red — by design, until the secret is
+          # provisioned.
+          repository: quonfig/api-delivery
+          path: api-delivery
+          ref: main
+          token: ${{ secrets.QUONFIG_REPO_TOKEN }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: api-delivery/go.sum
+
+      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12  # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@94baf225fe0a508e581a564467443d0e2379123b  # v4
+
+      - name: Verify docker compose available
+        run: docker compose version
+
+      - name: Run chaos harness
+        working-directory: sdk-java
+        env:
+          # Smoke skips 11-null-hypothesis (30 min idle). Full suite
+          # runs everything. The wrapper honors CHAOS_SKIP.
+          # On tag pushes always run the full suite.
+          CHAOS_SKIP: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.mode == 'full' && '' || '11' }}
+        run: ./scripts/run-chaos.sh
+
+      - name: Upload chaos logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: chaos-logs-${{ github.run_id }}
+          path: |
+            sdk-java/.chaos-api-delivery
+            sdk-java/chaos-*.log
+            sdk-java/core/build/reports/tests
+          if-no-files-found: ignore
+          retention-days: 7
