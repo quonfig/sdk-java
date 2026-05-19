@@ -1,19 +1,44 @@
 # Changelog
 
-## Unreleased
+## 0.0.2 - 2026-05-19
 
-- `Options.Builder.datafile(String)` and `Options.Builder.datafileEnvelope(ConfigEnvelope)` now load configs from a serialized envelope (filesystem path or pre-parsed object), matching sdk-node's `datafile?: string | object` shape. The envelope's `meta.environment` supplies the evaluation environment when the caller does not set `Options.environment()` explicitly. Replaces the previous `IllegalStateException` thrown at construct time. (qfg-9hre)
+Hardening and surface-expansion release covering 12 commits since `v0.0.1`. The headliners: a multi-module Gradle restructure that ships three new published artifacts for Logback / Log4j2 / Micronaut, a datafile-mode loader matching sdk-node, opt-in filesystem auto-reload for datadir mode, a Tier-1 supervisor + Layer-2 fallback poller wired in behind the SSE transport, and the first cross-SDK chaos harness wiring for Java. All four Maven Central artifacts ship in lock-step from this tag.
 
-## 0.0.2 - 2026-05-10
+### Multi-module restructure (new artifacts)
 
-Multi-module restructure that ships transparent dynamic-log-level integrations for Logback, Log4j2, and Micronaut. Customers add one filter at startup and every logger picks up Quonfig log levels — no per-call-site `shouldLog` wrapping. Tracks [qfg-wgfu](https://github.com/quonfig/sdk-java/issues).
-
-- Multi-module Gradle restructure: `:core`, `:logback`, `:log4j2`, `:micronaut`. Existing `com.quonfig:sdk-java` artifact unchanged in coordinates and contents (qfg-wgfu)
-- New artifacts published in lock-step from this repo: `com.quonfig:sdk-java-logback`, `com.quonfig:sdk-java-log4j2`, `com.quonfig:sdk-java-micronaut` (qfg-wgfu)
-- Public `LogLevel` enum + `LoggerClient` interface; `Quonfig` implements `LoggerClient` and exposes `getLogLevel(loggerPath, ContextSet) -> Optional<LogLevel>` (qfg-wgfu)
-- `QuonfigLogbackTurboFilter.install(loggerClient)` — Logback turbo filter with hierarchical logger-path fallback and recursion guard (qfg-wgfu)
-- `QuonfigLog4j2Filter.install(loggerClient)` — Log4j2 context-level filter with the same semantics (qfg-wgfu)
+- Multi-module Gradle restructure: `:core`, `:logback`, `:log4j2`, `:micronaut`. The existing `com.quonfig:sdk-java` artifact is unchanged in coordinates and contents (qfg-wgfu)
+- Three new artifacts published from this tag alongside `sdk-java`: `com.quonfig:sdk-java-logback`, `com.quonfig:sdk-java-log4j2`, `com.quonfig:sdk-java-micronaut` (qfg-wgfu)
+- Public `LogLevel` enum and `LoggerClient` interface; `Quonfig` now implements `LoggerClient` and exposes `getLogLevel(loggerPath, ContextSet) -> Optional<LogLevel>` so filter modules can resolve levels without going through `shouldLog`'s boolean comparison (qfg-wgfu)
+- `QuonfigLogbackTurboFilter.install(loggerClient)` — drop-in Logback `TurboFilter` with hierarchical logger-path fallback and a recursion guard (qfg-wgfu)
+- `QuonfigLog4j2Filter.install(loggerClient)` — drop-in Log4j2 context-level filter with the same semantics (qfg-wgfu)
 - `MicronautContextStore` — request-scoped `ContextSet` storage backed by `ServerRequestContext` for Micronaut event-loop apps (qfg-wgfu)
+- Each filter module declares its logging library as `compileOnly` so customers bring their own version
+
+### Features
+
+- **Datafile mode.** `Options.Builder.datafile(String)` and `Options.Builder.datafileEnvelope(ConfigEnvelope)` load configs from a serialized envelope (filesystem path or pre-parsed object), matching sdk-node's `datafile?: string | object` shape. The envelope's `meta.environment` supplies the evaluation environment when the caller does not set `Options.environment()` explicitly. Replaces the previous `IllegalStateException` thrown at construct time (qfg-9hre)
+- **Datadir auto-reload (opt-in).** `Options.Builder.dataDirAutoReload(true)` enables a `java.nio.file.WatchService`-based watcher that debounces filesystem bursts (default 200ms via `dataDirAutoReloadDebounceMs(long)`), parse-then-swap reloads via `DatadirLoader.load`, and fires the existing `onConfigUpdate` callback. Graceful read-only-fs / immutable-container degrade, daemon-thread cleanup on `close()`, symlink-aware via `Path.toRealPath()`. macOS uses a polling `WatchService` with a ~2s detection floor (documented); Linux/Windows are sub-100ms. Mirrors sdk-node's `qfg-mol-0kr` shape (qfg-mol-3jq, docs qfg-zx3y.5)
+- **Layer-1 SSE read watchdog.** `SseClient.parseStream` now schedules a 90s read watchdog on a single-thread executor; each chunk resets it, expiry closes `activeBody`, unblocks `readLine`, and falls through to the existing reconnect path. Override via `Options.sseReadWatchdog`. Closes the silent-stall / half-open hang that the JDK `HttpClient` had no deadline for (qfg-47c2.12)
+- **Supervisor (watcher-of-the-watchers).** New `com.quonfig.sdk.supervisor.Supervisor` — Java parity for sdk-go's Supervisor. One instance per `Quonfig` client wraps each background worker in a try/catch boundary: uncaught `Throwable` or non-stop exit logs at ERROR, increments `quonfig_sdk_worker_restart_total{layer="<n>"}`, sleeps an exponential backoff (500ms → 30s cap), and restarts. Clean shutdowns aren't counted; `stop()` joins all workers within a 5s deadline (qfg-47c2.18)
+- **Layer-2 fallback poller.** Replaces the dead `enablePolling` / `pollInterval` builders with cross-SDK `fallbackPollEnabled` / `fallbackPollIntervalMs` (defaults `true` / 60_000). New `FallbackPoller` runs as a Layer-2 worker under the Supervisor; engages after SSE has been disconnected for 120s and disengages when SSE recovers. Identical semantics to sdk-node and sdk-go (qfg-47c2.21)
+- **Health primitives.** New public enum `com.quonfig.sdk.ConnectionState` (`CONNECTED`, `DISCONNECTED`, `FALLING_BACK`, `INITIALIZING`). `Quonfig.lastSuccessfulRefresh()` returns an `Instant` of the most recent `installRows()` call (any source); `Quonfig.connectionState()` delegates to the Supervisor in HTTP+SSE mode and reports `CONNECTED` for static modes once rows are installed. Per-plan README warning: do not wire these into k8s liveness probes (qfg-47c2.23)
+
+### Fixes
+
+- `Quonfig.fireConfigUpdate` no longer silently swallows `RuntimeException` from user listeners — listener exceptions now log at ERROR with both `callback` and `onConfigUpdate` in the message, matching sdk-go's `invokeOnConfigUpdate` and giving operators / chaos harnesses an observable signal (qfg-srj8)
+- `fix(datadir)`: workspace loader now excludes the `schemas/` directory so JSON Schema files alongside config envelopes don't get walked as configs
+
+### Tests, chaos, and CI
+
+- **sdk-java wired into the cross-SDK chaos harness.** New JUnit 5 chaos runner under `core/src/test/java/com/quonfig/sdk/chaos/` loads YAML scenarios from `integration-test-data/chaos/scenarios/`, drives toxiproxy via its admin API, and observes a fresh `Quonfig` client per scenario. Gated on `CHAOS_RUN=1` so default `./gradlew test` still skips it. `scripts/run-chaos.sh` wraps the boot dance (build api-delivery in FIXTURE_DIR mode, bring up the shared toxiproxy launcher, run `:core:test` with the chaos filter). Test-only `snakeyaml 2.3` dep added (qfg-47c2.5)
+- Chaos scenario 07 now toggles toxiproxy's `setEnabled(false)` instead of relying on the `limit_data` toxic, which only tripped on the 30s SSE heartbeat — outside the scenario's 15s deadline. Mirrors sdk-go / sdk-node / sdk-python / sdk-ruby (qfg-47c2.29)
+- `ChaosTest` installs a `ProbeBridgeLogger` that forwards every SDK SLF4J call into `ChaosProbe.log`, so `sdkLog`-based scenario expectations now have a signal to match (qfg-srj8)
+- `QUONFIG_CHAOS_SESSION` + `QUONFIG_CHAOS_OWNER_PID` env vars exported so the cross-SDK file lock in `integration-test-data/chaos` can detect concurrent runs and attribute teardown ownership correctly (qfg-47c2.32)
+- CI: `integration-test-data` checkout pinned to tag `v2026.05.13` so a typo in shared YAML can't break every SDK's CI at once
+
+### Internal
+
+- `chore: bump VERSION_NAME to 0.0.2-SNAPSHOT` (post-0.0.1 development)
 
 ## 0.0.1 - 2026-05-10
 
