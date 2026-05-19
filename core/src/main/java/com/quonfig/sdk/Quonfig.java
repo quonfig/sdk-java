@@ -2,6 +2,7 @@ package com.quonfig.sdk;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.quonfig.sdk.datadir.DatadirWatcher;
 import com.quonfig.sdk.eval.ConfigRow;
 import com.quonfig.sdk.eval.ConfigStore;
 import com.quonfig.sdk.eval.ContextSet;
@@ -103,6 +104,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private volatile Supervisor supervisor;
   private volatile FallbackPoller fallbackPoller;
   private volatile HttpTransport httpTransport;
+  private volatile DatadirWatcher datadirWatcher;
 
   /**
    * Wall-clock stamp of the most recent successful install (datadir/datafile constructor or any
@@ -136,6 +138,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       installRows(rows);
       this.initFuture = CompletableFuture.completedFuture(null);
       fireConfigUpdate();
+      if (options.dataDirAutoReload()) {
+        startDatadirWatcher();
+      }
     } else if ((options.datafile() != null && !options.datafile().isEmpty())
         || options.datafileEnvelope() != null) {
       ConfigEnvelope envelope = loadDatafileEnvelope(options);
@@ -595,11 +600,71 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   @Override
   public void close() {
     closed = true;
+    DatadirWatcher dw = datadirWatcher;
+    if (dw != null) {
+      dw.close();
+      datadirWatcher = null;
+    }
     SseClient sse = sseClient;
     if (sse != null) sse.stop();
     Supervisor sup = supervisor;
     if (sup != null) sup.stop();
     if (telemetryReporter != null) telemetryReporter.close();
+  }
+
+  /**
+   * Wires up a {@link DatadirWatcher} for {@link Options#datadir()} when {@link
+   * Options#dataDirAutoReload()} is on. On registration failure (read-only fs, immutable container)
+   * we log and continue without watching — the SDK keeps serving the init-time envelope rather than
+   * throwing.
+   */
+  private void startDatadirWatcher() {
+    String dir = options.datadir();
+    if (dir == null || dir.isEmpty()) return;
+    DatadirWatcher watcher =
+        new DatadirWatcher(
+            Path.of(dir),
+            options.dataDirAutoReloadDebounceMs(),
+            this::reloadDatadir,
+            err ->
+                options
+                    .logger()
+                    .warn(
+                        "quonfig: datadir watcher error ({}): {}",
+                        err.getClass().getSimpleName(),
+                        err.getMessage()));
+    if (!watcher.start()) {
+      options
+          .logger()
+          .warn(
+              "quonfig: dataDirAutoReload requested but watcher registration failed for {} — continuing without auto-reload",
+              dir);
+      return;
+    }
+    this.datadirWatcher = watcher;
+  }
+
+  /**
+   * Re-reads the datadir into a fresh row set and atomically installs it. Parse-then-swap: any
+   * exception during the read (mid-write JSON, garbage file) is logged and swallowed so the prior
+   * envelope stays in the store and {@code onConfigUpdate} does NOT fire.
+   */
+  private void reloadDatadir() {
+    if (closed) return;
+    String dir = options.datadir();
+    if (dir == null || dir.isEmpty()) return;
+    try {
+      List<ConfigRow> rows = DatadirLoader.load(Path.of(dir));
+      installRows(rows);
+      fireConfigUpdate();
+    } catch (RuntimeException e) {
+      options
+          .logger()
+          .warn(
+              "quonfig: datadir reload failed; keeping previous envelope ({}): {}",
+              e.getClass().getSimpleName(),
+              e.getMessage());
+    }
   }
 
   // ---- typed getters (no context) ----

@@ -70,6 +70,10 @@ public final class Options {
   private final String instanceHash;
   private final String loggerKey;
   private final Duration sseReadWatchdog;
+  private final boolean dataDirAutoReload;
+  private final long dataDirAutoReloadDebounceMs;
+
+  public static final long DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS = 200L;
 
   private Options(Builder b) {
     Resolver.EnvLookup env = b.envLookup != null ? b.envLookup : Resolver.DEFAULT_ENV_LOOKUP;
@@ -116,6 +120,11 @@ public final class Options {
         b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
     this.loggerKey = b.loggerKey;
     this.sseReadWatchdog = b.sseReadWatchdog;
+    this.dataDirAutoReload = b.dataDirAutoReload;
+    this.dataDirAutoReloadDebounceMs =
+        b.dataDirAutoReloadDebounceMs > 0
+            ? b.dataDirAutoReloadDebounceMs
+            : DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS;
   }
 
   public String sdkKey() {
@@ -280,6 +289,28 @@ public final class Options {
   }
 
   /**
+   * Whether the datadir-mode client should watch the workspace for filesystem changes and
+   * atomically reload the envelope on every debounced burst. Default {@code false} — adding a
+   * background watcher thread to a previously-quiet datadir client is a behavior change, so it is
+   * opt-in. When enabled, the SDK fires the same {@link #onConfigUpdate()} callback used by the
+   * SSE/HTTP paths after a successful reload; partial-write parse errors keep the prior envelope
+   * (no broken state is ever exposed). Cross-SDK parity with {@code sdk-node} (qfg-mol-0kr).
+   */
+  public boolean dataDirAutoReload() {
+    return dataDirAutoReload;
+  }
+
+  /**
+   * Debounce window (milliseconds) that coalesces filesystem bursts (atomic-rename editor saves,
+   * {@code git pull} flurries) into a single reload. Default {@link
+   * #DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS} (200ms). Ignored when {@link #dataDirAutoReload()} is
+   * {@code false}.
+   */
+  public long dataDirAutoReloadDebounceMs() {
+    return dataDirAutoReloadDebounceMs;
+  }
+
+  /**
    * Stream-base URLs for SSE. Resolution order: {@link Builder#streamUrls(List)} explicit override
    * → derived from {@link #apiUrls()} (each {@code primary.X}/{@code secondary.X} → {@code
    * stream.primary.X}/{@code stream.secondary.X}). The explicit override exists for cases where the
@@ -333,6 +364,8 @@ public final class Options {
     private String instanceHash;
     private String loggerKey;
     private Duration sseReadWatchdog;
+    private boolean dataDirAutoReload;
+    private long dataDirAutoReloadDebounceMs;
 
     public Builder sdkKey(String v) {
       this.sdkKey = v;
@@ -515,6 +548,46 @@ public final class Options {
      */
     public Builder sseReadWatchdog(Duration v) {
       this.sseReadWatchdog = v;
+      return this;
+    }
+
+    /**
+     * Opt in to filesystem watching of the {@link #datadir(String)} workspace. When {@code true}, a
+     * background daemon thread re-reads the directory and atomically swaps the in-memory store on
+     * every debounced burst, firing the existing {@link #onConfigUpdate(Runnable)} callback.
+     * Default {@code false}.
+     *
+     * <p>Risk mitigations baked into the implementation:
+     *
+     * <ul>
+     *   <li><b>Partial-write races</b> — parse-then-swap: a parse error keeps the prior envelope
+     *       and skips the callback (no broken state is exposed).
+     *   <li><b>Burst events</b> — debounced via {@link #dataDirAutoReloadDebounceMs(long)} (default
+     *       200ms). Editor atomic-renames and {@code git pull} flurries coalesce to one reload.
+     *   <li><b>Read-only filesystem</b> — registration failure is logged and the SDK keeps serving
+     *       the init-time envelope rather than throwing.
+     *   <li><b>Thread cleanup</b> — the watcher is a daemon thread, stopped synchronously on {@link
+     *       Quonfig#close()}.
+     *   <li><b>Symlinked datadirs</b> — the datadir is resolved via {@code Path.toRealPath()} at
+     *       start, so events on the underlying directory are observed.
+     * </ul>
+     *
+     * <p><b>macOS caveat:</b> The JDK uses a polling {@code WatchService} on macOS; the detection
+     * floor is ~2s even at HIGH sensitivity. On Linux (inotify) and Windows (ReadDirectoryChangesW)
+     * the latency is well under 100ms.
+     */
+    public Builder dataDirAutoReload(boolean v) {
+      this.dataDirAutoReload = v;
+      return this;
+    }
+
+    /**
+     * Overrides the debounce window (milliseconds) that coalesces filesystem bursts. Default {@link
+     * Options#DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS} (200ms). Tests use shorter values for
+     * responsiveness; production should leave this at the default.
+     */
+    public Builder dataDirAutoReloadDebounceMs(long v) {
+      this.dataDirAutoReloadDebounceMs = v;
       return this;
     }
 
