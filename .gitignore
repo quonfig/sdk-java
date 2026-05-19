@@ -19,3 +19,6 @@ Thumbs.db
 
 # Local env
 .env
+
+# Chaos harness — locally-built api-delivery binary used by scripts/run-chaos.sh
+.chaos-api-delivery
