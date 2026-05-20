@@ -391,6 +391,74 @@ final class TestSetup {
     return resolved == null ? null : resolved.value();
   }
 
+  /**
+   * Assert that the LOADED raw envelope value for {@code key} is a real {@link Number}, not a
+   * {@code String}. This is the seam the {@code datadir_value_type} suite guards: Quonfig config
+   * files store {@code int}/{@code double} value fields as JSON strings on disk, and a correct
+   * datadir loader must coerce them to numbers at load time (as {@code api-delivery} does at
+   * unmarshal). Unlike {@link #datadirGet}, this reaches the {@code {type,value}} envelope BEFORE
+   * the resolver's unwrap-coercion, so a loader that passes the string through is caught here even
+   * though the public getter would still hide it.
+   *
+   * <p>sdk-java's {@link com.quonfig.sdk.DatadirLoader} already coerces {@code int}/{@code double}
+   * at parse ({@code raw.asLong()} / {@code raw.asDouble()}), so this assertion passes for the
+   * reference implementation; it turns red only on a loader regression.
+   */
+  static void assertRawValueNumeric(Map<String, Object> opts, String key) {
+    String datadirOpt = stringOpt(opts, "datadir");
+    String envOpt = stringOpt(opts, "environment");
+    if (envOpt == null) {
+      envOpt = TEST_ENV_LOOKUP.lookup("QUONFIG_ENVIRONMENT").orElse(null);
+    }
+    if (datadirOpt == null) {
+      throw new IllegalArgumentException("assertRawValueNumeric requires opts['datadir']");
+    }
+    if (envOpt == null || envOpt.isEmpty()) {
+      throw new RuntimeException(
+          "datadir mode requires environment; set Options.environment(...) or QUONFIG_ENVIRONMENT");
+    }
+
+    requireKnownEnvironment(Paths.get(datadirOpt), envOpt);
+
+    List<ConfigRow> rows = com.quonfig.sdk.DatadirLoader.load(Paths.get(datadirOpt));
+    MapConfigStore store = new MapConfigStore(rows);
+    Evaluator evaluator = new Evaluator(store, new Murmur3WeightedValueResolver());
+
+    ConfigRow cfg = store.getConfig(key);
+    if (cfg == null) {
+      throw new AssertionError(
+          "assertRawValueNumeric: config \"" + key + "\" not found in datadir " + datadirOpt);
+    }
+    EvaluationMatch match = evaluator.evaluate(cfg, envOpt, new ContextSet());
+    if (!match.isMatch() || match.value() == null) {
+      throw new AssertionError("assertRawValueNumeric: config \"" + key + "\" produced no match");
+    }
+
+    // match.value() is the LOADED raw Value — post weighted-value resolution but BEFORE the
+    // resolver unwraps/coerces. For an int/double config its payload must already be a Number.
+    Object raw = match.value().value();
+    if (raw instanceof String) {
+      throw new AssertionError(
+          "datadir loader returned "
+              + cfg.valueType()
+              + " config \""
+              + key
+              + "\" as a String (\""
+              + raw
+              + "\") — expected a coerced numeric value. The datadir loader must coerce int/double"
+              + " at load time, matching api-delivery.");
+    }
+    if (!(raw instanceof Number)) {
+      throw new AssertionError(
+          "assertRawValueNumeric: expected a Number for "
+              + cfg.valueType()
+              + " config \""
+              + key
+              + "\", got "
+              + (raw == null ? "null" : raw.getClass().getName() + " (" + raw + ")"));
+    }
+  }
+
   private static void requireKnownEnvironment(Path datadirPath, String envId) {
     Path manifest = datadirPath.resolve("quonfig.json");
     if (!Files.isRegularFile(manifest)) return; // no manifest → don't enforce
