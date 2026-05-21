@@ -40,6 +40,13 @@ class QuonfigFallbackPollWiringTest {
 
   private final List<HttpServer> servers = new ArrayList<>();
 
+  // qfg-3sxo: ceiling for the condition-driven awaits below. The fallback poller
+  // engages ~150ms (the test threshold) after startSse(), and both awaits return
+  // the instant that happens — so a generous ceiling costs nothing on the happy
+  // path. It exists only to absorb scheduler starvation on a contended CI runner;
+  // 3s was occasionally too tight there and tripped a spurious failure.
+  private static final long AWAIT_SECONDS = 30;
+
   @AfterEach
   void stopServers() {
     for (HttpServer s : servers) s.stop(0);
@@ -116,7 +123,7 @@ class QuonfigFallbackPollWiringTest {
       // Wait for fallback to engage. With threshold=150ms, the SSE 503 → callback false-edge
       // arrives after the first reconnect attempt; meanwhile setSseConnected(false) was called
       // explicitly in startSse(), so the timer is already armed.
-      Boolean engaged = fallbackStates.poll(3, TimeUnit.SECONDS);
+      Boolean engaged = fallbackStates.poll(AWAIT_SECONDS, TimeUnit.SECONDS);
       assertEquals(
           Boolean.TRUE,
           engaged,
@@ -124,7 +131,7 @@ class QuonfigFallbackPollWiringTest {
 
       // After engagement, the poller does one immediate fetch + ticks every interval. Wait for
       // at least one additional configs hit beyond what init did.
-      long deadline = System.currentTimeMillis() + 3000;
+      long deadline = System.currentTimeMillis() + AWAIT_SECONDS * 1000;
       while (configsHits.get() <= afterInit && System.currentTimeMillis() < deadline) {
         Thread.sleep(20);
       }
