@@ -80,8 +80,8 @@ class ExampleContextCollectorTest {
   }
 
   @Test
-  void modeShapesDisablesExampleCollector() {
-    ExampleContextCollector c = new ExampleContextCollector(ContextUploadMode.SHAPES);
+  void modeShapesOnlyDisablesExampleCollector() {
+    ExampleContextCollector c = new ExampleContextCollector(ContextUploadMode.SHAPES_ONLY);
     c.push(new ContextSet().withNamedContext("user", Map.of("key", "abc")));
     assertNull(c.drain());
   }

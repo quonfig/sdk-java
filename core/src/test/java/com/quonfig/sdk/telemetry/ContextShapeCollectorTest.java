@@ -14,7 +14,7 @@ class ContextShapeCollectorTest {
 
   @Test
   void recordsEachNamedContextWithFieldTypeCodes() {
-    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES);
+    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES_ONLY);
 
     Map<String, Object> userProps = new HashMap<>();
     userProps.put("plan", "pro");
@@ -45,7 +45,7 @@ class ContextShapeCollectorTest {
 
   @Test
   void mergesPropertiesAcrossPushesForSameNamedContext() {
-    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES);
+    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES_ONLY);
 
     c.push(new ContextSet().withNamedContext("user", Map.of("plan", "pro")));
     c.push(new ContextSet().withNamedContext("user", Map.of("age", 38)));
@@ -78,7 +78,7 @@ class ContextShapeCollectorTest {
 
   @Test
   void drainResetsState() {
-    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES);
+    ContextShapeCollector c = new ContextShapeCollector(ContextUploadMode.SHAPES_ONLY);
     c.push(new ContextSet().withNamedContext("user", Map.of("plan", "pro")));
     assertNotNull(c.drain());
     assertNull(c.drain());

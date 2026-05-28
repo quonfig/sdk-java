@@ -803,7 +803,7 @@ final class TestSetup {
     if (!(raw instanceof String)) return ContextUploadMode.PERIODIC_EXAMPLE;
     String s = ((String) raw).replaceFirst("^:", "").toLowerCase();
     if ("none".equals(s)) return ContextUploadMode.NONE;
-    if ("shape_only".equals(s) || "shapes_only".equals(s)) return ContextUploadMode.SHAPES;
+    if ("shape_only".equals(s) || "shapes_only".equals(s)) return ContextUploadMode.SHAPES_ONLY;
     return ContextUploadMode.PERIODIC_EXAMPLE;
   }
 
