@@ -63,14 +63,46 @@ public final class Evaluator {
           }
         }
 
+        // Canonical reason (mirrors sdk-go runtime_eval.go hasTargetingRules +
+        // integration-test-data
+        // telemetry.yaml): a match is STATIC only when the config has NO real targeting anywhere —
+        // i.e. every rule's criteria are absent or ALWAYS_TRUE — and the first rule won. Otherwise,
+        // including a catch-all fallthrough inside a config that does have targeting rules, the
+        // reason is TARGETING_MATCH. SPLIT is layered on top of this at the public API boundary
+        // when
+        // a weighted bucket was resolved (see Quonfig#typedDetails, weightedValueIndex >= 0).
+        // qfg-q7yz.
         EvaluationMatch.Reason reason =
-            rule.criteria().isEmpty()
+            (i == 0 && !hasTargetingRules(config))
                 ? EvaluationMatch.Reason.STATIC
                 : EvaluationMatch.Reason.TARGETING_MATCH;
         return EvaluationMatch.matched(v, i, weightedIndex, reason);
       }
     }
     return null;
+  }
+
+  /**
+   * True if the config has any rule (in the default rule set or any environment-specific rule set)
+   * whose criteria include a non-{@code ALWAYS_TRUE} operator. Mirrors sdk-go's {@code
+   * hasTargetingRules}: a config that only matches via empty/ALWAYS_TRUE criteria is "static", so
+   * its match reports STATIC rather than TARGETING_MATCH.
+   */
+  private static boolean hasTargetingRules(ConfigRow config) {
+    if (anyNonTrivial(config.defaultRules().rules())) return true;
+    for (Environment env : config.environments()) {
+      if (anyNonTrivial(env.rules())) return true;
+    }
+    return false;
+  }
+
+  private static boolean anyNonTrivial(List<Rule> rules) {
+    for (Rule r : rules) {
+      for (Criterion c : r.criteria()) {
+        if (!Operators.ALWAYS_TRUE.equals(c.operator())) return true;
+      }
+    }
+    return false;
   }
 
   private boolean allCriteriaMatch(

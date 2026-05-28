@@ -1,6 +1,7 @@
 package com.quonfig.sdk;
 
 import com.quonfig.sdk.eval.ContextSet;
+import com.quonfig.sdk.eval.Murmur3WeightedValueResolver;
 import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.WeightedValueResolver;
 import com.quonfig.sdk.telemetry.ContextUploadMode;
@@ -104,7 +105,13 @@ public final class Options {
     this.datafileEnvelope = b.datafileEnvelope;
     this.onConfigUpdate = b.onConfigUpdate;
     this.onSseConnectionStateChange = b.onSseConnectionStateChange;
-    this.weightedValueResolver = b.weightedValueResolver;
+    // Default to Murmur3 bucketing so weighted-value configs resolve (and report reason SPLIT)
+    // out of the box, matching sdk-go/sdk-node. Without this the SDK would hand back the raw
+    // unresolved weighted value and never emit SPLIT. Callers can still override. qfg-q7yz.
+    this.weightedValueResolver =
+        b.weightedValueResolver != null
+            ? b.weightedValueResolver
+            : new Murmur3WeightedValueResolver();
     this.disableTelemetry = b.disableTelemetry;
     this.collectEvaluationSummaries = b.collectEvaluationSummaries;
     this.contextUploadMode =

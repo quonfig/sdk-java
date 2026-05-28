@@ -66,6 +66,22 @@ class EvaluatorTest {
     assertEquals(EvaluationMatch.Reason.STATIC, m.reason());
   }
 
+  @Test
+  void evaluate_returnsStaticReason_whenOnlyCriterionIsAlwaysTrue() {
+    // A config whose only rule criterion is ALWAYS_TRUE has no real targeting — it
+    // matches everyone unconditionally — so the canonical reason is STATIC, matching
+    // sdk-go's hasTargetingRules() and integration-test-data telemetry.yaml
+    // ("reason is STATIC for feature flag with only ALWAYS_TRUE rules" -> reason 1). qfg-q7yz.
+    ConfigRow cfg =
+        flag("flag.always", ValueType.BOOL, alwaysTrueRule(new Value(ValueType.BOOL, true)));
+    Evaluator ev = new Evaluator(new MapStore());
+    EvaluationMatch m = ev.evaluate(cfg, "", new ContextSet());
+    assertTrue(m.isMatch());
+    assertEquals(true, m.value().value());
+    assertEquals(0, m.ruleIndex());
+    assertEquals(EvaluationMatch.Reason.STATIC, m.reason());
+  }
+
   // ----- TARGETING_MATCH reason when criteria match -----
 
   @Test
@@ -117,10 +133,15 @@ class EvaluatorTest {
     assertTrue(m.isMatch());
     assertEquals(false, m.value().value());
     assertEquals(1, m.ruleIndex(), "second rule (index 1) wins");
-    // Rule index 1 with empty criteria — still STATIC by spec? No: STATIC is only
-    // the first rule with no criteria. Index>0 with no criteria is the DEFAULT
-    // fallback, which the plan calls out separately. Treat as STATIC only at idx 0.
-    assertEquals(EvaluationMatch.Reason.STATIC, m.reason(), "no-criteria fallback is STATIC");
+    // The config HAS a targeting rule (the first, PROP_ENDS_WITH_ONE_OF), so any match —
+    // even falling through to a catch-all rule — is TARGETING_MATCH, not STATIC. This is
+    // the canonical sdk-go behaviour (hasTargetingRules() scans the whole config) and is
+    // exactly what integration-test-data telemetry.yaml asserts ("reason is TARGETING_MATCH
+    // when config has targeting rules but evaluation falls through" -> reason 2). qfg-q7yz.
+    assertEquals(
+        EvaluationMatch.Reason.TARGETING_MATCH,
+        m.reason(),
+        "fallthrough in a targeting config is TARGETING_MATCH");
   }
 
   // ----- AND logic: ALL criteria must match -----

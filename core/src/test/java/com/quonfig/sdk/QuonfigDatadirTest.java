@@ -441,6 +441,52 @@ class QuonfigDatadirTest {
   }
 
   @Test
+  void getStringDetails_split_usesAutoWiredMurmur3Resolver_whenNoneSupplied() throws Exception {
+    // No weightedValueResolver is configured: the SDK must auto-wire Murmur3 by default so a
+    // weighted config still resolves to a concrete value AND reports reason SPLIT. With no
+    // hashByPropertyName the resolver deterministically picks bucket 0. qfg-q7yz.
+    writeConfig(
+        "configs",
+        "ab.auto",
+        "{\"id\":\"abauto1\",\"key\":\"ab.auto\",\"type\":\"config\",\"valueType\":\"string\","
+            + "\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],"
+            + "\"value\":{\"type\":\"weightedValues\",\"value\":{\"weightedValues\":["
+            + "{\"weight\":50,\"value\":{\"type\":\"string\",\"value\":\"a\"}},"
+            + "{\"weight\":50,\"value\":{\"type\":\"string\",\"value\":\"b\"}}"
+            + "]}}}]}}");
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder().datadir(workspaceDir.toString()).environment("production").build())) {
+      EvaluationDetails<String> d = q.getStringDetails("ab.auto", "fallback");
+      assertEquals("a", d.value(), "auto-wired Murmur3 resolved the weighted value");
+      assertEquals(Reason.SPLIT, d.reason());
+      assertEquals("split:0", d.variant());
+      assertEquals(Integer.valueOf(0), d.variantIndex());
+      assertEquals(0, d.metadata().get("weightedValueIndex"));
+    }
+  }
+
+  @Test
+  void getStringDetails_static_forAlwaysTrueOnlyConfig() throws Exception {
+    // A config whose only rule criterion is ALWAYS_TRUE has no targeting -> reason STATIC,
+    // matching sdk-go and integration-test-data. qfg-q7yz.
+    writeConfig(
+        "configs",
+        "always.str",
+        "{\"id\":\"alw1\",\"key\":\"always.str\",\"type\":\"config\",\"valueType\":\"string\","
+            + "\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],"
+            + "\"value\":{\"type\":\"string\",\"value\":\"hello\"}}]}}");
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder().datadir(workspaceDir.toString()).environment("production").build())) {
+      EvaluationDetails<String> d = q.getStringDetails("always.str", "fallback");
+      assertEquals("hello", d.value());
+      assertEquals(Reason.STATIC, d.reason());
+      assertEquals("static", d.variant());
+    }
+  }
+
+  @Test
   void datadir_required_throwsWhenMissing() {
     assertThrows(
         IllegalStateException.class,
