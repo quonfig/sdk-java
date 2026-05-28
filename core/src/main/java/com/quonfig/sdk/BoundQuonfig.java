@@ -41,12 +41,30 @@ public final class BoundQuonfig {
     return client.getBoolean(key, def, Quonfig.merge(bound, ctx));
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLong(String, Long)}.
+   */
+  @Deprecated
   public Long getInt(String key, Long def) {
-    return client.getInt(key, def, bound);
+    return getLong(key, def);
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLong(String, Long, ContextSet)}.
+   */
+  @Deprecated
   public Long getInt(String key, Long def, ContextSet ctx) {
-    return client.getInt(key, def, Quonfig.merge(bound, ctx));
+    return getLong(key, def, ctx);
+  }
+
+  public Long getLong(String key, Long def) {
+    return client.getLong(key, def, bound);
+  }
+
+  public Long getLong(String key, Long def, ContextSet ctx) {
+    return client.getLong(key, def, Quonfig.merge(bound, ctx));
   }
 
   public Double getDouble(String key, Double def) {
@@ -89,8 +107,17 @@ public final class BoundQuonfig {
     return client.getBooleanDetails(key, def, bound);
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLongDetails(String, Long)}.
+   */
+  @Deprecated
   public EvaluationDetails<Long> getIntDetails(String key, Long def) {
-    return client.getIntDetails(key, def, bound);
+    return getLongDetails(key, def);
+  }
+
+  public EvaluationDetails<Long> getLongDetails(String key, Long def) {
+    return client.getLongDetails(key, def, bound);
   }
 
   public EvaluationDetails<Double> getDoubleDetails(String key, Double def) {

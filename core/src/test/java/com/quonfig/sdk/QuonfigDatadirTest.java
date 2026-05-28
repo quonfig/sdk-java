@@ -194,6 +194,53 @@ class QuonfigDatadirTest {
   }
 
   @Test
+  void getLong_returnsLong() throws Exception {
+    writeConfig(
+        "configs",
+        "n",
+        "{\"id\":\"n1\",\"key\":\"n\",\"type\":\"config\",\"valueType\":\"int\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],\"value\":{\"type\":\"int\",\"value\":7}}]}}");
+    try (Quonfig q = newClient("production")) {
+      assertEquals(7L, q.getLong("n", 0L));
+      EvaluationDetails<Long> d = q.getLongDetails("n", 0L);
+      assertEquals(7L, d.value());
+      assertEquals(Reason.STATIC, d.reason());
+    }
+  }
+
+  @Test
+  void getLong_withContext_returnsLong() throws Exception {
+    writeConfig(
+        "configs",
+        "n",
+        "{\"id\":\"n1\",\"key\":\"n\",\"type\":\"config\",\"valueType\":\"int\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],\"value\":{\"type\":\"int\",\"value\":42}}]}}");
+    try (Quonfig q = newClient("production")) {
+      ContextSet ctx = new ContextSet();
+      assertEquals(42L, q.getLong("n", 0L, ctx));
+      EvaluationDetails<Long> d = q.getLongDetails("n", 0L, ctx);
+      assertEquals(42L, d.value());
+      assertEquals(Reason.STATIC, d.reason());
+    }
+  }
+
+  @Test
+  void boundQuonfig_getLong_returnsLong() throws Exception {
+    writeConfig(
+        "configs",
+        "n",
+        "{\"id\":\"n1\",\"key\":\"n\",\"type\":\"config\",\"valueType\":\"int\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],\"value\":{\"type\":\"int\",\"value\":99}}]}}");
+    try (Quonfig q = newClient("production")) {
+      BoundQuonfig b = q.withContext(new ContextSet());
+      assertEquals(99L, b.getLong("n", 0L));
+      EvaluationDetails<Long> d = b.getLongDetails("n", 0L);
+      assertEquals(99L, d.value());
+      assertEquals(Reason.STATIC, d.reason());
+    }
+  }
+
+  @Test
   void getDouble() throws Exception {
     writeConfig(
         "configs",

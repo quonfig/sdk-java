@@ -677,8 +677,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getBoolean(key, def, null);
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLong(String, Long)}.
+   */
+  @Deprecated
   public Long getInt(String key, Long def) {
-    return getInt(key, def, null);
+    return getLong(key, def, null);
+  }
+
+  public Long getLong(String key, Long def) {
+    return getLong(key, def, null);
   }
 
   public Double getDouble(String key, Double def) {
@@ -707,8 +716,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getBooleanDetails(key, def, ctx).value();
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLong(String, Long, ContextSet)}.
+   */
+  @Deprecated
   public Long getInt(String key, Long def, ContextSet ctx) {
-    return getIntDetails(key, def, ctx).value();
+    return getLong(key, def, ctx);
+  }
+
+  public Long getLong(String key, Long def, ContextSet ctx) {
+    return getLongDetails(key, def, ctx).value();
   }
 
   public Double getDouble(String key, Double def, ContextSet ctx) {
@@ -737,8 +755,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getBooleanDetails(key, def, null);
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLongDetails(String, Long)}.
+   */
+  @Deprecated
   public EvaluationDetails<Long> getIntDetails(String key, Long def) {
-    return getIntDetails(key, def, null);
+    return getLongDetails(key, def, null);
+  }
+
+  public EvaluationDetails<Long> getLongDetails(String key, Long def) {
+    return getLongDetails(key, def, null);
   }
 
   public EvaluationDetails<Double> getDoubleDetails(String key, Double def) {
@@ -765,7 +792,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return typedDetails(key, def, ctx, ValueType.BOOL, Boolean.class);
   }
 
+  /**
+   * @deprecated misleading name — returns {@link Long}, not {@link Integer}. Use {@link
+   *     #getLongDetails(String, Long, ContextSet)}.
+   */
+  @Deprecated
   public EvaluationDetails<Long> getIntDetails(String key, Long def, ContextSet ctx) {
+    return getLongDetails(key, def, ctx);
+  }
+
+  public EvaluationDetails<Long> getLongDetails(String key, Long def, ContextSet ctx) {
     return typedDetails(key, def, ctx, ValueType.INT, Long.class);
   }
 
