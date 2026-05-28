@@ -458,7 +458,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   public boolean featureIsOn(String key, ContextSet ctx) {
-    EvaluationDetails<Boolean> d = getBooleanDetails(key, Boolean.FALSE, ctx);
+    EvaluationDetails<Boolean> d = getBoolDetails(key, Boolean.FALSE, ctx);
     return Boolean.TRUE.equals(d.value());
   }
 
@@ -673,8 +673,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getString(key, def, null);
   }
 
+  public Boolean getBool(String key, Boolean def) {
+    return getBool(key, def, null);
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBool(String, Boolean)}.
+   */
+  @Deprecated
   public Boolean getBoolean(String key, Boolean def) {
-    return getBoolean(key, def, null);
+    return getBool(key, def);
   }
 
   /**
@@ -712,8 +720,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getStringDetails(key, def, ctx).value();
   }
 
+  public Boolean getBool(String key, Boolean def, ContextSet ctx) {
+    return getBoolDetails(key, def, ctx).value();
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBool(String, Boolean,
+   *     ContextSet)}.
+   */
+  @Deprecated
   public Boolean getBoolean(String key, Boolean def, ContextSet ctx) {
-    return getBooleanDetails(key, def, ctx).value();
+    return getBool(key, def, ctx);
   }
 
   /**
@@ -751,8 +768,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return getStringDetails(key, def, null);
   }
 
+  public EvaluationDetails<Boolean> getBoolDetails(String key, Boolean def) {
+    return getBoolDetails(key, def, null);
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBoolDetails(String, Boolean)}.
+   */
+  @Deprecated
   public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def) {
-    return getBooleanDetails(key, def, null);
+    return getBoolDetails(key, def);
   }
 
   /**
@@ -788,8 +813,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return typedDetails(key, def, ctx, ValueType.STRING, String.class);
   }
 
-  public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def, ContextSet ctx) {
+  public EvaluationDetails<Boolean> getBoolDetails(String key, Boolean def, ContextSet ctx) {
     return typedDetails(key, def, ctx, ValueType.BOOL, Boolean.class);
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBoolDetails(String, Boolean,
+   *     ContextSet)}.
+   */
+  @Deprecated
+  public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def, ContextSet ctx) {
+    return getBoolDetails(key, def, ctx);
   }
 
   /**

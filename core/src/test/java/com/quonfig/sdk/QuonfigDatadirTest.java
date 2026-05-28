@@ -179,6 +179,59 @@ class QuonfigDatadirTest {
   }
 
   @Test
+  void getBool_andDetails() throws Exception {
+    writeConfig(
+        "feature-flags",
+        "flag",
+        "{\"id\":\"f1\",\"key\":\"flag\",\"type\":\"feature_flag\",\"valueType\":\"bool\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"bool\",\"value\":true}}]}}");
+    try (Quonfig q = newClient("production")) {
+      assertTrue(q.getBool("flag", false));
+      EvaluationDetails<Boolean> d = q.getBoolDetails("flag", false);
+      assertTrue(d.value());
+      assertEquals(Reason.STATIC, d.reason());
+      assertEquals("FEATURE_FLAG", d.metadata().get("configType"));
+    }
+  }
+
+  @Test
+  void getBool_withContext_andDetails() throws Exception {
+    writeConfig(
+        "feature-flags",
+        "flag",
+        "{\"id\":\"f1\",\"key\":\"flag\",\"type\":\"feature_flag\",\"valueType\":\"bool\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"bool\",\"value\":true}}]}}");
+    try (Quonfig q = newClient("production")) {
+      ContextSet ctx = new ContextSet().withNamedContext("user", Map.of("key", "u1"));
+      assertTrue(q.getBool("flag", false, ctx));
+      EvaluationDetails<Boolean> d = q.getBoolDetails("flag", false, ctx);
+      assertTrue(d.value());
+      assertEquals(Reason.STATIC, d.reason());
+    }
+  }
+
+  @Test
+  void boundQuonfig_getBool_andDetails() throws Exception {
+    writeConfig(
+        "feature-flags",
+        "flag",
+        "{\"id\":\"f1\",\"key\":\"flag\",\"type\":\"feature_flag\",\"valueType\":\"bool\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"bool\",\"value\":true}}]}}");
+    try (Quonfig q = newClient("production")) {
+      ContextSet bound = new ContextSet().withNamedContext("user", Map.of("key", "u1"));
+      BoundQuonfig bq = q.withContext(bound);
+      assertTrue(bq.getBool("flag", false));
+      assertTrue(bq.getBool("flag", false, new ContextSet()));
+      EvaluationDetails<Boolean> d = bq.getBoolDetails("flag", false);
+      assertTrue(d.value());
+      assertEquals(Reason.STATIC, d.reason());
+    }
+  }
+
+  @Test
   void getInt_returnsLong() throws Exception {
     writeConfig(
         "configs",

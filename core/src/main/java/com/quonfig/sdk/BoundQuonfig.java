@@ -33,12 +33,29 @@ public final class BoundQuonfig {
     return client.getString(key, def, Quonfig.merge(bound, ctx));
   }
 
-  public Boolean getBoolean(String key, Boolean def) {
-    return client.getBoolean(key, def, bound);
+  public Boolean getBool(String key, Boolean def) {
+    return client.getBool(key, def, bound);
   }
 
+  public Boolean getBool(String key, Boolean def, ContextSet ctx) {
+    return client.getBool(key, def, Quonfig.merge(bound, ctx));
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBool(String, Boolean)}.
+   */
+  @Deprecated
+  public Boolean getBoolean(String key, Boolean def) {
+    return getBool(key, def);
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBool(String, Boolean,
+   *     ContextSet)}.
+   */
+  @Deprecated
   public Boolean getBoolean(String key, Boolean def, ContextSet ctx) {
-    return client.getBoolean(key, def, Quonfig.merge(bound, ctx));
+    return getBool(key, def, ctx);
   }
 
   /**
@@ -103,8 +120,16 @@ public final class BoundQuonfig {
     return client.getStringDetails(key, def, bound);
   }
 
+  public EvaluationDetails<Boolean> getBoolDetails(String key, Boolean def) {
+    return client.getBoolDetails(key, def, bound);
+  }
+
+  /**
+   * @deprecated renamed for cross-SDK consistency — use {@link #getBoolDetails(String, Boolean)}.
+   */
+  @Deprecated
   public EvaluationDetails<Boolean> getBooleanDetails(String key, Boolean def) {
-    return client.getBooleanDetails(key, def, bound);
+    return getBoolDetails(key, def);
   }
 
   /**
