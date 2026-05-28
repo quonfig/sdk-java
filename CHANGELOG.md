@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.0.3 - 2026-05-28
+
+SDK-1.0 method/enum unification (`project/plans/sdk-1.0-unification.md` §1).
+All changes are strictly additive and source-compatible — the legacy methods
+and enum constant are retained as `@Deprecated` forwarders for one minor cycle,
+so existing callers keep compiling and existing payloads keep deserializing.
+
+### Added
+
+- **`getBool` / `getBoolDetails` (qfg-6nxx).** Canonical boolean accessors on
+  both `Quonfig` and `BoundQuonfig`, aligning Java with the `getBool` /
+  `get_bool` spelling used by node, ruby, python, and go. `getBoolean` /
+  `getBooleanDetails` remain as `@Deprecated` thin forwarders; `featureIsOn`
+  now calls `getBoolDetails` directly.
+- **`getLong` / `getLongDetails` (qfg-8xhx).** Java's `getInt` / `getIntDetails`
+  were misleading — they return `Long`, not `Integer`. The new `getLong` /
+  `getLongDetails` have identical behavior; `getInt` / `getIntDetails` remain as
+  `@Deprecated` forwarders. Wire format and resolver are unchanged (still
+  64-bit) — purely a naming fix, no semantic change.
+
+### Changed
+
+- **`ContextUploadMode.SHAPES` → `SHAPES_ONLY` (qfg-6svs).** `SHAPES_ONLY` is
+  the new canonical enum constant and parses from the wire value `"shapes_only"`.
+  The legacy `SHAPES` constant remains as a deprecated forwarder pointing at
+  `SHAPES_ONLY`, and `parse()` also accepts the wire value `"shapes"` as a
+  deprecated alias, so existing callers and payloads keep working for one minor
+  cycle.
+
 ## 0.0.2 - 2026-05-19
 
 Hardening and surface-expansion release covering 12 commits since `v0.0.1`. The headliners: a multi-module Gradle restructure that ships three new published artifacts for Logback / Log4j2 / Micronaut, a datafile-mode loader matching sdk-node, opt-in filesystem auto-reload for datadir mode, a Tier-1 supervisor + Layer-2 fallback poller wired in behind the SSE transport, and the first cross-SDK chaos harness wiring for Java. All four Maven Central artifacts ship in lock-step from this tag.
