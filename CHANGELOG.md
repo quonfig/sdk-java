@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.0.4 - 2026-05-29
+
+Per-environment override correctness in delivery mode, plus an evaluation-reason
+alignment fix. All changes are bug fixes — no API surface or wire-format changes.
+
+### Fixed
+
+- **Parse the singular delivery `environment` block (qfg-xpln.1).** `parseConfigNode`
+  now reads the singular `environment` object that api-delivery emits for the
+  active environment, so per-environment value overrides resolve correctly in
+  delivery mode instead of falling through to the default.
+- **`meta.environment` is authoritative in delivery mode (qfg-pinh).** When loading
+  from a delivery payload, the environment carried in `meta.environment` is the
+  source of truth. An explicit `Options.environment()` pin is honored only in
+  datadir mode; in delivery mode an explicit pin is ignored and logged at WARN,
+  matching the cross-SDK contract.
+- **Evaluation reason aligned with canonical STATIC/SPLIT semantics (qfg-q7yz).**
+  `ALWAYS_TRUE`-only configs now report `STATIC` (not `TARGETING_MATCH`), and
+  weighted-value configs report `SPLIT` out of the box. The evaluator decides
+  `STATIC` vs `TARGETING_MATCH` via whole-config `hasTargetingRules()` (mirroring
+  sdk-go's `runtime_eval.go`), and `Options` now defaults to
+  `Murmur3WeightedValueResolver` so weighted configs resolve without explicit
+  wiring. Matches sdk-go's reference evaluator and integration-test-data.
+
 ## 0.0.3 - 2026-05-28
 
 SDK-1.0 method/enum unification (`project/plans/sdk-1.0-unification.md` §1).
