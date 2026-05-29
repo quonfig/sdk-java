@@ -90,9 +90,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
 
   /**
-   * Environment used for evaluation and emitted in metadata. Defaults to {@link
-   * Options#environment()}; in datafile mode without an explicit environment, falls back to {@code
-   * envelope.meta.environment} (sdk-node parity, see qfg-9hre).
+   * Environment used for evaluation and emitted in metadata.
+   *
+   * <ul>
+   *   <li><b>datadir</b>: the {@link Options#environment()} pin (required).
+   *   <li><b>delivery</b> (HTTP/SSE/fallback poll): always the installed envelope's {@code
+   *       meta.environment} — the SDK key determines it server-side. A pin is ignored here (warned
+   *       at init); see qfg-pinh.
+   *   <li><b>datafile</b>: the pin if set, else {@code envelope.meta.environment} (sdk-node parity,
+   *       see qfg-9hre).
+   * </ul>
    */
   private volatile String effectiveEnvironment;
 
@@ -144,16 +151,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     } else if ((options.datafile() != null && !options.datafile().isEmpty())
         || options.datafileEnvelope() != null) {
       ConfigEnvelope envelope = loadDatafileEnvelope(options);
-      // Per sdk-node: caller's explicit Options.environment() wins; otherwise fall back to
-      // envelope.meta.environment so a self-contained datafile evaluates against the
-      // environment it was generated for.
-      if ((effectiveEnvironment == null || effectiveEnvironment.isEmpty())
-          && envelope.meta() != null
-          && envelope.meta().environment() != null
-          && !envelope.meta().environment().isEmpty()) {
-        this.effectiveEnvironment = envelope.meta().environment();
-      }
-      installEnvelopeRows(envelope);
+      // datafile is NOT delivery mode: caller's explicit Options.environment() wins; otherwise
+      // fall back to envelope.meta.environment so a self-contained datafile evaluates against the
+      // environment it was generated for (sdk-node parity). Pass metaAuthoritative=false.
+      installEnvelopeRows(envelope, false);
       this.initFuture = CompletableFuture.completedFuture(null);
       fireConfigUpdate();
     } else {
@@ -164,6 +165,20 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (options.sdkKey() == null || options.sdkKey().isEmpty()) {
         throw new IllegalStateException(
             "sdkKey required for HTTP mode; set Options.builder().sdkKey(...) or QUONFIG_BACKEND_SDK_KEY");
+      }
+      // In delivery (SDK-key) mode the active environment is determined server-side by the SDK
+      // key and reported in meta.environment; an explicit environment pin (Options.environment()
+      // / QUONFIG_ENVIRONMENT) is datadir-only and is ignored here. Warn once at init so a
+      // mis-set pin is visible. Mirrors the cross-SDK contract (qfg-pinh); sdk-go always
+      // evaluates against the installed envelope's meta.environment.
+      if (options.environment() != null && !options.environment().isEmpty()) {
+        options
+            .logger()
+            .warn(
+                "quonfig: environment '{}' was set but the client is in delivery (SDK-key) mode; "
+                    + "the active environment is determined by the SDK key, so this setting is "
+                    + "ignored (it applies only when loading from a local data dir)",
+                options.environment());
       }
       this.initFuture = new CompletableFuture<>();
       Thread t = new Thread(this::runInit, "quonfig-init");
@@ -242,11 +257,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private void installEnvelope(String body) throws IOException {
     ConfigEnvelope envelope = ENVELOPE_MAPPER.readValue(body, ConfigEnvelope.class);
-    installEnvelopeRows(envelope);
+    // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
+    installEnvelopeRows(envelope, true);
   }
 
-  private void installEnvelopeRows(ConfigEnvelope envelope) {
-    applyMetaEnvironment(envelope);
+  private void installEnvelopeRows(ConfigEnvelope envelope, boolean metaAuthoritative) {
+    applyMetaEnvironment(envelope, metaAuthoritative);
     List<ConfigRow> rows = new ArrayList<>(envelope.configs().size());
     for (JsonNode cfg : envelope.configs()) {
       rows.add(DatadirLoader.parseConfigNode(cfg));
@@ -255,17 +271,24 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   /**
-   * When the caller did not pin an environment explicitly, adopt the envelope's {@code
-   * meta.environment} as the evaluation environment. api-delivery's HTTP {@code /api/v2/configs}
-   * and SSE select the environment server-side (SDK-key scoping) and report it in {@code
+   * Adopt the envelope's {@code meta.environment} as the evaluation environment.
+   *
+   * <p><b>Delivery mode</b> ({@code metaAuthoritative=true} — HTTP initial fetch, SSE, fallback
+   * poll): the server selects the environment via SDK-key scoping and reports it in {@code
    * meta.environment}; the per-config rows arrive scoped to that single env (singular {@code
-   * environment} block). Without this, the HTTP/SSE path would leave {@code effectiveEnvironment}
-   * null and the evaluator would fall back to default rules, ignoring the env override
-   * (qfg-xpln.1). Mirrors sdk-go ({@code c.envID = envelope.Meta.Environment}) and sdk-net's
-   * InstallEnvelope. An explicit {@link Options#environment()} always wins.
+   * environment} block). {@code meta.environment} is ALWAYS authoritative here, REGARDLESS of any
+   * {@link Options#environment()} pin — an environment pin is datadir-only and is ignored in
+   * delivery mode (warned once at init). Mirrors sdk-go, which always sets {@code c.envID =
+   * envelope.Meta.Environment} on install (qfg-pinh).
+   *
+   * <p><b>Datafile mode</b> ({@code metaAuthoritative=false}): not delivery — an explicit {@link
+   * Options#environment()} pin wins; otherwise fall back to {@code meta.environment} so a
+   * self-contained datafile evaluates against the environment it was generated for (sdk-node
+   * parity).
    */
-  private void applyMetaEnvironment(ConfigEnvelope envelope) {
-    if (options.environment() != null && !options.environment().isEmpty()) {
+  private void applyMetaEnvironment(ConfigEnvelope envelope, boolean metaAuthoritative) {
+    if (!metaAuthoritative && options.environment() != null && !options.environment().isEmpty()) {
+      // datafile mode with an explicit pin: pin wins.
       return;
     }
     if (envelope.meta() != null
@@ -378,9 +401,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     sse.onEnvelope(
         env -> {
           try {
-            // Route through installEnvelopeRows so SSE updates also adopt meta.environment when
-            // no environment was pinned (qfg-xpln.1), matching the initial HTTP fetch.
-            installEnvelopeRows(env);
+            // SSE is delivery mode: meta.environment is authoritative on every update, matching
+            // the initial HTTP fetch (qfg-pinh).
+            installEnvelopeRows(env, true);
             sup.recordSuccessfulRefresh();
             fireConfigUpdate();
           } catch (RuntimeException ignored) {
