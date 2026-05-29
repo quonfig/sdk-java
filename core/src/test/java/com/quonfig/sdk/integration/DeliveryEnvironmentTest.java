@@ -103,10 +103,12 @@ class DeliveryEnvironmentTest {
   }
 
   @Test
-  @DisplayName("explicit environment pin wins over meta.environment")
-  void explicitEnvironmentPinWinsOverMetaEnvironment() throws Exception {
+  @DisplayName(
+      "explicit environment pin is ignored in delivery mode (meta.environment authoritative)")
+  void explicitEnvironmentPinIsIgnoredInDeliveryModeMetaEnvironmentAuthoritative()
+      throws Exception {
     String envelope =
-        "{\"meta\":{\"version\":\"v1\",\"environment\":\"staging\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}";
+        "{\"meta\":{\"version\":\"v1\",\"environment\":\"development\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}";
     HttpServer server = startDeliveryServer(envelope);
     try {
       String base = "http://127.0.0.1:" + server.getAddress().getPort();
@@ -119,7 +121,7 @@ class DeliveryEnvironmentTest {
               .fallbackPollEnabled(false)
               .initTimeout(java.time.Duration.ofSeconds(5))
               .disableTelemetry(true)
-              .environment("development")
+              .environment("staging")
               .build();
       try (Quonfig q = new Quonfig(o)) {
         q.initFuture().get(5, java.util.concurrent.TimeUnit.SECONDS);
