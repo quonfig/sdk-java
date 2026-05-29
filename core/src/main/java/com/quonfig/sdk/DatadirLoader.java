@@ -90,6 +90,16 @@ public final class DatadirLoader {
         envs.add(parseEnvironment(env, valueType));
       }
     }
+    // Delivery (HTTP /api/v2/configs + SSE) scopes each row to ONE environment and serializes it
+    // as a SINGULAR `environment` object alongside `meta.environment`, whereas datadir/workspace
+    // files carry the PLURAL `environments` array. parseConfigNode is the shared parser for both,
+    // so read the singular form too — otherwise per-environment overrides are silently dropped in
+    // delivery mode and the evaluator falls back to `default` (qfg-xpln.1). Mirrors sdk-go (single
+    // `environment` wire field) and sdk-net's ConfigRowParser (commit 3d49607).
+    JsonNode singleEnv = root.path("environment");
+    if (singleEnv.isObject() && singleEnv.hasNonNull("id")) {
+      envs.add(parseEnvironment(singleEnv, valueType));
+    }
     return new ConfigRow(id, key, type, valueType, sendToClientSdk, defaultRules, envs);
   }
 

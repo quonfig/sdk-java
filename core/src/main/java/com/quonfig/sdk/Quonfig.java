@@ -246,11 +246,33 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   private void installEnvelopeRows(ConfigEnvelope envelope) {
+    applyMetaEnvironment(envelope);
     List<ConfigRow> rows = new ArrayList<>(envelope.configs().size());
     for (JsonNode cfg : envelope.configs()) {
       rows.add(DatadirLoader.parseConfigNode(cfg));
     }
     installRows(rows);
+  }
+
+  /**
+   * When the caller did not pin an environment explicitly, adopt the envelope's {@code
+   * meta.environment} as the evaluation environment. api-delivery's HTTP {@code /api/v2/configs}
+   * and SSE select the environment server-side (SDK-key scoping) and report it in {@code
+   * meta.environment}; the per-config rows arrive scoped to that single env (singular {@code
+   * environment} block). Without this, the HTTP/SSE path would leave {@code effectiveEnvironment}
+   * null and the evaluator would fall back to default rules, ignoring the env override
+   * (qfg-xpln.1). Mirrors sdk-go ({@code c.envID = envelope.Meta.Environment}) and sdk-net's
+   * InstallEnvelope. An explicit {@link Options#environment()} always wins.
+   */
+  private void applyMetaEnvironment(ConfigEnvelope envelope) {
+    if (options.environment() != null && !options.environment().isEmpty()) {
+      return;
+    }
+    if (envelope.meta() != null
+        && envelope.meta().environment() != null
+        && !envelope.meta().environment().isEmpty()) {
+      this.effectiveEnvironment = envelope.meta().environment();
+    }
   }
 
   private static ConfigEnvelope loadDatafileEnvelope(Options options) {
@@ -356,9 +378,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     sse.onEnvelope(
         env -> {
           try {
-            List<ConfigRow> rows = new ArrayList<>(env.configs().size());
-            for (JsonNode cfg : env.configs()) rows.add(DatadirLoader.parseConfigNode(cfg));
-            installRows(rows);
+            // Route through installEnvelopeRows so SSE updates also adopt meta.environment when
+            // no environment was pinned (qfg-xpln.1), matching the initial HTTP fetch.
+            installEnvelopeRows(env);
             sup.recordSuccessfulRefresh();
             fireConfigUpdate();
           } catch (RuntimeException ignored) {
