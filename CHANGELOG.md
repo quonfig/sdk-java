@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.0.5 - 2026-06-02
+
+### Added
+
+- **Token-file dev-context loader, default-on (qfg-bw7g.6).** New `DevContextLoader`
+  reads `qfg login`'s `~/.quonfig/tokens.json` (per-domain filename derived from
+  `apiUrls`) and injects `{ quonfig-user: { email } }` into the global evaluation
+  context. Wired through `Options.build()`: default-on, gated solely by the token
+  file's presence, so it is inert in production (no token file there). Precedence:
+  explicit `enableQuonfigUserContext` option, else `QUONFIG_DEV_CONTEXT` env, else
+  `true`. Dev-context merges **under** the customer `globalContext`, so customer keys
+  win on collision. Mirrors the sdk-node loader. No new dependencies (uses Jackson).
+  Set `enableQuonfigUserContext(false)` or `QUONFIG_DEV_CONTEXT=false` to opt out.
+
 ## 0.0.4 - 2026-05-29
 
 Per-environment override correctness in delivery mode, plus an evaluation-reason
