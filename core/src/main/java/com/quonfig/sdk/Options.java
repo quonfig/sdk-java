@@ -73,6 +73,7 @@ public final class Options {
   private final Duration sseReadWatchdog;
   private final boolean dataDirAutoReload;
   private final long dataDirAutoReloadDebounceMs;
+  private final Boolean enableQuonfigUserContext;
 
   public static final long DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS = 200L;
 
@@ -93,13 +94,23 @@ public final class Options {
     this.streamUrlsOverride = b.streamUrls != null ? List.copyOf(b.streamUrls) : null;
     this.telemetryUrl = b.telemetryUrl != null ? b.telemetryUrl : "https://telemetry." + d;
 
+    this.enableQuonfigUserContext = b.enableQuonfigUserContext;
+
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
     this.fallbackPollEnabled = b.fallbackPollEnabled;
     this.fallbackPollIntervalMs = b.fallbackPollIntervalMs;
     this.fallbackPollThreshold = b.fallbackPollThreshold;
     this.onFallbackPollerStateChange = b.onFallbackPollerStateChange;
-    this.globalContext = b.globalContext;
     this.logger = b.logger != null ? b.logger : LoggerFactory.getLogger("com.quonfig.sdk");
+
+    // Dev-context injection (quonfig-user.email). Default ON, gated only by the presence of the
+    // tokens file (the loader no-ops without it, so this is dead in prod). Precedence: explicit
+    // option ?? QUONFIG_DEV_CONTEXT env ?? true. The dev-context is merged UNDER the customer's
+    // globalContext so customer keys win on collision. Mirrors sdk-node/src/quonfig.ts.
+    boolean devContextEnabled = resolveDevContextEnabled(b.enableQuonfigUserContext, env);
+    ContextSet devContext =
+        devContextEnabled ? DevContextLoader.load(this.apiUrls, this.logger) : null;
+    this.globalContext = mergeDevContext(devContext, b.globalContext);
     this.datadir = b.datadir;
     this.datafile = b.datafile;
     this.datafileEnvelope = b.datafileEnvelope;
@@ -132,6 +143,41 @@ public final class Options {
         b.dataDirAutoReloadDebounceMs > 0
             ? b.dataDirAutoReloadDebounceMs
             : DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS;
+  }
+
+  /**
+   * Resolves whether dev-context injection is enabled: explicit option wins; else the {@code
+   * QUONFIG_DEV_CONTEXT} env var ("true"/"false"); else default {@code true}.
+   */
+  private static boolean resolveDevContextEnabled(Boolean explicit, Resolver.EnvLookup env) {
+    if (explicit != null) {
+      return explicit;
+    }
+    String raw = env.lookup("QUONFIG_DEV_CONTEXT").orElse(null);
+    if ("true".equals(raw)) return true;
+    if ("false".equals(raw)) return false;
+    return true;
+  }
+
+  /**
+   * Merges the injected dev-context UNDER the customer's globalContext: every named context from
+   * the dev-context is added first, then the customer's contexts overwrite on collision (customer
+   * keys win). Either side may be null.
+   */
+  private static ContextSet mergeDevContext(ContextSet devContext, ContextSet customer) {
+    if (devContext == null) {
+      return customer;
+    }
+    ContextSet out = new ContextSet();
+    for (var e : devContext.data().entrySet()) {
+      out.withNamedContext(e.getKey(), e.getValue());
+    }
+    if (customer != null) {
+      for (var e : customer.data().entrySet()) {
+        out.withNamedContext(e.getKey(), e.getValue());
+      }
+    }
+    return out;
   }
 
   public String sdkKey() {
@@ -197,6 +243,16 @@ public final class Options {
 
   public ContextSet globalContext() {
     return globalContext;
+  }
+
+  /**
+   * Whether the dev-only {@code quonfig-user.email} context is auto-injected from {@code qfg
+   * login}'s tokens file. {@code null} means unset (the cross-SDK default-on path applies, gated by
+   * {@code QUONFIG_DEV_CONTEXT} then the file's presence). Resolution happens at {@link
+   * Builder#build()}, so this returns the raw builder value, not the resolved decision.
+   */
+  public Boolean enableQuonfigUserContext() {
+    return enableQuonfigUserContext;
   }
 
   public Logger logger() {
@@ -373,6 +429,7 @@ public final class Options {
     private Duration sseReadWatchdog;
     private boolean dataDirAutoReload;
     private long dataDirAutoReloadDebounceMs;
+    private Boolean enableQuonfigUserContext;
 
     public Builder sdkKey(String v) {
       this.sdkKey = v;
@@ -595,6 +652,19 @@ public final class Options {
      */
     public Builder dataDirAutoReloadDebounceMs(long v) {
       this.dataDirAutoReloadDebounceMs = v;
+      return this;
+    }
+
+    /**
+     * Controls auto-injection of the dev-only {@code quonfig-user.email} context, read from {@code
+     * qfg login}'s {@code ~/.quonfig/tokens.json}. Unset (default) means the cross-SDK default-on
+     * behavior applies: enabled unless {@code QUONFIG_DEV_CONTEXT=false}, and inert anyway when no
+     * tokens file exists (so it is dead in production). Pass {@code false} to hard-disable, or
+     * {@code true} to force-enable regardless of {@code QUONFIG_DEV_CONTEXT}. Cross-SDK parity with
+     * sdk-node's {@code enableQuonfigUserContext}.
+     */
+    public Builder enableQuonfigUserContext(Boolean v) {
+      this.enableQuonfigUserContext = v;
       return this;
     }
 
