@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0 - 2026-06-06
+
+- **Stable 1.0.0 release.** The Quonfig Java SDK (`com.quonfig:sdk-java` and the
+  `sdk-java-logback` companion) is now declared stable. No API or behavior changes
+  from 0.0.5 — this is a coordinated 1.0.0 version stamp across the entire Quonfig
+  SDK family.
+
 ## 0.0.5 - 2026-06-02
 
 ### Added
