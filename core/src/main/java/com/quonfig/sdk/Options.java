@@ -48,6 +48,26 @@ public final class Options {
    */
   public static final Duration DEFAULT_CONFIG_FETCH_TIMEOUT = Duration.ofSeconds(3);
 
+  /**
+   * Default hedge delay (~2s). On the initial HTTP config fetch the parallel-failover hedge fires
+   * the primary leg first and waits this long before ALSO firing the secondary in parallel (without
+   * cancelling the primary). A healthy sub-second primary answers well inside this window, so the
+   * secondary stays a cold standby and a healthy system adds zero secondary load. Must be below the
+   * worst-case healable primary latency and far below {@link #DEFAULT_CONFIG_FETCH_HEDGE_ABORT}.
+   * Mirrors the sdk-go pilot's {@code DefaultConfigFetchHedgeDelay} (qfg-7h5d.1.14).
+   */
+  public static final Duration DEFAULT_CONFIG_FETCH_HEDGE_DELAY = Duration.ofSeconds(2);
+
+  /**
+   * Default per-leg hard-abort deadline on the hedged init fetch (~6s). Each hedge leg is bounded
+   * by this; it MUST exceed the longest healable primary latency so a late-but-newer primary heals
+   * forward (rather than aborting), and MUST be below {@link #initTimeout()} so the init-path heal
+   * leg is not clipped. Distinct from {@link #DEFAULT_CONFIG_FETCH_TIMEOUT}, which still bounds the
+   * sequential refresh/fallback-poll attempts. Mirrors the sdk-go pilot's {@code
+   * DefaultConfigFetchHedgeAbort} (qfg-7h5d.1.14).
+   */
+  public static final Duration DEFAULT_CONFIG_FETCH_HEDGE_ABORT = Duration.ofSeconds(6);
+
   private final String sdkKey;
   private final String domain;
   private final List<String> apiUrls;
@@ -56,6 +76,8 @@ public final class Options {
   private final String environment;
   private final Duration initTimeout;
   private final Duration configFetchTimeout;
+  private final Duration configFetchHedgeDelay;
+  private final Duration configFetchHedgeAbort;
   private final boolean fallbackPollEnabled;
   private final long fallbackPollIntervalMs;
   private final Duration fallbackPollThreshold;
@@ -107,6 +129,14 @@ public final class Options {
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
     this.configFetchTimeout =
         b.configFetchTimeout != null ? b.configFetchTimeout : DEFAULT_CONFIG_FETCH_TIMEOUT;
+    this.configFetchHedgeDelay =
+        b.configFetchHedgeDelay != null
+            ? b.configFetchHedgeDelay
+            : DEFAULT_CONFIG_FETCH_HEDGE_DELAY;
+    this.configFetchHedgeAbort =
+        b.configFetchHedgeAbort != null
+            ? b.configFetchHedgeAbort
+            : DEFAULT_CONFIG_FETCH_HEDGE_ABORT;
     this.fallbackPollEnabled = b.fallbackPollEnabled;
     this.fallbackPollIntervalMs = b.fallbackPollIntervalMs;
     this.fallbackPollThreshold = b.fallbackPollThreshold;
@@ -223,6 +253,28 @@ public final class Options {
    */
   public Duration configFetchTimeout() {
     return configFetchTimeout;
+  }
+
+  /**
+   * Hedge delay for the parallel-failover hedge on the initial HTTP config fetch: how long the
+   * primary leg is given before the secondary is ALSO fired in parallel (without cancelling the
+   * primary). Defaults to {@link #DEFAULT_CONFIG_FETCH_HEDGE_DELAY} (~2s). A fast healthy primary
+   * answers inside this window so the secondary stays a cold standby (zero extra load). Additive
+   * and backward-compatible.
+   */
+  public Duration configFetchHedgeDelay() {
+    return configFetchHedgeDelay;
+  }
+
+  /**
+   * Per-leg hard-abort deadline on the hedged init fetch. Each hedge leg is bounded by this; it
+   * must exceed the longest healable primary latency (so a late-but-newer primary heals forward
+   * instead of aborting) and must be below {@link #initTimeout()} (so the init-path heal leg is not
+   * clipped). Defaults to {@link #DEFAULT_CONFIG_FETCH_HEDGE_ABORT} (~6s). Distinct from {@link
+   * #configFetchTimeout()}, which still bounds the sequential refresh/fallback-poll attempts.
+   */
+  public Duration configFetchHedgeAbort() {
+    return configFetchHedgeAbort;
   }
 
   /**
@@ -426,6 +478,8 @@ public final class Options {
     private String environment;
     private Duration initTimeout;
     private Duration configFetchTimeout;
+    private Duration configFetchHedgeDelay;
+    private Duration configFetchHedgeAbort;
     private boolean fallbackPollEnabled = true;
     private long fallbackPollIntervalMs = 60_000L;
     private Duration fallbackPollThreshold;
@@ -501,6 +555,30 @@ public final class Options {
      */
     public Builder configFetchTimeout(Duration v) {
       this.configFetchTimeout = v;
+      return this;
+    }
+
+    /**
+     * Overrides the hedge delay on the initial HTTP config fetch — how long the primary leg is
+     * given before the secondary is ALSO fired in parallel. Default (when null) is {@link
+     * Options#DEFAULT_CONFIG_FETCH_HEDGE_DELAY} (~2s). Keep it below the worst-case healable
+     * primary latency so a slow-but-alive primary triggers the hedge, and well below {@link
+     * #configFetchHedgeAbort(Duration)}.
+     */
+    public Builder configFetchHedgeDelay(Duration v) {
+      this.configFetchHedgeDelay = v;
+      return this;
+    }
+
+    /**
+     * Overrides the per-leg hard-abort deadline on the hedged init fetch. Default (when null) is
+     * {@link Options#DEFAULT_CONFIG_FETCH_HEDGE_ABORT} (~6s). It must exceed the longest healable
+     * primary latency so a late-but-newer primary heals forward, and must be below {@link
+     * #initTimeout(Duration)} so the init-path heal leg is not clipped; the client logs a warning
+     * at construction when {@code initTimeout <= configFetchHedgeAbort}.
+     */
+    public Builder configFetchHedgeAbort(Duration v) {
+      this.configFetchHedgeAbort = v;
       return this;
     }
 

@@ -99,6 +99,50 @@ public final class HttpTransport {
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
+  /**
+   * Number of configured base URLs (legs). The parallel-failover hedge fires the primary (leg 0)
+   * first and, only if it is slow or errors, also the secondary (leg 1) in parallel.
+   */
+  public int legCount() {
+    return baseUrls.size();
+  }
+
+  /**
+   * GETs {@code url} (path/query only) from a SINGLE leg — {@code baseUrls.get(legIndex)} — without
+   * the sequential idx+1 failover walk of {@link #get(URI, String)}. This is the per-leg primitive
+   * the parallel-failover hedge fires for leg 0 and leg 1 independently, so each leg has its own
+   * in-flight {@link CompletableFuture} and its own deadline; the hedge orchestrates which legs run
+   * (see {@code Quonfig.runInit}). On a 2xx/304 the future completes with the response (and {@link
+   * #lastResolvedIndex} is NOT touched — the caller knows which leg it asked for); any other status
+   * or a transport error completes the future exceptionally with {@link HttpTransportException}.
+   *
+   * <p>Unlike {@link #get(URI, String)} this does NOT apply the overall {@link #timeout}; the hedge
+   * caller bounds each leg with its own per-leg abort deadline (the JDK {@code HttpRequest.timeout}
+   * set in {@link #buildRequest} still bounds the single attempt). ETag is a per-call parameter, so
+   * two concurrent legs cannot share a mutable ETag slot — there is no 304-mask data race.
+   */
+  public CompletableFuture<HttpResponse<String>> getFrom(int legIndex, URI url, String etag) {
+    Objects.requireNonNull(url, "url");
+    if (legIndex < 0 || legIndex >= baseUrls.size()) {
+      return CompletableFuture.failedFuture(
+          new HttpTransportException(
+              0, "", "leg index " + legIndex + " out of range (legs=" + baseUrls.size() + ")"));
+    }
+    URI target = rebase(baseUrls.get(legIndex), url);
+    HttpRequest req = buildRequest(target, "GET", null, etag);
+    return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+        .thenCompose(
+            resp -> {
+              int sc = resp.statusCode();
+              if ((sc >= 200 && sc < 300) || sc == 304) {
+                return CompletableFuture.completedFuture(resp);
+              }
+              String excerpt = excerpt(resp.body());
+              return CompletableFuture.failedFuture(
+                  new HttpTransportException(sc, excerpt, "HTTP " + sc + " from " + target));
+            });
+  }
+
   /** POSTs {@code body} to {@code url}. Same path/host semantics as {@link #get(URI, String)}. */
   public CompletableFuture<HttpResponse<String>> post(URI url, String body) {
     Objects.requireNonNull(url, "url");

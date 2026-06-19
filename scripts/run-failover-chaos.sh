@@ -15,12 +15,13 @@
 #
 # Env knobs:
 #   CHAOS_SKIP   comma-separated scenario-name substrings to EXCLUDE, read by
-#                FailoverChaosTest (default 'o01', which needs cross-leg max-wins
-#                — qfg-7h5d.1.14). Set CHAOS_SKIP= (empty) to run o01 too (red).
+#                FailoverChaosTest. Default is EMPTY now that the parallel-failover
+#                hedge (qfg-7h5d.1.14) lands o01/o03/o05 — the full f01-f05 +
+#                o01-o05 set runs. Set CHAOS_SKIP=o01,... to exclude a scenario.
 #
 # Examples:
 #   ./scripts/run-failover-chaos.sh
-#   CHAOS_SKIP= ./scripts/run-failover-chaos.sh   # also run o01 (will be red)
+#   CHAOS_SKIP=o01 ./scripts/run-failover-chaos.sh   # exclude o01
 
 set -euo pipefail
 
@@ -40,10 +41,11 @@ fi
 export QUONFIG_CHAOS_SESSION="${QUONFIG_CHAOS_SESSION:-sdk-java-failover-$$-$(date +%s)}"
 export QUONFIG_CHAOS_OWNER_PID=$$
 
-# o01-secondary-newer needs cross-leg max-wins (qfg-7h5d.1.14); not implemented in
-# the §5f reject-older scope. Skip it by default. The filter is a JUnit display-name
-# substring matched in the test's @TestFactory dynamic-test names.
-CHAOS_SKIP="${CHAOS_SKIP-o01}"
+# Default to running EVERYTHING: the parallel-failover hedge (qfg-7h5d.1.14) makes
+# o01 (fast primary wins, secondary never contacted), o03 (heal forward), and o05
+# (slow older primary loses) all pass. The filter is a JUnit display-name substring
+# matched in the test's @TestFactory dynamic-test names.
+CHAOS_SKIP="${CHAOS_SKIP-}"
 
 cleanup_done=0
 cleanup() {

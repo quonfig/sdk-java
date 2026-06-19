@@ -24,6 +24,41 @@
   backward, and a same-generation payload is a no-op (no flap, no `onConfigUpdate`).
   Mirrors the sdk-go pilot and the §5f cross-SDK contract.
 
+## 1.1.0 - 2026-06-19
+
+### Changed
+
+- **Parallel-failover hedge on the initial HTTP config fetch (qfg-7h5d.1.14).** The
+  initial config fetch now fires the primary leg first and, only if it is slow past
+  the hedge delay OR errors fast, ALSO fires the secondary leg **in parallel** —
+  without cancelling the primary. A fast healthy primary answers inside the hedge
+  delay, so the secondary stays a cold standby and a healthy system adds zero
+  secondary load. Whatever arrives is installed through the existing reject-older
+  guard, so watermark-max falls out: the higher generation wins, a late older payload
+  never regresses an established client, and a late newer payload heals forward.
+  Readiness latches on the first successful install. Mirrors the sdk-go pilot.
+
+### Added
+
+- **`Options.configFetchHedgeDelay` (default ~2s) and `Options.configFetchHedgeAbort`
+  (default ~6s).** Two additive, backward-compatible options tune the hedge: the
+  delay is how long the primary is given before the secondary is also fired; the
+  abort is the per-leg hard deadline (distinct from `configFetchTimeout`, which still
+  governs the sequential `refresh()`/fallback-poll path). The client logs a warning
+  at construction when `initTimeout <= configFetchHedgeAbort`.
+
+### Behavioral notes (backward-compatible)
+
+- `resolvedFrom()` may now return `"primary"` in a fast-both topology where 1.0.0
+  (sequential) would have returned `"secondary"` — the hedge prefers the leg that
+  actually won the race, and a fast primary wins without contacting the secondary.
+- An **extra** post-ready `onConfigUpdate` callback may fire on heal-forward: when a
+  late-but-newer leg lands after readiness has latched, its install advances the
+  generation and notifies listeners.
+- ETags are now effectively per-leg on the hedge: each hedge leg passes its own ETag
+  (currently `null` on the initial fetch), so two concurrent legs never share a
+  mutable ETag slot — there is no 304-mask race between the legs.
+
 ## 1.0.0 - 2026-06-06
 
 - **Stable 1.0.0 release.** The Quonfig Java SDK (`com.quonfig:sdk-java` and the

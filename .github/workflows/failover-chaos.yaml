@@ -11,12 +11,11 @@ name: Failover Chaos
 # proxies for failover, two upstreams at divergent Meta.generations for ordering —
 # so this job only has to boot toxiproxy via scripts/run-failover-chaos.sh.
 #
-# Scenarios gated here: f01-f05 (failover) + o02-o04 (ordering). o01-secondary-
-# newer is SKIPPED (CHAOS_SKIP=o01, the run-script default) — it asserts cross-leg
-# "max-wins" (hold the higher generation even when the older primary leg is
-# healthy), which the backend SDKs do not yet implement (out of the §5f
-# reject-older scope, "no source ranking"). That behaviour is owned by
-# qfg-7h5d.1.14; drop CHAOS_SKIP once it lands.
+# Scenarios gated here: f01-f05 (failover) + o01-o05 (ordering). The full ordering
+# set runs now that the parallel-failover hedge (qfg-7h5d.1.14) has landed: o01
+# (fast primary wins, secondary never contacted / cold standby), o03 (slow newer
+# primary heals forward), and o05 (slow older primary loses to fast newer
+# secondary). CHAOS_SKIP is empty — nothing is excluded.
 
 on:
   push:
@@ -52,11 +51,11 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          # Tracks main: the scenarios-failover/ + scenarios-ordering/ corpus
-          # this job drives only exists on main and is not yet in a tag (test.yaml
-          # pins v2026.05.20, which predates it). Pin to a tag once the corpus is
-          # rev'd into one. Mirrors sdk-go's failover-chaos.yaml pinning rationale.
-          ref: v2026.06.19
+          # Pinned to v2026.06.19.1: the parallel-failover hedge corpus tag with the
+          # reframed o01 (fast primary wins; secondary never contacted) + new o05
+          # (slow older primary loses to fast newer secondary) + o03 (heal forward).
+          # Mirrors sdk-go's failover-chaos.yaml pinning rationale (qfg-7h5d.1.14).
+          ref: v2026.06.19.1
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT
@@ -105,10 +104,11 @@ jobs:
       - name: Run failover + ordering chaos rigs
         if: env.HAS_REPO_TOKEN == 'true'
         working-directory: sdk-java
-        # CHAOS_SKIP defaults to o01 inside run-failover-chaos.sh (cross-leg
-        # max-wins, qfg-7h5d.1.14). Set here explicitly for visibility.
+        # The parallel-failover hedge (qfg-7h5d.1.14) lands o01 (fast primary wins,
+        # secondary never contacted) and o03 (heal forward), and o05 (slow older
+        # primary loses) auto-includes. Run the full ordering set: CHAOS_SKIP empty.
         env:
-          CHAOS_SKIP: o01,o03
+          CHAOS_SKIP: ''
         run: ./scripts/run-failover-chaos.sh
 
       - name: Upload chaos logs on failure

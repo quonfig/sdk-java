@@ -208,6 +208,20 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                     + "ignored (it applies only when loading from a local data dir)",
                 options.environment());
       }
+      // The hedge's per-leg abort must sit below the overall init timeout so a late-but-newer heal
+      // leg is not clipped by an init-timeout fired underneath it. Warn (don't throw) so a
+      // mis-tuned pair is visible without breaking construction (mirrors the sdk-go pilot's
+      // construction-time warning).
+      if (options.initTimeout().compareTo(options.configFetchHedgeAbort()) <= 0) {
+        options
+            .logger()
+            .warn(
+                "quonfig: initTimeout ({}) <= configFetchHedgeAbort ({}); the hedge's per-leg abort "
+                    + "should be strictly below initTimeout so a late-but-newer heal leg is not "
+                    + "clipped — raise initTimeout or lower configFetchHedgeAbort",
+                options.initTimeout(),
+                options.configFetchHedgeAbort());
+      }
       this.initFuture = new CompletableFuture<>();
       Thread t = new Thread(this::runInit, "quonfig-init");
       t.setDaemon(true);
@@ -266,25 +280,170 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               .sdkKey(options.sdkKey())
               .timeout(options.initTimeout())
               // Per-URL config-fetch deadline so a hung primary fails over to the secondary inside
-              // the init budget instead of starving it until initTimeout (qfg-7h5d.1.10).
+              // the init budget instead of starving it until initTimeout (qfg-7h5d.1.10). Still
+              // governs the sequential refresh()/fallback-poll path; the hedged init fetch below
+              // uses its own hedgeDelay/hedgeAbort.
               .configFetchTimeout(options.configFetchTimeout())
               .build();
       this.httpTransport = http;
-      HttpResponse<String> resp =
-          http.get(URI.create(CONFIGS_PATH), null)
-              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
-      installDeliveryBody(resp.body(), http.lastResolvedIndex());
-      initFuture.complete(null);
-      fireConfigUpdate();
-      startSse();
-    } catch (TimeoutException e) {
-      initFuture.completeExceptionally(
-          new IllegalStateException("client initialization exceeded " + options.initTimeout(), e));
+      fetchInitialHedged(http);
     } catch (Exception e) {
       Throwable cause = e.getCause() != null ? e.getCause() : e;
       initFuture.completeExceptionally(
           new IllegalStateException("client initialization failed: " + cause.getMessage(), cause));
     }
+  }
+
+  /**
+   * Parallel-failover hedge for the initial HTTP config fetch (qfg-7h5d.1.14). Fires the primary
+   * leg (index 0) first; if it errors fast OR has not settled within the hedge delay it ALSO fires
+   * the secondary leg (index 1) in parallel — without cancelling the primary, and at most once.
+   * Each successful leg is installed through the reject-older guard, so watermark-max falls out:
+   * the first install latches readiness and starts SSE; a late-but-newer leg heals forward; a
+   * late-older leg is dropped. If every fired leg fails, the init future completes exceptionally,
+   * preserving the existing init-failure (init-throw) contract.
+   *
+   * <p>This method blocks the init thread until every fired leg has settled (so a heal-forward
+   * install lands before {@link #initFuture} is consumed by a slow caller), bounded by the per-leg
+   * abort × the number of legs, which is below {@link Options#initTimeout()}.
+   */
+  private void fetchInitialHedged(HttpTransport http) {
+    long hedgeDelayMs = options.configFetchHedgeDelay().toMillis();
+    long hedgeAbortMs = options.configFetchHedgeAbort().toMillis();
+    boolean hasSecondary = http.legCount() > 1;
+
+    // CAS so the secondary fires AT MOST ONCE and NEVER after a fast primary win. The winning CASer
+    // installs the secondary leg's future into secondaryLeg so the init thread can join on it.
+    java.util.concurrent.atomic.AtomicBoolean secondaryFired =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    java.util.concurrent.atomic.AtomicReference<CompletableFuture<Void>> secondaryLeg =
+        new java.util.concurrent.atomic.AtomicReference<>(null);
+    // Latches readiness/SSE on the FIRST successful install regardless of which leg won.
+    java.util.concurrent.atomic.AtomicBoolean readyLatched =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    java.util.List<Throwable> legErrors =
+        java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+    CompletableFuture<Void> primaryLeg =
+        fireHedgeLeg(http, 0, hedgeAbortMs, readyLatched, legErrors);
+
+    if (hasSecondary) {
+      Runnable fireSecondary =
+          () -> {
+            if (secondaryFired.compareAndSet(false, true)) {
+              secondaryLeg.set(fireHedgeLeg(http, 1, hedgeAbortMs, readyLatched, legErrors));
+            }
+          };
+
+      // Fast-error path: if the primary settles exceptionally, hedge now (whether that is before or
+      // after the hedge delay — a fast error always hedges). On a fast success, mark the secondary
+      // as suppressed so the timer below never hedges (cold standby). This runs on the HttpClient
+      // executor; the CAS keeps it race-free against the timer. errorHedged completes only AFTER
+      // the
+      // hedge decision is made, so the init-thread join below cannot read a stale null
+      // secondaryLeg.
+      CompletableFuture<Void> errorHedged =
+          primaryLeg.handle(
+              (v, t) -> {
+                if (t != null) {
+                  fireSecondary.run();
+                } else {
+                  secondaryFired.set(true); // fast primary win — never hedge
+                }
+                return null;
+              });
+
+      // Hedge-delay timer: if the primary is still in flight when the delay elapses, fire the
+      // secondary in parallel. A copy is timed so an exceptional primary does not bubble here — the
+      // handle() above owns the fast-error hedge decision.
+      try {
+        primaryLeg.copy().get(hedgeDelayMs, TimeUnit.MILLISECONDS);
+      } catch (TimeoutException te) {
+        fireSecondary.run(); // primary still slow at the hedge delay — hedge in parallel
+      } catch (Exception ignored) {
+        // Primary already settled; errorHedged will make (or has made) the hedge decision.
+      }
+
+      // Make sure the fast-error hedge decision has been applied before we read secondaryLeg.
+      errorHedged.join();
+    }
+
+    // Wait for every fired leg to settle so a heal-forward install can land before we hand control
+    // back. Neutralize each leg's exceptional completion (errors are already in legErrors) so the
+    // join never throws.
+    primaryLeg.exceptionally(t -> null).join();
+    CompletableFuture<Void> sec = secondaryLeg.get();
+    if (sec != null) {
+      sec.exceptionally(t -> null).join();
+    }
+
+    if (readyLatched.get()) {
+      // At least one leg installed and already latched readiness + started SSE (see fireHedgeLeg).
+      return;
+    }
+
+    // Nothing installed. Preserve the init-failure contract: surface the failure so getters apply
+    // OnInitFailure (init-throw). If legErrors is empty the legs all 304'd (no change) — still a
+    // successful, ready client; complete normally.
+    if (!legErrors.isEmpty()) {
+      Throwable first = legErrors.get(0);
+      Throwable cause = first.getCause() != null ? first.getCause() : first;
+      initFuture.completeExceptionally(
+          new IllegalStateException("client initialization failed: " + cause.getMessage(), cause));
+    } else {
+      this.initialized = true;
+      initFuture.complete(null);
+    }
+  }
+
+  /**
+   * Fires one hedge leg pinned to {@code legIndex}, bounded by {@code abortMs}, installs a 2xx body
+   * through the reject-older guard, and on the FIRST successful install (across all legs) latches
+   * readiness — completes {@link #initFuture}, fires the config-update callback, and starts SSE
+   * exactly once. The returned future always completes normally; the leg's error (if any) is
+   * recorded in {@code legErrors} so the caller can surface an all-legs-failed init failure.
+   */
+  private CompletableFuture<Void> fireHedgeLeg(
+      HttpTransport http,
+      int legIndex,
+      long abortMs,
+      java.util.concurrent.atomic.AtomicBoolean readyLatched,
+      java.util.List<Throwable> legErrors) {
+    // The returned future reflects the RAW leg outcome so the hedge arbiter can distinguish a fast
+    // error (hedge now) from a fast success (suppress the hedge): it completes exceptionally on a
+    // transport/timeout/decode error and normally on a successful resolve. The install + readiness
+    // latch are side effects performed inside thenApply before the success propagates.
+    return http.getFrom(legIndex, URI.create(CONFIGS_PATH), null)
+        .orTimeout(abortMs, TimeUnit.MILLISECONDS)
+        .thenAccept(
+            resp -> {
+              boolean installed;
+              try {
+                installed = resp.statusCode() != 304 && installDeliveryBody(resp.body(), legIndex);
+              } catch (IOException e) {
+                throw new java.util.concurrent.CompletionException(e);
+              }
+              // Latch readiness on the first leg to resolve successfully — complete initFuture and
+              // start SSE exactly once. The first leg on a fresh client always installs (etag is
+              // null, the generation guard accepts the first snapshot), so the latch coincides with
+              // a real install.
+              if (readyLatched.compareAndSet(false, true)) {
+                initFuture.complete(null);
+                startSse();
+              }
+              // Fire the config-update callback whenever this leg actually advanced the held
+              // generation — on the first install (init) AND on a heal-forward install by a
+              // late-but-newer leg (an extra post-ready callback, documented in the CHANGELOG).
+              if (installed) {
+                fireConfigUpdate();
+              }
+            })
+        .whenComplete(
+            (v, t) -> {
+              if (t != null) {
+                legErrors.add(t.getCause() != null ? t.getCause() : t);
+              }
+            });
   }
 
   /**
