@@ -161,6 +161,28 @@ final class FailoverChaosTest {
     String streamUrl =
         sseEnabled ? "http://127.0.0.1:" + RIG_SSE_PORT : "http://127.0.0.1:" + freePort();
 
+    // Partition chaos events: injects at at_ms <= 0 must be confirmed-applied BEFORE the client's
+    // init fetch thread starts, or the primary fetch can win the race and resolve off primary
+    // before the fault lands (f02-primary-hang flake, CI run 27832642681). applyFailoverInject
+    // makes a blocking toxiproxy HTTP call, so on return the fault is in place; any self-restore is
+    // scheduled from this pre-init moment so it lifts at the correct wall-clock time. Mirrors
+    // sdk-ruby's failover_chaos.rb pre_init/scheduled split. at_ms > 0 events fire after the client
+    // is up, relative to the post-init baseline below.
+    List<ChaosScenario.Event> preInit = new ArrayList<>();
+    List<ChaosScenario.Event> scheduled = new ArrayList<>();
+    if (run.chaos != null) {
+      for (ChaosScenario.Event ev : run.chaos) {
+        if (ev.inject == null) continue;
+        if (ev.atMs <= 0) preInit.add(ev);
+        else scheduled.add(ev);
+      }
+    }
+
+    for (ChaosScenario.Event ev : preInit) {
+      applyFailoverInject(tp, ev.inject);
+      System.err.printf("[pre-init] inject %s%n", describeInject(ev.inject));
+    }
+
     Quonfig client =
         new Quonfig(
             Options.builder()
@@ -180,28 +202,25 @@ final class FailoverChaosTest {
     long baselineMs = System.currentTimeMillis();
     List<Thread> bg = new ArrayList<>();
 
-    // Schedule chaos events. The failover-rig aliases are self-restoring (each carries its own
-    // duration), so there are no `clear` events to track.
-    if (run.chaos != null) {
-      for (ChaosScenario.Event ev : run.chaos) {
-        if (ev.inject == null) continue;
-        long fireAt = baselineMs + ev.atMs;
-        Thread t =
-            new Thread(
-                () -> {
-                  sleepUntil(fireAt);
-                  try {
-                    applyFailoverInject(tp, ev.inject);
-                    System.err.printf("[%6dms] inject %s%n", ev.atMs, describeInject(ev.inject));
-                  } catch (Exception e) {
-                    System.err.printf("[%6dms] inject failed: %s%n", ev.atMs, e.getMessage());
-                  }
-                },
-                "chaos-event-" + ev.atMs);
-        t.setDaemon(true);
-        t.start();
-        bg.add(t);
-      }
+    // Schedule at_ms > 0 chaos events. The failover-rig aliases are self-restoring (each carries
+    // its own duration), so there are no `clear` events to track.
+    for (ChaosScenario.Event ev : scheduled) {
+      long fireAt = baselineMs + ev.atMs;
+      Thread t =
+          new Thread(
+              () -> {
+                sleepUntil(fireAt);
+                try {
+                  applyFailoverInject(tp, ev.inject);
+                  System.err.printf("[%6dms] inject %s%n", ev.atMs, describeInject(ev.inject));
+                } catch (Exception e) {
+                  System.err.printf("[%6dms] inject failed: %s%n", ev.atMs, e.getMessage());
+                }
+              },
+              "chaos-event-" + ev.atMs);
+      t.setDaemon(true);
+      t.start();
+      bg.add(t);
     }
 
     // Ordering rig: model ongoing config polling. Each refresh re-runs the [primary, secondary]
