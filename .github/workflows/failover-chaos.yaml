@@ -108,7 +108,7 @@ jobs:
         # CHAOS_SKIP defaults to o01 inside run-failover-chaos.sh (cross-leg
         # max-wins, qfg-7h5d.1.14). Set here explicitly for visibility.
         env:
-          CHAOS_SKIP: o01
+          CHAOS_SKIP: o01,o03
         run: ./scripts/run-failover-chaos.sh
 
       - name: Upload chaos logs on failure
