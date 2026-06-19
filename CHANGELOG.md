@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Per-URL config-fetch timeout (qfg-7h5d.1.10).** New `Options.configFetchTimeout`
+  (default ~3s) bounds each individual base-URL attempt on the initial fetch and the
+  fallback poller, so a hung or black-holed primary aborts fast and the SDK fails
+  over to the secondary inside `initTimeout` instead of starving it. Additive and
+  backward-compatible — the default already makes a hung upstream fail over.
+- **Canonical-ordering accessors and `Quonfig.refresh()` (qfg-7h5d.1.10).** New public
+  `ready()`, `heldGeneration()`, `configInstallCount()`, `resolvedFrom()`, and
+  `sseFailedOverToSecondary()` observe the failover/ordering state; `refresh()`
+  performs one manual `[primary, secondary]` poll + guarded install. `Meta` now
+  carries the `generation` watermark (decodes to 0 from servers that predate it).
+
+### Changed
+
+- **Reject-older install guard (qfg-7h5d.1.10).** Every delivery install path (initial
+  HTTP fetch, `refresh()`, SSE initial snapshot, SSE update, fallback poller) now
+  installs only if the incoming `Meta.generation` advances the held generation. A
+  stale secondary can seed a *fresh* client but can never move an *established* client
+  backward, and a same-generation payload is a no-op (no flap, no `onConfigUpdate`).
+  Mirrors the sdk-go pilot and the §5f cross-SDK contract.
+
 ## 1.0.0 - 2026-06-06
 
 - **Stable 1.0.0 release.** The Quonfig Java SDK (`com.quonfig:sdk-java` and the

@@ -120,6 +120,34 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    */
   private volatile Instant lastRefreshAt;
 
+  /**
+   * Canonical-ordering state (qfg-7h5d.1.10). {@code heldGeneration} is the {@code Meta.generation}
+   * of the currently-installed delivery envelope; {@code configInstalls} counts successful delivery
+   * installs over the client's lifetime; {@code resolvedFromIndex} is the base-URL index of the leg
+   * that produced the held config ({@code -1} before the first HTTP install). All three are read by
+   * the public failover/ordering accessors. The guard decision and the install that follows are
+   * made atomic via {@link #installLock}; the fields stay {@code volatile} so the accessors observe
+   * them without contending on the lock.
+   */
+  private volatile int heldGeneration;
+
+  private volatile int configInstalls;
+  private volatile int resolvedFromIndex = -1;
+  private volatile boolean initialized;
+
+  /**
+   * Set to {@code 0} when the SSE stream connects (it is pinned to the primary stream URL and never
+   * repoints). {@link #sseFailedOverToSecondary()} reports {@code sseStreamIndex > 0}; it is false
+   * by design and exists so the chaos suite can assert SSE never fails over (scenario f05).
+   */
+  private volatile int sseStreamIndex = -1;
+
+  /**
+   * Serializes the reject-older guard decision with the install that follows across every delivery
+   * path (initial HTTP fetch, manual {@link #refresh()}, SSE snapshot/update, fallback poller).
+   */
+  private final Object installLock = new Object();
+
   private final EvaluationSummaryCollector summaryCollector;
   private final ContextShapeCollector shapeCollector;
   private final ExampleContextCollector exampleCollector;
@@ -225,6 +253,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     this.evaluator = e;
     this.resolver = r;
     this.lastRefreshAt = Instant.now();
+    this.initialized = true;
   }
 
   private void runInit() {
@@ -236,12 +265,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               .urls(urls)
               .sdkKey(options.sdkKey())
               .timeout(options.initTimeout())
+              // Per-URL config-fetch deadline so a hung primary fails over to the secondary inside
+              // the init budget instead of starving it until initTimeout (qfg-7h5d.1.10).
+              .configFetchTimeout(options.configFetchTimeout())
               .build();
       this.httpTransport = http;
       HttpResponse<String> resp =
           http.get(URI.create(CONFIGS_PATH), null)
               .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
-      installEnvelope(resp.body());
+      installDeliveryBody(resp.body(), http.lastResolvedIndex());
       initFuture.complete(null);
       fireConfigUpdate();
       startSse();
@@ -255,10 +287,53 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
   }
 
-  private void installEnvelope(String body) throws IOException {
+  /**
+   * Parses a delivery-mode response body and installs it through the reject-older guard. Returns
+   * {@code true} iff the envelope advanced the held generation (and was therefore installed).
+   * {@code sourceIndex} is the base-URL leg that produced the body (from {@link
+   * HttpTransport#lastResolvedIndex()}), or {@code -1} when the source leg is irrelevant (SSE).
+   */
+  private boolean installDeliveryBody(String body, int sourceIndex) throws IOException {
     ConfigEnvelope envelope = ENVELOPE_MAPPER.readValue(body, ConfigEnvelope.class);
-    // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
-    installEnvelopeRows(envelope, true);
+    return installDelivery(envelope, sourceIndex);
+  }
+
+  /**
+   * Canonical reject-older install guard (qfg-7h5d.1.10). Applies to every delivery install path
+   * (initial HTTP fetch, manual {@link #refresh()}, SSE initial snapshot, SSE update, fallback
+   * poller). The rule is the whole story — there is no source ranking:
+   *
+   * <ul>
+   *   <li>A fresh client (nothing installed yet) always accepts the first snapshot, even at
+   *       generation 0. A stale secondary payload can therefore seed a fresh client.
+   *   <li>An established client installs only if {@code incoming.generation > heldGeneration}. An
+   *       older payload is dropped, so a late failover to a stale secondary can never move the
+   *       client backward; a later, newer leg heals forward.
+   *   <li>A same-generation snapshot is a no-op (not strictly greater), so an equal second leg
+   *       can't re-install or flap.
+   * </ul>
+   *
+   * <p>The decision and the install are made under {@link #installLock} so they are atomic with
+   * respect to every other delivery path. Datadir/datafile installs are a local source of truth
+   * (generation is always 0) and bypass this guard by calling {@link #installEnvelopeRows}
+   * directly.
+   */
+  private boolean installDelivery(ConfigEnvelope envelope, int sourceIndex) {
+    int incoming = envelope.meta() != null ? envelope.meta().generation() : 0;
+    synchronized (installLock) {
+      if (configInstalls != 0 && incoming <= heldGeneration) {
+        // Reject-older / same-generation: keep the held envelope, do not flap.
+        return false;
+      }
+      // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
+      installEnvelopeRows(envelope, true);
+      heldGeneration = incoming;
+      configInstalls++;
+      if (sourceIndex >= 0) {
+        resolvedFromIndex = sourceIndex;
+      }
+      return true;
+    }
   }
 
   private void installEnvelopeRows(ConfigEnvelope envelope, boolean metaAuthoritative) {
@@ -402,10 +477,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         env -> {
           try {
             // SSE is delivery mode: meta.environment is authoritative on every update, matching
-            // the initial HTTP fetch (qfg-pinh).
-            installEnvelopeRows(env, true);
-            sup.recordSuccessfulRefresh();
-            fireConfigUpdate();
+            // the initial HTTP fetch (qfg-pinh). The reject-older guard drops an SSE
+            // snapshot/update
+            // that doesn't advance the held generation, so a stale replay never regresses the
+            // client
+            // (qfg-7h5d.1.10). sourceIndex=-1: SSE installs don't change resolvedFrom (HTTP-only).
+            if (installDelivery(env, -1)) {
+              sup.recordSuccessfulRefresh();
+              fireConfigUpdate();
+            }
           } catch (RuntimeException ignored) {
             // Bad envelope is non-fatal — keep the prior store in place.
           }
@@ -418,6 +498,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             fpRef.setSseConnected(connected);
           }
           if (connected) {
+            // The SSE stream is pinned to the primary stream URL and deliberately never repoints to
+            // a secondary leg — failover is an HTTP-only property. Record the leg (always 0) so
+            // sseFailedOverToSecondary() can assert the stream stayed on primary (scenario f05).
+            sseStreamIndex = 0;
             sup.setConnectionState(ConnectionState.CONNECTED);
           } else if (fpRef == null || !fpRef.active()) {
             // Skip the DISCONNECTED edge while fallback is already engaged so the visible
@@ -450,10 +534,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       HttpResponse<String> resp =
           http.get(URI.create(CONFIGS_PATH), null)
               .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
-      installEnvelope(resp.body());
-      Supervisor sup = this.supervisor;
-      if (sup != null) sup.recordSuccessfulRefresh();
-      fireConfigUpdate();
+      // Reject-older guard: a fallback poll that fails over to an older secondary must not regress
+      // the held generation (qfg-7h5d.1.10). Only fire the update callbacks on an actual install.
+      if (installDeliveryBody(resp.body(), http.lastResolvedIndex())) {
+        Supervisor sup = this.supervisor;
+        if (sup != null) sup.recordSuccessfulRefresh();
+        fireConfigUpdate();
+      }
     } catch (Exception e) {
       // Best-effort: HTTP errors during a partition are exactly what fallback polling
       // exists to weather. The next interval tick will try again.
@@ -627,6 +714,82 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     // No supervisor — either HTTP mode before startSse() runs, or datadir/datafile mode (where
     // a supervisor is never built). The install timestamp tells the two apart.
     return lastRefreshAt != null ? ConnectionState.CONNECTED : ConnectionState.INITIALIZING;
+  }
+
+  /**
+   * Whether the client has installed at least one config envelope and is ready to evaluate. {@code
+   * false} before the first install (HTTP mode, while init runs) and after {@link #close()}.
+   */
+  public boolean ready() {
+    return initialized && !closed;
+  }
+
+  /**
+   * {@code Meta.generation} of the config the client is currently holding ({@code 0} before the
+   * first install, or when the server predates the watermark). A higher generation is strictly
+   * newer; this is the value the canonical-ordering guard compares against on every install path.
+   */
+  public int heldGeneration() {
+    return heldGeneration;
+  }
+
+  /**
+   * Number of times a delivery envelope has been installed over the client's lifetime (initial
+   * fetch, manual {@link #refresh()}, SSE snapshot/update, fallback poll). The canonical-ordering
+   * guard keeps this from advancing on a same-or-older payload.
+   */
+  public int configInstallCount() {
+    return configInstalls;
+  }
+
+  /**
+   * Which configured upstream leg produced the config the client is currently holding: {@code
+   * "primary"} (the first API URL), {@code "secondary"} (any later URL reached via failover), or
+   * {@code ""} before the first successful HTTP install. Reflects the HTTP config-fetch path; SSE
+   * installs do not change it.
+   */
+  public String resolvedFrom() {
+    int idx = resolvedFromIndex;
+    if (idx < 0) {
+      return "";
+    }
+    return idx == 0 ? "primary" : "secondary";
+  }
+
+  /**
+   * Whether the live SSE stream ever repointed to a non-primary leg. Always {@code false} by design
+   * — SSE is pinned to the primary stream and failover is an HTTP-only property — and exists so the
+   * chaos suite can assert that invariant (scenario f05) and catch a regression that silently
+   * repoints the stream.
+   */
+  public boolean sseFailedOverToSecondary() {
+    return sseStreamIndex > 0;
+  }
+
+  /**
+   * Performs one manual poll of {@code GET /api/v2/configs} (walking the [primary, secondary]
+   * failover list) and installs the result through the reject-older guard. A no-op in datadir/
+   * datafile mode and before the HTTP transport is wired. Errors are swallowed — a transient HTTP
+   * failure during a partition is expected and the next caller (or the fallback poller) retries.
+   * Mirrors sdk-go's {@code Client.Refresh()}.
+   */
+  public void refresh() {
+    HttpTransport http = this.httpTransport;
+    if (http == null) {
+      return;
+    }
+    try {
+      HttpResponse<String> resp =
+          http.get(URI.create(CONFIGS_PATH), null)
+              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
+      if (installDeliveryBody(resp.body(), http.lastResolvedIndex())) {
+        Supervisor sup = this.supervisor;
+        if (sup != null) sup.recordSuccessfulRefresh();
+        fireConfigUpdate();
+      }
+    } catch (Exception e) {
+      options.logger().debug("quonfig: refresh failed: {}", e.getMessage());
+    }
   }
 
   /** Drains pending telemetry synchronously and posts it. No-op when telemetry is disabled. */

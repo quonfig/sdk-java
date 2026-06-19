@@ -33,10 +33,27 @@ public final class HttpTransport {
   /** Body excerpt is capped to keep error allocations bounded. */
   static final int MAX_BODY_EXCERPT = 8192;
 
+  /**
+   * Default per-URL config-fetch deadline. Bounds a single attempt against one base URL so a hung
+   * primary (TCP accepted, no response) aborts fast instead of starving the secondary until the
+   * caller's overall {@code initTimeout}. ~3s mirrors the sdk-go pilot's {@code
+   * DefaultConfigFetchTimeout} (qfg-7h5d.1.4/.10).
+   */
+  public static final Duration DEFAULT_CONFIG_FETCH_TIMEOUT = Duration.ofSeconds(3);
+
   private final HttpClient http;
   private final List<URI> baseUrls;
   private final String authHeader;
   private final Duration timeout;
+  private final Duration configFetchTimeout;
+
+  /**
+   * Index into {@link #baseUrls} of the base URL that produced the most recent successful (2xx/304)
+   * response, or {@code -1} before any. The Quonfig client reads this right after a fetch resolves
+   * to record which leg ("primary"/"secondary") served the held config. Single writer per resolve;
+   * {@code volatile} is sufficient for the read-after-resolve handoff.
+   */
+  private volatile int lastResolvedIndex = -1;
 
   private HttpTransport(Builder b) {
     Objects.requireNonNull(b.urls, "urls");
@@ -46,6 +63,8 @@ public final class HttpTransport {
     Objects.requireNonNull(b.sdkKey, "sdkKey");
     this.baseUrls = List.copyOf(b.urls);
     this.timeout = b.timeout != null ? b.timeout : Duration.ofSeconds(10);
+    this.configFetchTimeout =
+        b.configFetchTimeout != null ? b.configFetchTimeout : DEFAULT_CONFIG_FETCH_TIMEOUT;
     this.http =
         b.httpClient != null
             ? b.httpClient
@@ -57,6 +76,16 @@ public final class HttpTransport {
 
   public static Builder builder() {
     return new Builder();
+  }
+
+  /**
+   * Index into the configured base URLs of the leg that produced the most recent successful
+   * response, or {@code -1} before the first success. {@code 0} is the primary; any higher index
+   * was reached via failover. The Quonfig client reads this immediately after a config fetch
+   * resolves.
+   */
+  public int lastResolvedIndex() {
+    return lastResolvedIndex;
   }
 
   /**
@@ -98,9 +127,11 @@ public final class HttpTransport {
               }
               int sc = resp.statusCode();
               if (sc >= 200 && sc < 300) {
+                lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
               }
               if ("GET".equals(method) && sc == 304) {
+                lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
               }
               if (isLast) {
@@ -115,9 +146,13 @@ public final class HttpTransport {
   }
 
   private HttpRequest buildRequest(URI target, String method, String body, String etag) {
+    // Per-URL deadline: bound THIS single attempt (one base URL) rather than the whole failover
+    // chain, so a hung primary aborts after configFetchTimeout and the secondary still has budget
+    // inside the caller's overall timeout. Applies uniformly to the initial fetch and the fallback
+    // poller, since both route through this transport (qfg-7h5d.1.4/.10).
     HttpRequest.Builder b =
         HttpRequest.newBuilder(target)
-            .timeout(timeout)
+            .timeout(configFetchTimeout)
             .header("Authorization", authHeader)
             .header("X-Quonfig-SDK-Version", Version.header())
             .header("Accept", "application/json");
@@ -165,6 +200,7 @@ public final class HttpTransport {
     private List<URI> urls;
     private String sdkKey;
     private Duration timeout;
+    private Duration configFetchTimeout;
     private HttpClient httpClient;
 
     public Builder urls(List<URI> urls) {
@@ -179,6 +215,16 @@ public final class HttpTransport {
 
     public Builder timeout(Duration timeout) {
       this.timeout = timeout;
+      return this;
+    }
+
+    /**
+     * Per-URL config-fetch deadline. Bounds each individual base-URL attempt; defaults to {@link
+     * HttpTransport#DEFAULT_CONFIG_FETCH_TIMEOUT} (~3s) when null. Keep this well under the
+     * caller's overall init timeout so a hung leg fails over with budget to spare.
+     */
+    public Builder configFetchTimeout(Duration configFetchTimeout) {
+      this.configFetchTimeout = configFetchTimeout;
       return this;
     }
 

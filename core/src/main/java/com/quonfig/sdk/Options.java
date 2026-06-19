@@ -41,6 +41,13 @@ public final class Options {
   public static final String DEFAULT_DOMAIN = "quonfig.com";
   public static final Duration DEFAULT_INIT_TIMEOUT = Duration.ofSeconds(10);
 
+  /**
+   * Default per-URL config-fetch deadline (~3s). Bounds each base-URL attempt on the initial fetch
+   * and the fallback poller so a hung primary fails over to the secondary inside {@link
+   * #initTimeout()}. Mirrors the sdk-go pilot (qfg-7h5d.1.4/.10).
+   */
+  public static final Duration DEFAULT_CONFIG_FETCH_TIMEOUT = Duration.ofSeconds(3);
+
   private final String sdkKey;
   private final String domain;
   private final List<String> apiUrls;
@@ -48,6 +55,7 @@ public final class Options {
   private final String telemetryUrl;
   private final String environment;
   private final Duration initTimeout;
+  private final Duration configFetchTimeout;
   private final boolean fallbackPollEnabled;
   private final long fallbackPollIntervalMs;
   private final Duration fallbackPollThreshold;
@@ -97,6 +105,8 @@ public final class Options {
     this.enableQuonfigUserContext = b.enableQuonfigUserContext;
 
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
+    this.configFetchTimeout =
+        b.configFetchTimeout != null ? b.configFetchTimeout : DEFAULT_CONFIG_FETCH_TIMEOUT;
     this.fallbackPollEnabled = b.fallbackPollEnabled;
     this.fallbackPollIntervalMs = b.fallbackPollIntervalMs;
     this.fallbackPollThreshold = b.fallbackPollThreshold;
@@ -202,6 +212,17 @@ public final class Options {
 
   public Duration initTimeout() {
     return initTimeout;
+  }
+
+  /**
+   * Per-URL config-fetch deadline. Each base-URL attempt (initial fetch and fallback poller) is
+   * bounded by this duration, so a hung or black-holed primary aborts fast and the secondary is
+   * tried within the remaining {@link #initTimeout()} budget. Defaults to {@link
+   * #DEFAULT_CONFIG_FETCH_TIMEOUT} (~3s). Additive and backward-compatible — the default already
+   * makes a hung upstream fail over, so existing callers need not set it.
+   */
+  public Duration configFetchTimeout() {
+    return configFetchTimeout;
   }
 
   /**
@@ -404,6 +425,7 @@ public final class Options {
     private String telemetryUrl;
     private String environment;
     private Duration initTimeout;
+    private Duration configFetchTimeout;
     private boolean fallbackPollEnabled = true;
     private long fallbackPollIntervalMs = 60_000L;
     private Duration fallbackPollThreshold;
@@ -467,6 +489,18 @@ public final class Options {
 
     public Builder initTimeout(Duration v) {
       this.initTimeout = v;
+      return this;
+    }
+
+    /**
+     * Overrides the per-URL config-fetch deadline. Default (when null) is {@link
+     * Options#DEFAULT_CONFIG_FETCH_TIMEOUT} (~3s). Bounds each base-URL attempt on the initial
+     * fetch and the fallback poller; keep it well under {@link #initTimeout(Duration)} so a hung
+     * leg fails over with budget to reach the next one. Pass a larger value only if a healthy
+     * upstream legitimately takes longer than the default to answer a config fetch.
+     */
+    public Builder configFetchTimeout(Duration v) {
+      this.configFetchTimeout = v;
       return this;
     }
 

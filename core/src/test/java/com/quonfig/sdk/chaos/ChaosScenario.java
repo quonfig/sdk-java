@@ -27,6 +27,18 @@ final class ChaosScenario {
     String httpEndpoint;
     int wallClockSeconds;
     String userCallback;
+    // Failover/ordering rigs (qfg-7h5d.1.10): topology selects the rig; upstreams pins each leg's
+    // Meta.generation for the ordering rig.
+    String topology;
+    List<Upstream> upstreams;
+  }
+
+  /**
+   * One upstream leg in the ordering rig — a role ("primary"/"secondary") at a pinned generation.
+   */
+  static final class Upstream {
+    String role;
+    int generation;
   }
 
   static final class Event {
@@ -46,6 +58,11 @@ final class ChaosScenario {
     Integer bothDownMs;
     Integer sseHalfOpenAfterBytes;
     Integer sseHttpStatus;
+    // Failover-rig aliases (qfg-7h5d.1.10) — self-restoring faults on the primary HTTP leg, each
+    // carrying its own duration in ms.
+    Integer primaryRefusedMs;
+    Integer primaryHangMs;
+    Integer primaryLatencyMs;
     // Raw toxiproxy escape hatch.
     String proxy;
     Map<String, Object> toxic;

@@ -57,7 +57,23 @@ final class ChaosYamlLoader {
     s.httpEndpoint = asString(m.get("http_endpoint"));
     s.wallClockSeconds = asInt(m.get("wall_clock_seconds"), 30);
     s.userCallback = asString(m.get("user_callback"));
+    s.topology = asString(m.get("topology"));
+    s.upstreams = parseUpstreams(m.get("upstreams"));
     return s;
+  }
+
+  private static List<ChaosScenario.Upstream> parseUpstreams(Object raw) {
+    if (!(raw instanceof List)) return null;
+    List<ChaosScenario.Upstream> out = new ArrayList<>();
+    for (Object el : (List<?>) raw) {
+      if (!(el instanceof Map)) continue;
+      Map<String, Object> um = (Map<String, Object>) el;
+      ChaosScenario.Upstream u = new ChaosScenario.Upstream();
+      u.role = asString(um.get("role"));
+      u.generation = asInt(um.get("generation"), 0);
+      out.add(u);
+    }
+    return out;
   }
 
   private static List<ChaosScenario.Event> parseEvents(Object raw) {
@@ -88,6 +104,9 @@ final class ChaosYamlLoader {
     inj.bothDownMs = asIntegerOrNull(m.get("both_down_ms"));
     inj.sseHalfOpenAfterBytes = asIntegerOrNull(m.get("sse_half_open_after_bytes"));
     inj.sseHttpStatus = asIntegerOrNull(m.get("sse_http_status"));
+    inj.primaryRefusedMs = asIntegerOrNull(m.get("primary_refused_ms"));
+    inj.primaryHangMs = asIntegerOrNull(m.get("primary_hang_ms"));
+    inj.primaryLatencyMs = asIntegerOrNull(m.get("primary_latency_ms"));
     inj.proxy = asString(m.get("proxy"));
     if (m.get("toxic") instanceof Map)
       inj.toxic = new LinkedHashMap<>((Map<String, Object>) m.get("toxic"));

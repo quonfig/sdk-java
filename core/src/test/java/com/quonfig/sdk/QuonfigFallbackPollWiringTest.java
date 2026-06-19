@@ -71,13 +71,22 @@ class QuonfigFallbackPollWiringTest {
 
     HttpHandler getHandler =
         (HttpExchange ex) -> {
-          configsHits.incrementAndGet();
+          int hit = configsHits.incrementAndGet();
+          // Serve a monotonically advancing Meta.generation per hit, mirroring real api-delivery
+          // where each new commit bumps the watermark. The reject-older install guard
+          // (qfg-7h5d.1.10)
+          // only installs (and only fires onConfigUpdate) when the generation advances, so a stub
+          // that pinned generation=0 would have every fallback re-fetch correctly suppressed as a
+          // same-generation no-op (the o04 contract). Incrementing it keeps this wiring assertion —
+          // "the fallback poller fetched and the install path fired onConfigUpdate" — meaningful.
           byte[] body =
               ("{\"configs\":[],\"meta\":{\"version\":\"v"
-                      + configsHits.get()
-                      + "\",\"environment\":\"production\",\"workspaceId\":\"ws\"}}")
+                      + hit
+                      + "\",\"environment\":\"production\",\"workspaceId\":\"ws\",\"generation\":"
+                      + hit
+                      + "}}")
                   .getBytes(StandardCharsets.UTF_8);
-          ex.getResponseHeaders().add("ETag", "\"v" + configsHits.get() + "\"");
+          ex.getResponseHeaders().add("ETag", "\"v" + hit + "\"");
           ex.sendResponseHeaders(200, body.length);
           try (OutputStream out = ex.getResponseBody()) {
             out.write(body);
