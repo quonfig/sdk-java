@@ -1,19 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-06-19
 
 ### Added
 
-- **Per-URL config-fetch timeout (qfg-7h5d.1.10).** New `Options.configFetchTimeout`
-  (default ~3s) bounds each individual base-URL attempt on the initial fetch and the
-  fallback poller, so a hung or black-holed primary aborts fast and the SDK fails
-  over to the secondary inside `initTimeout` instead of starving it. Additive and
-  backward-compatible — the default already makes a hung upstream fail over.
 - **Canonical-ordering accessors and `Quonfig.refresh()` (qfg-7h5d.1.10).** New public
   `ready()`, `heldGeneration()`, `configInstallCount()`, `resolvedFrom()`, and
   `sseFailedOverToSecondary()` observe the failover/ordering state; `refresh()`
   performs one manual `[primary, secondary]` poll + guarded install. `Meta` now
   carries the `generation` watermark (decodes to 0 from servers that predate it).
+- **Per-URL config-fetch timeout (qfg-7h5d.1.10).** New `Options.configFetchTimeout`
+  (default ~3s) bounds each individual base-URL attempt on the initial fetch and the
+  fallback poller, so a hung or black-holed primary aborts fast and the SDK fails
+  over to the secondary inside `initTimeout` instead of starving it. Additive and
+  backward-compatible — the default already makes a hung upstream fail over.
+- **`Options.configFetchHedgeDelay` (default ~2s) and `Options.configFetchHedgeAbort`
+  (default ~6s).** Two additive, backward-compatible options tune the hedge: the
+  delay is how long the primary is given before the secondary is also fired; the
+  abort is the per-leg hard deadline (distinct from `configFetchTimeout`, which still
+  governs the sequential `refresh()`/fallback-poll path). The client logs a warning
+  at construction when `initTimeout <= configFetchHedgeAbort`.
 
 ### Changed
 
@@ -23,11 +29,6 @@
   stale secondary can seed a *fresh* client but can never move an *established* client
   backward, and a same-generation payload is a no-op (no flap, no `onConfigUpdate`).
   Mirrors the sdk-go pilot and the §5f cross-SDK contract.
-
-## 1.1.0 - 2026-06-19
-
-### Changed
-
 - **Parallel-failover hedge on the initial HTTP config fetch (qfg-7h5d.1.14).** The
   initial config fetch now fires the primary leg first and, only if it is slow past
   the hedge delay OR errors fast, ALSO fires the secondary leg **in parallel** —
@@ -37,15 +38,6 @@
   guard, so watermark-max falls out: the higher generation wins, a late older payload
   never regresses an established client, and a late newer payload heals forward.
   Readiness latches on the first successful install. Mirrors the sdk-go pilot.
-
-### Added
-
-- **`Options.configFetchHedgeDelay` (default ~2s) and `Options.configFetchHedgeAbort`
-  (default ~6s).** Two additive, backward-compatible options tune the hedge: the
-  delay is how long the primary is given before the secondary is also fired; the
-  abort is the per-leg hard deadline (distinct from `configFetchTimeout`, which still
-  governs the sequential `refresh()`/fallback-poll path). The client logs a warning
-  at construction when `initTimeout <= configFetchHedgeAbort`.
 
 ### Behavioral notes (backward-compatible)
 
