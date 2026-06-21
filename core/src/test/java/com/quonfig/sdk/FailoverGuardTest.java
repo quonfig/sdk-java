@@ -118,6 +118,51 @@ final class FailoverGuardTest {
     }
   }
 
+  /**
+   * Carve-out (qfg-7h5d.1.18): an established client must still install an UNVERSIONED snapshot
+   * (generation 0 — a server that predates the watermark, or one whose rev-count failed). It
+   * carries no ordering information, so the guard must not reject it as "older"; freezing the
+   * client on stale config would be worse. Mirrors sdk-node's long-standing carve-out.
+   */
+  @Test
+  void carveOut_installsUnversionedSnapshotOnEstablishedClient() throws Exception {
+    Upstream primary = Upstream.serving(42);
+    Upstream secondary = Upstream.serving(0);
+    int deadStream = closedPort();
+    try {
+      Quonfig client =
+          new Quonfig(
+              Options.builder()
+                  .sdkKey("test-key")
+                  .apiUrls(List.of(primary.url(), secondary.url()))
+                  .streamUrls(List.of("http://127.0.0.1:" + deadStream))
+                  .disableTelemetry(true)
+                  .fallbackPollEnabled(false)
+                  .initTimeout(Duration.ofSeconds(8))
+                  .build());
+      try {
+        // Establish on the primary at generation 42.
+        client.initFuture().get();
+        assertEquals(42, client.heldGeneration(), "should establish on primary gen 42");
+
+        // Primary goes away; a manual refresh fails over to the secondary's UNVERSIONED gen 0.
+        primary.stop();
+        Thread.sleep(200);
+        client.refresh();
+
+        // The carve-out must install gen 0 — never freeze the established client on 42.
+        assertEquals(
+            0, client.heldGeneration(), "gen-0 carve-out: unversioned snapshot must install");
+        assertEquals(2, client.configInstallCount(), "carve-out install must advance the count");
+      } finally {
+        client.close();
+      }
+    } finally {
+      primary.stop();
+      secondary.stop();
+    }
+  }
+
   // ---- helpers ----
 
   private interface BoolSupplier {

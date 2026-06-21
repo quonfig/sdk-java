@@ -470,6 +470,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *       client backward; a later, newer leg heals forward.
    *   <li>A same-generation snapshot is a no-op (not strictly greater), so an equal second leg
    *       can't re-install or flap.
+   *   <li>An unversioned snapshot (generation absent or {@code <= 0} — a server that predates the
+   *       watermark, or one whose rev-count failed) carries no ordering information, so it is never
+   *       rejected as "older"; freezing an established client on stale config would be worse.
    * </ul>
    *
    * <p>The decision and the install are made under {@link #installLock} so they are atomic with
@@ -480,8 +483,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private boolean installDelivery(ConfigEnvelope envelope, int sourceIndex) {
     int incoming = envelope.meta() != null ? envelope.meta().generation() : 0;
     synchronized (installLock) {
-      if (configInstalls != 0 && incoming <= heldGeneration) {
-        // Reject-older / same-generation: keep the held envelope, do not flap.
+      if (configInstalls != 0 && incoming > 0 && incoming <= heldGeneration) {
+        // Reject-older / same-generation: keep the held envelope, do not flap. An unversioned
+        // (incoming <= 0) snapshot carries no ordering info and falls through to install.
         return false;
       }
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
