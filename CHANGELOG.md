@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - 2026-06-19
+## 1.1.0 - 2026-07-01
 
 ### Added
 
@@ -29,6 +29,11 @@
   stale secondary can seed a *fresh* client but can never move an *established* client
   backward, and a same-generation payload is a no-op (no flap, no `onConfigUpdate`).
   Mirrors the sdk-go pilot and the §5f cross-SDK contract.
+- **Install-guard carve-out for unversioned snapshots.** A delivery payload whose
+  `generation` is absent or `<= 0` (e.g. from a server that predates the generation
+  watermark) is installed by an established client rather than rejected as older.
+  Defensive back-compat guard — with servers that emit true generations it never
+  triggers.
 - **Parallel-failover hedge on the initial HTTP config fetch (qfg-7h5d.1.14).** The
   initial config fetch now fires the primary leg first and, only if it is slow past
   the hedge delay OR errors fast, ALSO fires the secondary leg **in parallel** —
