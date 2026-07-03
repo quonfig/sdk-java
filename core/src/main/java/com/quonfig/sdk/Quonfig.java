@@ -136,9 +136,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private volatile boolean initialized;
 
   /**
-   * Set to {@code 0} when the SSE stream connects (it is pinned to the primary stream URL and never
-   * repoints). {@link #sseFailedOverToSecondary()} reports {@code sseStreamIndex > 0}; it is false
-   * by design and exists so the chaos suite can assert SSE never fails over (scenario f05).
+   * Highest stream-URL index the SSE stream has EVER connected on, as reported by {@link
+   * SseClient#connectedStreamIndex()}; {@code -1} until the first connect. {@link
+   * #sseFailedOverToSecondary()} reports {@code sseStreamIndex > 0}. Because {@link SseClient} pins
+   * the stream to {@code streamUrls[0]} (failover is HTTP-poll-only), this latches {@code 0} in
+   * practice — but it is derived from the transport's real connection state, not assumed, so the
+   * chaos suite's f05 assertion would catch a regression that reintroduces stream-leg walking.
    */
   private volatile int sseStreamIndex = -1;
 
@@ -661,10 +664,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             fpRef.setSseConnected(connected);
           }
           if (connected) {
-            // The SSE stream is pinned to the primary stream URL and deliberately never repoints to
-            // a secondary leg — failover is an HTTP-only property. Record the leg (always 0) so
-            // sseFailedOverToSecondary() can assert the stream stayed on primary (scenario f05).
-            sseStreamIndex = 0;
+            // Record the leg the stream ACTUALLY connected on (latching the max so
+            // sseFailedOverToSecondary() reports "ever left primary"). SseClient pins the
+            // stream to streamUrls[0] — failover is an HTTP-only property — so this records
+            // 0; deriving it from the transport rather than hardcoding it means the f05
+            // chaos assertion would catch a regression that walks the stream list again.
+            int leg = sse.connectedStreamIndex();
+            if (leg > sseStreamIndex) {
+              sseStreamIndex = leg;
+            }
             sup.setConnectionState(ConnectionState.CONNECTED);
           } else if (fpRef == null || !fpRef.active()) {
             // Skip the DISCONNECTED edge while fallback is already engaged so the visible
@@ -920,10 +928,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   /**
-   * Whether the live SSE stream ever repointed to a non-primary leg. Always {@code false} by design
-   * — SSE is pinned to the primary stream and failover is an HTTP-only property — and exists so the
-   * chaos suite can assert that invariant (scenario f05) and catch a regression that silently
-   * repoints the stream.
+   * Whether the live SSE stream ever connected on a non-primary leg. Always {@code false} by design
+   * — {@link SseClient} dials only {@code streamUrls[0]} and retries it forever; failover is an
+   * HTTP-only property. Unlike a hardcoded constant, this is derived from the transport's
+   * actually-connected leg ({@link SseClient#connectedStreamIndex()}, latched at its maximum), so
+   * the chaos suite's f05 assertion genuinely catches a regression that silently repoints the
+   * stream.
    */
   public boolean sseFailedOverToSecondary() {
     return sseStreamIndex > 0;
