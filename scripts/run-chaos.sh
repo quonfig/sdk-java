@@ -60,10 +60,16 @@ API_BIN="$SDK_JAVA_DIR/.chaos-api-delivery"
 ( cd "$REPO_ROOT/api-delivery" && GOWORK=off go build -o "$API_BIN" ./cmd/server )
 
 echo "==> starting api-delivery on :$API_PORT (FIXTURE_DIR=integration-test-data/data/integration-tests)"
+# SSE_HEARTBEAT_INTERVAL=1s mirrors sdk-go's wrapper (qfg-f26e). Production
+# heartbeats are 30s, but ChaosTest compresses the client read watchdog to 5s
+# (sseReadWatchdog) for speed, so the server must keepalive faster than that
+# or the watchdog trips before the first heartbeat lands and scenario
+# 01-baseline / 03-latency show spurious worker restarts.
 PORT="$API_PORT" \
   FIXTURE_DIR="$REPO_ROOT/integration-test-data/data/integration-tests" \
   SDK_KEYS_FILE="$REPO_ROOT/api-delivery/testdata/fixture-sdk-keys.json" \
   QUONFIG_ENVIRONMENT=development \
+  SSE_HEARTBEAT_INTERVAL=1s \
   "$API_BIN" &
 API_DELIVERY_PID=$!
 
@@ -87,7 +93,10 @@ CHAOS_UPSTREAM_HOST=host.docker.internal \
 
 echo "==> running chaos scenarios via gradle"
 cd "$SDK_JAVA_DIR"
+# --rerun: the CHAOS_* env knobs are read at runtime inside the test, so an
+# UP-TO-DATE Test task would silently skip every scenario (vacuous green).
+# Mirrors run-failover-chaos.sh.
 CHAOS_RUN=1 \
   CHAOS_API_DELIVERY_URL="http://127.0.0.1:$API_PORT" \
   CHAOS_FIXTURE_SDK_KEY="$FIXTURE_KEY" \
-  ./gradlew :core:test --tests "com.quonfig.sdk.chaos.ChaosTest" --info
+  ./gradlew :core:test --tests "com.quonfig.sdk.chaos.ChaosTest" --rerun --info
