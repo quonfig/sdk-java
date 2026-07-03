@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-07-03
 
 ### Fixed
 
@@ -13,11 +13,6 @@
   stamps; errors still never stamp. SSE installs are unchanged (install-gated — the
   canonical semantics sdk-net adopted in qfg-41nh.8). Liveness (`lastSuccessfulRefresh()`)
   and config freshness (`heldGeneration()`) are separate signals.
-
-## 1.1.1 - 2026-07-03
-
-### Fixed
-
 - **SSE stream pinned to the primary leg (qfg-41nh.7).** `SseClient` walked the full
   stream-URL list on every reconnect round, so while the primary stream was down the
   live stream silently repointed at the secondary — violating the design invariant
