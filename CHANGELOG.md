@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **SSE stream pinned to the primary leg (qfg-41nh.7).** `SseClient` walked the full
+  stream-URL list on every reconnect round, so while the primary stream was down the
+  live stream silently repointed at the secondary — violating the design invariant
+  that failover is HTTP-poll-only (chaos scenario f05). The stream now dials only
+  `streamUrls[0]`, retrying it forever with the existing backoff + read watchdog
+  (sdk-go semantics). The HTTP paths are unchanged: the hedged initial fetch,
+  `refresh()`, and the fallback poller still fail over across all `apiUrls`.
+- **`Quonfig.sseFailedOverToSecondary()` now reports real transport state.** It was
+  backed by a hardcoded `0` recorded on every SSE connect, which made the f05 chaos
+  assertion vacuous. It now derives from the leg the stream actually connected on
+  (new internal `SseClient.connectedStreamIndex()` accessor, latched at its maximum),
+  and the failover-chaos rig passes a live secondary stream URL as a canary so f05
+  genuinely fails if stream-leg walking is ever reintroduced.
+
 ## 1.1.0 - 2026-07-01
 
 ### Added

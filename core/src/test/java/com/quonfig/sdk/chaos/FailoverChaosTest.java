@@ -154,10 +154,14 @@ final class FailoverChaosTest {
 
     String primaryUrl = "http://127.0.0.1:" + RIG_PRIMARY_PORT;
     String secondaryUrl = "http://127.0.0.1:" + RIG_SECONDARY_PORT;
-    // SSE is HTTP-only-failover-exempt: when the scenario enables it, point the single stream leg
-    // at
-    // the sse proxy (primary upstream). When disabled, point it at a closed port so the SSE loop
-    // backs off quietly and the HTTP path is the only installer — matching sse_endpoint: disabled.
+    // SSE never fails over (f05): the SDK pins the stream to streamUrls[0]. Leg 0 is the sse
+    // proxy (primary upstream) when the scenario enables SSE, else a closed port so the pinned
+    // loop backs off quietly and the HTTP path is the only installer (sse_endpoint: disabled).
+    // Leg 1 points at the LIVE secondary proxy purely as a canary: with the pin it is never
+    // dialed; a regression that walks the stream list would connect it while the primary
+    // stream is down (f05's sse_down window), latch sseFailedOverToSecondary()=true via
+    // SseClient.connectedStreamIndex(), and fail the f05 assertion. (Passing a single stream
+    // URL here previously made that assertion vacuous — qfg-41nh.7.)
     String streamUrl =
         sseEnabled ? "http://127.0.0.1:" + RIG_SSE_PORT : "http://127.0.0.1:" + freePort();
 
@@ -188,7 +192,7 @@ final class FailoverChaosTest {
             Options.builder()
                 .sdkKey(FIXTURE_SDK_KEY)
                 .apiUrls(List.of(primaryUrl, secondaryUrl))
-                .streamUrls(List.of(streamUrl))
+                .streamUrls(List.of(streamUrl, secondaryUrl))
                 .disableTelemetry(true)
                 .initTimeout(RIG_INIT_TIMEOUT)
                 .configFetchTimeout(RIG_CONFIG_FETCH_TIMEOUT)
