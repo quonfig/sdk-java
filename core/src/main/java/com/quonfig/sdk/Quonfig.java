@@ -426,6 +426,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               } catch (IOException e) {
                 throw new java.util.concurrent.CompletionException(e);
               }
+              // An answered leg is a successful refresh whether or not it installed — a 304 or a
+              // guard-dropped 200 still proves the fetch loop is alive (qfg-41nh.15; sdk-go
+              // qfg-41nh.11 parity). A parse failure threw above and never stamps.
+              recordSuccessfulRefresh();
               // Latch readiness on the first leg to resolve successfully — complete initFuture and
               // start SSE exactly once. The first leg on a fresh client always installs (etag is
               // null, the generation guard accepts the first snapshot), so the latch coincides with
@@ -706,10 +710,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           http.get(URI.create(CONFIGS_PATH), null)
               .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
       // Reject-older guard: a fallback poll that fails over to an older secondary must not regress
-      // the held generation (qfg-7h5d.1.10). Only fire the update callbacks on an actual install.
-      if (installDeliveryBody(resp.body(), http.lastResolvedIndex())) {
-        Supervisor sup = this.supervisor;
-        if (sup != null) sup.recordSuccessfulRefresh();
+      // the held generation (qfg-7h5d.1.10). Only fire the update callbacks on an actual install —
+      // but an ANSWERED poll (304, or a 200 the guard dropped) is still a successful refresh, so
+      // it stamps liveness either way (qfg-41nh.15; sdk-go qfg-41nh.11 parity).
+      boolean installed =
+          resp.statusCode() != 304 && installDeliveryBody(resp.body(), http.lastResolvedIndex());
+      recordSuccessfulRefresh();
+      if (installed) {
         fireConfigUpdate();
       }
     } catch (Exception e) {
@@ -858,14 +865,30 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   /**
-   * Wall-clock time of the most recent successful envelope install (any source: initial HTTP fetch,
-   * SSE update, fallback poll, datadir, or datafile). {@code null} before the first install.
+   * Wall-clock time of the most recent successful refresh: an envelope install (any source —
+   * initial HTTP fetch, SSE update, fallback poll, datadir, or datafile) or an
+   * answered-but-not-installed HTTP config fetch — a 304, or a 200 whose same/older-generation
+   * envelope the reject-older guard dropped (qfg-41nh.15; sdk-go qfg-41nh.11 parity). A healthy
+   * client long-parked on same-generation answers stays fresh here: liveness (this) and config
+   * freshness ({@link #heldGeneration()}) are separate signals. Errors and SSE connection failures
+   * never stamp. {@code null} before the first install/answer.
    *
    * <p>Diagnostic surface only — do not wire into a Kubernetes liveness probe. See {@link
    * ConnectionState} for the rationale.
    */
   public Instant lastSuccessfulRefresh() {
     return lastRefreshAt;
+  }
+
+  /**
+   * Stamps "now" as the most recent successful refresh. Called on every ANSWERED HTTP config fetch
+   * (installed or not) and — via {@link #installRows} — on every install. Mirrors the supervisor's
+   * bookkeeping stamp when one exists.
+   */
+  private void recordSuccessfulRefresh() {
+    this.lastRefreshAt = Instant.now();
+    Supervisor sup = this.supervisor;
+    if (sup != null) sup.recordSuccessfulRefresh();
   }
 
   /**
@@ -955,9 +978,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       HttpResponse<String> resp =
           http.get(URI.create(CONFIGS_PATH), null)
               .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
-      if (installDeliveryBody(resp.body(), http.lastResolvedIndex())) {
-        Supervisor sup = this.supervisor;
-        if (sup != null) sup.recordSuccessfulRefresh();
+      // An answered poll (304, or a 200 whose envelope the reject-older guard dropped) is a
+      // successful refresh even when nothing installs; only an actual install fires the update
+      // callbacks (qfg-41nh.15; sdk-go qfg-41nh.11 parity).
+      boolean installed =
+          resp.statusCode() != 304 && installDeliveryBody(resp.body(), http.lastResolvedIndex());
+      recordSuccessfulRefresh();
+      if (installed) {
         fireConfigUpdate();
       }
     } catch (Exception e) {

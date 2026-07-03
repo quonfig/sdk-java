@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`lastSuccessfulRefresh()` now advances on answered-but-not-installed HTTP fetches
+  (qfg-41nh.15; sdk-go qfg-41nh.11 parity).** `refresh()`, the Layer 2 fallback poller,
+  and the hedged init legs stamped the refresh clock only when an envelope actually
+  installed, so a healthy client long-parked on same-generation answers (or 304s)
+  under-reported liveness — the mechanism behind the sdk-go qfg-sc90 chaos red. An
+  answered leg — a 304, or a 200 whose envelope the reject-older guard dropped — now
+  stamps; errors still never stamp. SSE installs are unchanged (install-gated — the
+  canonical semantics sdk-net adopted in qfg-41nh.8). Liveness (`lastSuccessfulRefresh()`)
+  and config freshness (`heldGeneration()`) are separate signals.
+
 ## 1.1.1 - 2026-07-03
 
 ### Fixed
