@@ -46,6 +46,14 @@ jobs:
   chaos:
     name: Chaos (${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && 'full' || inputs.mode || 'smoke' }})
     runs-on: ubuntu-latest
+    # NOTE: the run step computes MODE with `&& 'full'` (a truthy literal),
+    # NOT the `&& '' || '11'` idiom the sibling repos' chaos.yaml uses for
+    # CHAOS_SKIP — in GitHub expressions `''` is falsy, so `x && '' || y`
+    # ALWAYS yields y and a "full" run silently skips scenario 11 (caught
+    # here on the first dispatch: the job was named "full" but env showed
+    # CHAOS_SKIP=11). CHAOS_SKIP is derived from MODE in shell, where the
+    # empty string behaves.
+    #
     # Smoke ~18 min; full ~48 min. Cap at 75 min to allow for warmup +
     # docker pull + gradle/api-delivery builds. Each scenario fails fast
     # inside the JUnit test via its own wall_clock_seconds, so this only
@@ -124,10 +132,21 @@ jobs:
         if: env.HAS_REPO_TOKEN == 'true'
         working-directory: sdk-java
         env:
+          # smoke on push/PR; full on tag pushes and workflow_call/dispatch
+          # with mode=full. See the job-level NOTE for why this avoids the
+          # `&& '' || '11'` expression idiom.
+          MODE: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) && 'full' || inputs.mode || 'smoke' }}
+        run: |
           # Smoke skips 11-null-hypothesis (30 min idle). Full suite runs
           # everything. The wrapper honors CHAOS_SKIP.
-          CHAOS_SKIP: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || inputs.mode == 'full' && '' || '11' }}
-        run: ./scripts/run-chaos.sh
+          if [ "$MODE" = "full" ]; then
+            CHAOS_SKIP=""
+          else
+            CHAOS_SKIP="11"
+          fi
+          export CHAOS_SKIP
+          echo "mode=$MODE CHAOS_SKIP=${CHAOS_SKIP:-<none>}"
+          ./scripts/run-chaos.sh
 
       - name: Upload chaos logs on failure
         if: failure()
