@@ -208,9 +208,15 @@ class SseClientTest {
     assertEquals(1, callbacks.get(), "keepalive comments must not trigger envelope callback");
   }
 
-  /** Primary URL refuses every connection; secondary serves an event. */
+  /**
+   * The f05 invariant: SSE is PINNED to {@code streamUrls[0]} — failover is an HTTP-poll-only
+   * property. Even when the primary stream fails repeatedly, the client must retry it forever
+   * (backoff) and NEVER dial {@code streamUrls[1]}. The primary here fails the first three
+   * connects, then serves — proving both the pin (secondary hits stay 0) and retry-forever recovery
+   * (the envelope eventually arrives from the primary).
+   */
   @Test
-  void failsOverFromPrimaryToSecondary() throws Exception {
+  void pinsToPrimaryStreamAndNeverDialsSecondary() throws Exception {
     BlockingQueue<ConfigEnvelope> received = new LinkedBlockingQueue<>();
     AtomicInteger primaryHits = new AtomicInteger(0);
     AtomicInteger secondaryHits = new AtomicInteger(0);
@@ -218,9 +224,23 @@ class SseClientTest {
     HttpServer primary =
         start(
             (HttpExchange ex) -> {
-              primaryHits.incrementAndGet();
-              ex.sendResponseHeaders(503, -1);
-              ex.close();
+              int n = primaryHits.incrementAndGet();
+              if (n <= 3) {
+                ex.sendResponseHeaders(503, -1);
+                ex.close();
+                return;
+              }
+              ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+              ex.sendResponseHeaders(200, 0);
+              OutputStream out = ex.getResponseBody();
+              try {
+                writeFrame(out, "vP", "{\"meta\":{\"version\":\"vP\"},\"configs\":[]}");
+                Thread.sleep(2000);
+              } catch (IOException | InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+              } finally {
+                ex.close();
+              }
             });
     HttpServer secondary =
         start(
@@ -250,10 +270,13 @@ class SseClientTest {
     client.start();
 
     ConfigEnvelope env = received.poll(5, TimeUnit.SECONDS);
-    assertNotNull(env, "expected envelope from secondary; primary=" + primaryHits.get());
-    assertEquals("vS", env.meta().version());
-    assertTrue(primaryHits.get() >= 1, "expected primary to be tried first");
-    assertTrue(secondaryHits.get() >= 1, "expected secondary fallback");
+    assertNotNull(env, "expected envelope from recovered primary; primary=" + primaryHits.get());
+    assertEquals("vP", env.meta().version(), "envelope must come from the pinned primary stream");
+    assertTrue(
+        primaryHits.get() >= 4,
+        "expected the primary to be retried through its failures, got " + primaryHits.get());
+    assertEquals(
+        0, secondaryHits.get(), "SSE must never dial streamUrls[1] — failover is HTTP-only (f05)");
   }
 
   /**
@@ -358,6 +381,55 @@ class SseClientTest {
         1,
         attempts.get(),
         "watchdog must not fire while keepalives flow; attempts=" + attempts.get());
+  }
+
+  /**
+   * {@link SseClient#connectedStreamIndex()} must report real transport state: -1 before any
+   * connection, 0 (the pinned primary leg) inside a connected=true state callback, and -1 again
+   * after stop().
+   */
+  @Test
+  void connectedStreamIndexTracksPinnedLeg() throws Exception {
+    BlockingQueue<Integer> indexAtConnect = new LinkedBlockingQueue<>();
+
+    HttpServer s =
+        start(
+            (HttpExchange ex) -> {
+              ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+              ex.sendResponseHeaders(200, 0);
+              OutputStream out = ex.getResponseBody();
+              try {
+                writeFrame(out, "v1", "{\"meta\":{\"version\":\"v1\"},\"configs\":[]}");
+                Thread.sleep(2000);
+              } catch (IOException | InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+              } finally {
+                ex.close();
+              }
+            });
+
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s), URI.create("http://127.0.0.1:1")))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .build();
+    assertEquals(-1, client.connectedStreamIndex(), "must be -1 before start");
+    SseClient captured = client;
+    client.onEnvelope(env -> {});
+    client.onConnectionStateChange(
+        connected -> {
+          if (connected) indexAtConnect.add(captured.connectedStreamIndex());
+        });
+    client.start();
+
+    Integer idx = indexAtConnect.poll(5, TimeUnit.SECONDS);
+    assertNotNull(idx, "expected a connected=true edge");
+    assertEquals(0, idx, "connected leg must be the pinned primary (index 0)");
+
+    client.stop();
+    assertEquals(-1, client.connectedStreamIndex(), "must be -1 again after stop()");
   }
 
   /** stop() must unwind a connected reader within a couple of seconds. */

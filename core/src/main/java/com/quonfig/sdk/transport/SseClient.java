@@ -40,8 +40,12 @@ import org.slf4j.LoggerFactory;
  *       enough that pulling in an SSE library would obscure rather than clarify.
  *   <li>Auth mirrors {@link HttpTransport}: HTTP Basic with username {@code 1}, password = sdkKey,
  *       plus {@code X-Quonfig-SDK-Version} and {@code Accept: text/event-stream}.
- *   <li>Failover walks {@link Builder#streamUrls(List)} in order on each (re)connect attempt; the
- *       first base URL that returns 200 wins. The path {@code /api/v2/sse/config} is appended.
+ *   <li>The stream is PINNED to the first entry of {@link Builder#streamUrls(List)} — it never
+ *       fails over to a later leg. A downed primary stream is retried forever with backoff;
+ *       failover is an HTTP-poll-only property (chaos scenario f05), so a stream herd never lands
+ *       on the secondary and freshness is never silently bound to the mirror. Mirrors sdk-go
+ *       ({@code startSSE} → {@code streamURLFor(0)}). The path {@code /api/v2/sse/config} is
+ *       appended.
  *   <li>Reconnect: exponential backoff (initialDelay → maxDelay) with jitter, reset to initial on a
  *       successful event-bearing connection. Server-initiated disconnects (LB recycling, 30s
  *       comment heartbeats that eventually drop the socket) are non-fatal.
@@ -83,6 +87,12 @@ public final class SseClient {
   // respond to Thread.interrupt(); the only reliable wakeup is to close the
   // underlying InputStream.
   private volatile InputStream activeBody;
+
+  // Index into streamUrls of the leg the stream is connected on right now; -1 while
+  // disconnected. Derived from the in-flight connection in connectOnce (not assumed),
+  // so Quonfig.sseFailedOverToSecondary() reports real transport state. With the pin
+  // in runLoop this is only ever -1 or 0; a reintroduced list-walk would surface here.
+  private volatile int connectedStreamIndex = -1;
 
   private SseClient(Builder b) {
     Objects.requireNonNull(b.streamUrls, "streamUrls");
@@ -131,6 +141,21 @@ public final class SseClient {
     this.stateHandler = handler;
   }
 
+  /**
+   * Index into {@link Builder#streamUrls(List)} of the leg the stream is connected on right now, or
+   * {@code -1} while disconnected. Derived from the actual in-flight connection rather than
+   * assumed, so a caller asserting the SSE-pinned-to-primary invariant (chaos scenario f05) would
+   * observe a non-zero index if stream-leg walking were ever reintroduced. Because {@link #runLoop}
+   * pins the stream to the first entry, this only ever returns {@code -1} or {@code 0} by design.
+   *
+   * <p>Inside an {@link #onConnectionStateChange} {@code connected=true} callback this is
+   * guaranteed to reflect the leg that just connected (it is written before the edge fires, on the
+   * same thread).
+   */
+  public int connectedStreamIndex() {
+    return connectedStreamIndex;
+  }
+
   /** Starts the background reconnect loop. Idempotent. */
   public void start() {
     if (!started.compareAndSet(false, true)) {
@@ -176,19 +201,14 @@ public final class SseClient {
 
   private void runLoop() {
     Duration delay = initialDelay;
+    // PINNED to streamUrls[0]: the stream never walks the rest of the list. Failover is an
+    // HTTP-poll-only property (f05) — while the primary stream is down the client retries it
+    // forever with backoff and freshness degrades to the HTTP fallback path (which DOES fail
+    // over across apiUrls) until the primary stream heals.
+    URI primary = streamUrls.get(0);
     try {
       while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
-        boolean connectedOK = false;
-        for (URI base : streamUrls) {
-          if (stopped.get() || Thread.currentThread().isInterrupted()) {
-            return;
-          }
-          if (connectOnce(base)) {
-            connectedOK = true;
-            // Successful 200 (and parse loop) — stop walking the failover list.
-            break;
-          }
-        }
+        boolean connectedOK = connectOnce(primary);
         if (stopped.get() || Thread.currentThread().isInterrupted()) {
           return;
         }
@@ -270,11 +290,16 @@ public final class SseClient {
         }
         return false;
       }
+      // Record the ACTUAL leg this connection landed on before firing the connected
+      // edge, so state-change handlers (Quonfig records it for the f05 assertion)
+      // observe a consistent index. With the runLoop pin this is always 0.
+      connectedStreamIndex = streamUrls.indexOf(base);
       setConnected(true);
       try {
         parseStream(body);
       } finally {
         setConnected(false);
+        connectedStreamIndex = -1;
       }
       return true;
     } catch (IOException e) {
@@ -437,7 +462,11 @@ public final class SseClient {
     private Duration readWatchdog;
     private HttpClient httpClient;
 
-    /** Primary stream URL first; subsequent entries are tried on failure of the prior. */
+    /**
+     * Primary stream URL first. Only the first entry is ever dialed — the stream is pinned to the
+     * primary leg and never fails over (failover is HTTP-only, scenario f05). Later entries are
+     * accepted for wiring symmetry with {@code Options.streamUrls()} but are never contacted.
+     */
     public Builder streamUrls(List<URI> streamUrls) {
       this.streamUrls = streamUrls;
       return this;
