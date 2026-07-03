@@ -140,6 +140,20 @@ final class ChaosProbe {
     }
   }
 
+  /**
+   * Records a Layer 1 worker-restart-equivalent WITHOUT a connection-state edge. sdk-java catches
+   * user-callback throws at the SDK boundary ({@code fireConfigUpdate} logs at ERROR and continues,
+   * qfg-srj8) rather than crashing and restarting a worker, so the chaos metric counts each caught
+   * throw as a recovery — scenario 10's {@code worker_restart_total >= 1} observes "the SDK
+   * survived the throw", exactly like sdk-net's probe (qfg-41nh.15). Healthy scenarios never log
+   * the signal, so 01/11's {@code == 0} asserts are unaffected.
+   */
+  void incRestartLayer1() {
+    synchronized (lock) {
+      restartLayer1++;
+    }
+  }
+
   void log(String level, String message) {
     synchronized (lock) {
       logs.add(new LogLine(level, message));

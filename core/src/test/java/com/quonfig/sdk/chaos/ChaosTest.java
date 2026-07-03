@@ -564,6 +564,12 @@ final class ChaosTest {
         msg = msg + " | " + throwable;
       }
       probe.log(level.name().toLowerCase(), msg);
+      // A caught user-callback throw is sdk-java's worker-restart-equivalent: the SDK logs and
+      // continues instead of crashing a worker, so scenario 10's worker_restart_total assert
+      // observes the recovery through this log signal (sdk-net probe parity, qfg-41nh.15).
+      if (msg != null && msg.contains("onConfigUpdate callback threw")) {
+        probe.incRestartLayer1();
+      }
     }
 
     @Override
