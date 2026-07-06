@@ -47,6 +47,41 @@ Quonfig q = new Quonfig(opts);
 QuonfigLogbackTurboFilter.install(q);   // or QuonfigLog4j2Filter.install(q);
 ```
 
+## Failover & `QUONFIG_DOMAIN`
+
+By default the SDK derives every hostname from `QUONFIG_DOMAIN` (default `quonfig.com`):
+
+| Role                     | URL                                     |
+|--------------------------|-----------------------------------------|
+| Config fetch (primary)   | `https://primary.quonfig.com`           |
+| SSE stream (primary)     | `https://stream.primary.quonfig.com`    |
+| Config fetch (secondary) | `https://secondary.quonfig.com`         |
+| SSE stream (secondary)   | `https://stream.secondary.quonfig.com`  |
+| Telemetry                | `https://telemetry.quonfig.com`         |
+
+Set `QUONFIG_DOMAIN` (or `Options.builder().domain(...)`) to move all of them together — e.g.
+`QUONFIG_DOMAIN=quonfig-staging.com`. **Automatic failover and hedging between the primary and the
+secondary are on by default** — the secondary runs on separate infrastructure, and the SDK fails
+over to it if the primary is unreachable and hedges to it if the primary is slow.
+
+`apiUrls(...)` replaces the derived list wholesale. To keep automatic failover with custom URLs,
+**pass both a primary and a secondary URL**:
+
+```java
+Quonfig q =
+    new Quonfig(
+        Options.builder()
+            .sdkKey("your-sdk-key")
+            .apiUrls(
+                List.of(
+                    "https://primary.your-proxy.example",
+                    "https://secondary.your-proxy.example"))
+            .build());
+```
+
+A single URL disables failover, and the SDK logs a warning at init. See
+[Reliability](https://docs.quonfig.com/docs/explanations/architecture/resiliency) for the full model.
+
 ## Datadir mode: auto-reload on file changes
 
 When you build a `Quonfig` client with `Options.builder().datadir("./path")`, configs are loaded

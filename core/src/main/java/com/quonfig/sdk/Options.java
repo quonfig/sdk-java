@@ -71,6 +71,7 @@ public final class Options {
   private final String sdkKey;
   private final String domain;
   private final List<String> apiUrls;
+  private final boolean apiUrlsExplicit;
   private final List<String> streamUrlsOverride;
   private final String telemetryUrl;
   private final String environment;
@@ -117,6 +118,11 @@ public final class Options {
         b.environment != null ? b.environment : env.lookup("QUONFIG_ENVIRONMENT").orElse(null);
 
     String d = this.domain;
+    // Track whether the caller explicitly supplied apiUrls: the derived default carries BOTH a
+    // primary and a secondary leg (so failover/hedge is on), but an explicit override replaces the
+    // list wholesale, so a single-entry override silently drops the secondary. Consumed by the
+    // init-time failover warning in Quonfig (qfg-41nh.26).
+    this.apiUrlsExplicit = b.apiUrls != null;
     this.apiUrls =
         b.apiUrls != null
             ? List.copyOf(b.apiUrls)
@@ -230,6 +236,16 @@ public final class Options {
 
   public List<String> apiUrls() {
     return apiUrls;
+  }
+
+  /**
+   * Whether the caller supplied {@link Builder#apiUrls(List)} explicitly (as opposed to the list
+   * being derived from {@link #domain()}). The derived default always carries both a primary and a
+   * secondary leg; an explicit single-entry override drops the secondary and disables automatic
+   * failover. Used to warn once at init in that case (qfg-41nh.26).
+   */
+  public boolean apiUrlsExplicit() {
+    return apiUrlsExplicit;
   }
 
   public String telemetryUrl() {

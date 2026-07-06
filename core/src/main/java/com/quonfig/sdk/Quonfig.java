@@ -236,6 +236,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                 options.initTimeout(),
                 options.configFetchHedgeAbort());
       }
+      // A single explicit apiUrls entry disables automatic failover: the SDK's default (and every
+      // QUONFIG_DOMAIN-derived) URL list carries both a primary and a secondary leg, and the SDK
+      // hedges/fails over between them. An explicit apiUrls override replaces that list wholesale,
+      // so a one-entry override silently drops the secondary. Warn once at init (qfg-41nh.26;
+      // sdk-go parity). A two-URL override, and the derived default, keep failover and stay quiet.
+      if (options.apiUrlsExplicit() && options.apiUrls().size() < 2) {
+        options
+            .logger()
+            .warn(
+                "quonfig: explicit apiUrls disables automatic failover to the secondary; pass both "
+                    + "primary and secondary URLs to keep it");
+      }
       this.initFuture = new CompletableFuture<>();
       Thread t = new Thread(this::runInit, "quonfig-init");
       t.setDaemon(true);
