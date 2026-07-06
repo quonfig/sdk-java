@@ -29,6 +29,7 @@ public final class TelemetryReporter implements AutoCloseable {
   private final EvaluationSummaryCollector summaries;
   private final ContextShapeCollector shapes;
   private final ExampleContextCollector examples;
+  private final FailoverCollector failover;
   private final Duration initialDelay;
   private final Duration baseInterval;
   private final Duration maxInterval;
@@ -47,11 +48,34 @@ public final class TelemetryReporter implements AutoCloseable {
       Duration initialDelay,
       Duration baseInterval,
       Duration maxInterval) {
+    this(
+        sender,
+        instanceHash,
+        summaries,
+        shapes,
+        examples,
+        null,
+        initialDelay,
+        baseInterval,
+        maxInterval);
+  }
+
+  public TelemetryReporter(
+      TelemetrySender sender,
+      String instanceHash,
+      EvaluationSummaryCollector summaries,
+      ContextShapeCollector shapes,
+      ExampleContextCollector examples,
+      FailoverCollector failover,
+      Duration initialDelay,
+      Duration baseInterval,
+      Duration maxInterval) {
     this.sender = sender;
     this.instanceHash = instanceHash;
     this.summaries = summaries;
     this.shapes = shapes;
     this.examples = examples;
+    this.failover = failover;
     this.initialDelay = initialDelay;
     this.baseInterval = baseInterval;
     this.maxInterval = maxInterval;
@@ -139,13 +163,17 @@ public final class TelemetryReporter implements AutoCloseable {
   }
 
   private Map<String, Object> buildEnvelope() {
-    List<Map<String, Object>> events = new ArrayList<>(3);
+    List<Map<String, Object>> events = new ArrayList<>(4);
     Map<String, Object> s = summaries.drain();
     if (s != null) events.add(s);
     Map<String, Object> sh = shapes.drain();
     if (sh != null) events.add(sh);
     Map<String, Object> ex = examples.drain();
     if (ex != null) events.add(ex);
+    if (failover != null) {
+      Map<String, Object> fo = failover.drain();
+      if (fo != null) events.add(fo);
+    }
     if (events.isEmpty()) return null;
 
     Map<String, Object> envelope = new LinkedHashMap<>();

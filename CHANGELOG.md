@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Failover-observability telemetry (qfg-41nh.18; sdk-go parity).** The SDK now folds
+  three failover-behavior counters into the existing periodic telemetry flush so the
+  failover dashboards can be built: `hedgeFired` (config-fetch cycles whose parallel
+  init hedge fired its secondary leg), `guardRejected` (installs the reject-older
+  ordering guard dropped, on both the HTTP config-fetch path and the SSE message path),
+  and `resolvedFromPrimary` / `resolvedFromSecondary` (which upstream leg served each
+  successful HTTP install; SSE installs are not counted). A new internal
+  `FailoverCollector` accumulates the counters and is drained into the flush via the
+  same pattern as the eval-summary and context collectors, emitting a `failover` event
+  only when at least one counter is non-zero — a healthy steady-state client sends
+  nothing. The counters carry no user data and ride any enabled telemetry stream
+  regardless of the eval/context opt-outs; they respect the full telemetry opt-out
+  (`disableTelemetry`). The wire shape is additive, so an older api-telemetry strips the
+  unknown field. No new dependencies. `hedgeFired` reflects the init-only parallel
+  hedge; `refresh()` and the Layer 2 fallback poller walk the leg list sequentially and
+  never fire a parallel hedge, so they contribute only guard-rejected / resolved-from
+  signals.
+
 ## 1.1.1 - 2026-07-03
 
 ### Fixed

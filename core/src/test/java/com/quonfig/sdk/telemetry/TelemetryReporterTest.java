@@ -257,6 +257,53 @@ class TelemetryReporterTest {
   }
 
   @Test
+  void failoverEventRidesTheFlushWithEvalAndContextCollectionOff() throws IOException {
+    // Eval-summary collection OFF and context mode NONE: the failover event must still ride the
+    // flush (it carries no user data and is the operational failover signal). Mirrors sdk-go's
+    // submitter round-trip.
+    EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(false);
+    ContextShapeCollector shapes = new ContextShapeCollector(ContextUploadMode.NONE);
+    ExampleContextCollector examples = new ExampleContextCollector(ContextUploadMode.NONE);
+    FailoverCollector failover = new FailoverCollector();
+
+    failover.recordHedgeFired();
+    failover.recordGuardRejected();
+    failover.recordResolvedFrom(0);
+    failover.recordResolvedFrom(1);
+
+    CapturingSender sender = new CapturingSender();
+    TelemetryReporter reporter =
+        new TelemetryReporter(
+            sender,
+            "instance-hash",
+            summaries,
+            shapes,
+            examples,
+            failover,
+            Duration.ofMillis(8000),
+            Duration.ofMillis(60_000),
+            Duration.ofMillis(600_000));
+
+    reporter.flush();
+
+    assertEquals(1, sender.sent.size());
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> events = (List<Map<String, Object>>) sender.sent.get(0).get("events");
+    assertEquals(1, events.size(), "only the failover event should be present");
+    Map<String, Object> event = events.get(0);
+    assertTrue(event.containsKey("failover"));
+    @SuppressWarnings("unchecked")
+    Map<String, Object> f = (Map<String, Object>) event.get("failover");
+    assertNotNull(f.get("start"));
+    assertNotNull(f.get("end"));
+    assertEquals(1L, ((Number) f.get("hedgeFired")).longValue());
+    assertEquals(1L, ((Number) f.get("guardRejected")).longValue());
+    assertEquals(1L, ((Number) f.get("resolvedFromPrimary")).longValue());
+    assertEquals(1L, ((Number) f.get("resolvedFromSecondary")).longValue());
+    assertEquals(0L, ((Number) f.get("resolvedFromLkg")).longValue());
+  }
+
+  @Test
   void schemaShapeMatchesApiTelemetry() throws IOException {
     EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(true);
     ContextShapeCollector shapes = new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE);

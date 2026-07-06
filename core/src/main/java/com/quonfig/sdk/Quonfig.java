@@ -19,6 +19,7 @@ import com.quonfig.sdk.telemetry.ContextUploadMode;
 import com.quonfig.sdk.telemetry.EvaluationStat;
 import com.quonfig.sdk.telemetry.EvaluationSummaryCollector;
 import com.quonfig.sdk.telemetry.ExampleContextCollector;
+import com.quonfig.sdk.telemetry.FailoverCollector;
 import com.quonfig.sdk.telemetry.HttpTelemetrySender;
 import com.quonfig.sdk.telemetry.TelemetryReporter;
 import com.quonfig.sdk.telemetry.TelemetrySender;
@@ -154,6 +155,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final EvaluationSummaryCollector summaryCollector;
   private final ContextShapeCollector shapeCollector;
   private final ExampleContextCollector exampleCollector;
+
+  /**
+   * Failover-observability counters (qfg-41nh.18) folded into the periodic telemetry flush.
+   * Non-null exactly when telemetry is enabled — the counters carry no user data and are the
+   * operational signal for the secondary-delivery hardening, so they ride any enabled telemetry
+   * stream regardless of the eval/context opt-outs (mirrors sdk-go). {@code null} when telemetry is
+   * disabled, so the record helpers are quiet no-ops.
+   */
+  private final FailoverCollector failoverCollector;
+
   private final TelemetryReporter telemetryReporter;
 
   public Quonfig(Options options) {
@@ -237,6 +248,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       this.summaryCollector = new EvaluationSummaryCollector(options.collectEvaluationSummaries());
       this.shapeCollector = new ContextShapeCollector(mode);
       this.exampleCollector = new ExampleContextCollector(mode);
+      this.failoverCollector = new FailoverCollector();
       this.telemetryReporter =
           new TelemetryReporter(
               sender,
@@ -244,6 +256,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               summaryCollector,
               shapeCollector,
               exampleCollector,
+              failoverCollector,
               options.telemetryInitialDelay(),
               options.telemetryFlushInterval(),
               options.telemetryMaxInterval());
@@ -252,6 +265,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       this.summaryCollector = null;
       this.shapeCollector = null;
       this.exampleCollector = null;
+      this.failoverCollector = null;
       this.telemetryReporter = null;
     }
   }
@@ -377,6 +391,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     primaryLeg.exceptionally(t -> null).join();
     CompletableFuture<Void> sec = secondaryLeg.get();
     if (sec != null) {
+      // The hedge fired its secondary leg this cycle (the primary was slow or errored). Recorded
+      // once per hedged cycle regardless of which leg's payload won the guard (qfg-41nh.18). The
+      // hedge is init-only in sdk-java; refresh()/fallback-poll walk the leg list sequentially and
+      // never fire a parallel hedge, so this is the sole hedge-fired site.
+      recordHedgeFired();
       sec.exceptionally(t -> null).join();
     }
 
@@ -493,6 +512,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (configInstalls != 0 && incoming > 0 && incoming <= heldGeneration) {
         // Reject-older / same-generation: keep the held envelope, do not flap. An unversioned
         // (incoming <= 0) snapshot carries no ordering info and falls through to install.
+        // Count the guard rejection for failover observability on every install path — the HTTP
+        // reject-older drop AND the SSE guard no-op both funnel through here (qfg-41nh.18).
+        recordGuardRejected();
         return false;
       }
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
@@ -501,6 +523,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       configInstalls++;
       if (sourceIndex >= 0) {
         resolvedFromIndex = sourceIndex;
+        // Failover observability: record which leg (primary/secondary) served this successful HTTP
+        // install. SSE installs pass sourceIndex=-1 and are not counted (qfg-41nh.18).
+        recordResolvedFrom(sourceIndex);
       }
       return true;
     }
@@ -889,6 +914,33 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     this.lastRefreshAt = Instant.now();
     Supervisor sup = this.supervisor;
     if (sup != null) sup.recordSuccessfulRefresh();
+  }
+
+  /**
+   * Records one config-fetch cycle whose hedge fired the secondary leg. Quiet no-op when telemetry
+   * is disabled ({@link #failoverCollector} is {@code null}).
+   */
+  private void recordHedgeFired() {
+    FailoverCollector fc = this.failoverCollector;
+    if (fc != null) fc.recordHedgeFired();
+  }
+
+  /**
+   * Records one install dropped by the reject-older ordering guard (HTTP or SSE). Quiet no-op when
+   * telemetry is disabled.
+   */
+  private void recordGuardRejected() {
+    FailoverCollector fc = this.failoverCollector;
+    if (fc != null) fc.recordGuardRejected();
+  }
+
+  /**
+   * Records one successful HTTP install by the leg that served it ({@code sourceIndex} 0 = primary,
+   * &gt; 0 = secondary; negative ignored). Quiet no-op when telemetry is disabled.
+   */
+  private void recordResolvedFrom(int sourceIndex) {
+    FailoverCollector fc = this.failoverCollector;
+    if (fc != null) fc.recordResolvedFrom(sourceIndex);
   }
 
   /**
