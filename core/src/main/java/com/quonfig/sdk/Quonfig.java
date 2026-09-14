@@ -527,14 +527,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         // (incoming <= 0) snapshot carries no ordering info and falls through to install.
         //
         // Accounting (qfg-rr5b, narrows qfg-41nh.18): only a STRICTLY older payload is counted as
-        // a guard rejection. `guardRejected` feeds the sdk_failover alerting signal, where it means
-        // "a leg tried to move us backwards" — but two healthy server behaviors re-deliver the
-        // generation the client already holds (api-delivery's SSE connect-time snapshot resend, and
-        // a config poll whose per-leg ETag slot is empty: a fresh transport, a reconnect, the
-        // fallback poller's engage-time fetch), so counting equal generations read as failover
-        // noise on a perfectly healthy client. An equal-generation re-delivery is a silent no-op:
-        // still not installed, still advances liveness exactly where it did before, but not
-        // counted.
+        // a guard rejection — "a leg tried to move us backwards" is the one thing guardRejected is
+        // meant to report, and what the sdk_failover dashboard panel reads. Two healthy server
+        // behaviors re-deliver the generation the client already holds: api-delivery re-sends the
+        // current envelope on every SSE connect (this SDK sends no Last-Event-Id), and a config
+        // poll whose per-leg ETag slot is empty (a fresh transport, a reconnect, the fallback
+        // poller's engage-time fetch) answers with a full 200 at the same generation. Counting
+        // those made a healthy client report failover activity it never had. An equal-generation
+        // re-delivery is a silent no-op: still not installed, still advances liveness exactly where
+        // it did before, but not counted.
         // Applies to every install path — the HTTP reject-older drop AND the SSE guard no-op both
         // funnel through here.
         if (incoming < heldGeneration) {

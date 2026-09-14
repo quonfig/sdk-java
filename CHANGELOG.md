@@ -12,19 +12,22 @@
   `guardRejected`. An equal-generation re-delivery is now a silent no-op (it logs a DEBUG
   line and counts nothing).
 
-  Why: `guardRejected` feeds the `sdk_failover` alerting signal, where it means "a leg tried
-  to move us backwards". But two perfectly healthy server behaviors re-deliver the envelope
-  the client already holds at the same generation — api-delivery re-sends the current
-  envelope on every SSE connect (so every reconnect scored one), and a config poll returns a
-  full 200 whenever the per-leg ETag slot is empty (a fresh transport, a reconnect, the
-  fallback poller's engage-time fetch). Those drops were counted as failover events, so the
-  field reported ordering trouble on clients that had none.
+  Why: `guardRejected` exists to say "a leg tried to move us backwards" — that is what the
+  `sdk_failover` dashboard panel reads it as. But two perfectly healthy server behaviors
+  re-deliver the envelope the client already holds at the same generation: api-delivery
+  re-sends the current envelope on every SSE connect (this SDK sends no `Last-Event-Id`, so
+  every reconnect scored one), and a config poll answers with a full 200 whenever the per-leg
+  ETag slot is empty (a fresh transport, a reconnect, the fallback poller's engage-time
+  fetch). Those drops were counted as failover events, so the field reported ordering trouble
+  on clients that had none.
 
   **Operator note — the field now reads LOWER than on 1.2.0 for identical traffic.** If you
-  chart or alert on `guardRejected`, expect a step down after upgrading: steady-state
-  clients that previously reported a non-zero count from SSE reconnects and cold-ETag polls
-  alone will report 0. A non-zero value now means what it was always supposed to mean: a leg
-  actually served an older generation than the one held.
+  chart `guardRejected`, expect a step down after upgrading: steady-state clients that
+  previously reported a non-zero count from SSE reconnects and cold-ETag polls alone will
+  report 0. A non-zero value now means what it was always supposed to mean: a leg actually
+  served an older generation than the one held. This is the Java half of a change landing in
+  all six backend SDKs (sdk-ruby 1.4.1 and sdk-python 1.4.1 shipped it first; Go, .NET and
+  Node follow), so counts may differ across languages until then.
 
   No wire, ClickHouse, or dashboard-query change — the field shape is identical and only
   becomes accurate. The unversioned carve-out (`generation` absent or `<= 0`, which installs
