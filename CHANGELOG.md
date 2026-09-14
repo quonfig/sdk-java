@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.2.1 - 2026-09-14
+
+### Changed
+
+- **`guardRejected` telemetry now counts only STRICTLY older payloads (qfg-q18o; cross-SDK
+  decision qfg-rr5b).** The reject-older install guard's *behavior* is unchanged — an
+  equal-or-older envelope is still dropped, still does not install, and still stamps
+  `lastSuccessfulRefresh()` exactly where it did before. What changed is the accounting:
+  only an incoming generation **strictly less than** the held generation is counted as
+  `guardRejected`. An equal-generation re-delivery is now a silent no-op (it logs a DEBUG
+  line and counts nothing).
+
+  Why: `guardRejected` feeds the `sdk_failover` alerting signal, where it means "a leg tried
+  to move us backwards". But two perfectly healthy server behaviors re-deliver the envelope
+  the client already holds at the same generation — api-delivery re-sends the current
+  envelope on every SSE connect (so every reconnect scored one), and a config poll returns a
+  full 200 whenever the per-leg ETag slot is empty (a fresh transport, a reconnect, the
+  fallback poller's engage-time fetch). Those drops were counted as failover events, so the
+  field reported ordering trouble on clients that had none.
+
+  **Operator note — the field now reads LOWER than on 1.2.0 for identical traffic.** If you
+  chart or alert on `guardRejected`, expect a step down after upgrading: steady-state
+  clients that previously reported a non-zero count from SSE reconnects and cold-ETag polls
+  alone will report 0. A non-zero value now means what it was always supposed to mean: a leg
+  actually served an older generation than the one held.
+
+  No wire, ClickHouse, or dashboard-query change — the field shape is identical and only
+  becomes accurate. The unversioned carve-out (`generation` absent or `<= 0`, which installs
+  rather than being rejected) is untouched.
+
+### Fixed
+
+- README install snippets pinned `1.0.0`; they now pin the current release.
+
 ## 1.2.0 - 2026-07-08
 
 ### Added

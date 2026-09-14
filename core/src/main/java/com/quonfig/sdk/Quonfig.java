@@ -507,7 +507,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *       older payload is dropped, so a late failover to a stale secondary can never move the
    *       client backward; a later, newer leg heals forward.
    *   <li>A same-generation snapshot is a no-op (not strictly greater), so an equal second leg
-   *       can't re-install or flap.
+   *       can't re-install or flap. It is deliberately NOT counted as a guard rejection — only a
+   *       strictly older payload is (qfg-rr5b); see the accounting note at the guard itself.
    *   <li>An unversioned snapshot (generation absent or {@code <= 0} — a server that predates the
    *       watermark, or one whose rev-count failed) carries no ordering information, so it is never
    *       rejected as "older"; freezing an established client on stale config would be worse.
@@ -524,9 +525,28 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (configInstalls != 0 && incoming > 0 && incoming <= heldGeneration) {
         // Reject-older / same-generation: keep the held envelope, do not flap. An unversioned
         // (incoming <= 0) snapshot carries no ordering info and falls through to install.
-        // Count the guard rejection for failover observability on every install path — the HTTP
-        // reject-older drop AND the SSE guard no-op both funnel through here (qfg-41nh.18).
-        recordGuardRejected();
+        //
+        // Accounting (qfg-rr5b, narrows qfg-41nh.18): only a STRICTLY older payload is counted as
+        // a guard rejection. `guardRejected` feeds the sdk_failover alerting signal, where it means
+        // "a leg tried to move us backwards" — but two healthy server behaviors re-deliver the
+        // generation the client already holds (api-delivery's SSE connect-time snapshot resend, and
+        // a config poll whose per-leg ETag slot is empty: a fresh transport, a reconnect, the
+        // fallback poller's engage-time fetch), so counting equal generations read as failover
+        // noise on a perfectly healthy client. An equal-generation re-delivery is a silent no-op:
+        // still not installed, still advances liveness exactly where it did before, but not
+        // counted.
+        // Applies to every install path — the HTTP reject-older drop AND the SSE guard no-op both
+        // funnel through here.
+        if (incoming < heldGeneration) {
+          recordGuardRejected();
+        } else {
+          options
+              .logger()
+              .debug(
+                  "quonfig: same-generation re-delivery at generation {} — no-op, not counted as a"
+                      + " guard rejection",
+                  incoming);
+        }
         return false;
       }
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.

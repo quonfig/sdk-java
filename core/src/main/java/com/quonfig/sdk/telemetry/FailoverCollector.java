@@ -5,9 +5,9 @@ import java.util.Map;
 
 /**
  * Accumulates failover-behavior counters over a flush window: how many times the config-fetch hedge
- * fired its secondary leg, how many installs the reject-older ordering guard dropped, and which
- * upstream leg resolved each successful HTTP install. Every counter is additive and carries no user
- * data.
+ * fired its secondary leg, how many strictly-older installs the reject-older ordering guard
+ * dropped, and which upstream leg resolved each successful HTTP install. Every counter is additive
+ * and carries no user data.
  *
  * <p>Mirrors the sdk-go {@code FailoverAggregator} (qfg-41nh.18). The collector is independently
  * thread-safe (a single monitor) and is written directly from the failover call sites rather than
@@ -35,8 +35,11 @@ public final class FailoverCollector {
   }
 
   /**
-   * Counts one install dropped by the reject-older ordering guard (an equal-or-older snapshot on
-   * any install path, HTTP or SSE).
+   * Counts one install dropped by the reject-older ordering guard because it was STRICTLY older
+   * than the held generation, on any install path (HTTP or SSE). An equal-generation re-delivery is
+   * also dropped but is deliberately not counted — it is normal server behavior (an SSE
+   * connect-time resend, a cold-ETag poll) and not evidence that a leg tried to move the client
+   * backwards (qfg-rr5b, narrows qfg-41nh.18).
    */
   public synchronized void recordGuardRejected() {
     ensureStart();
