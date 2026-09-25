@@ -178,6 +178,62 @@ envelope (any source). `Quonfig.connectionState()` returns one of `CONNECTED`, `
 
 > Do not wire `lastSuccessfulRefresh()` or `connectionState()` directly into a Kubernetes liveness probe. These signals are diagnostic, not pass/fail. A liveness probe based on SDK freshness will amplify transient network blips into restart cascades.
 
+## Telemetry
+
+The SDK sends usage telemetry to `telemetryUrl` so the Quonfig dashboard can show which flags and
+configs are evaluated and with what contexts. Telemetry never affects flag evaluation: every failure
+below is contained in the background reporter.
+
+**What is sent.** Evaluation summaries (per flag/config: counts per rule and value), context shapes
+(context field names and types), example contexts (up to one per context key per hour) and failover
+counters. Opt out with `collectEvaluationSummaries(false)` and
+`contextUploadMode(ContextUploadMode.SHAPES_ONLY)` (no example contexts) or `ContextUploadMode.NONE`
+(no context data), or turn it all off with `disableTelemetry(true)`.
+
+**How it is sent.**
+
+- One POST every `telemetryFlushInterval` (60s), with at most one POST in flight. A tick that fires
+  while a POST is still out is skipped and its data rolls into the next window.
+- Each POST has an overall deadline of `telemetryTimeout` (15s) and a connect/TLS timeout of
+  `telemetryConnectTimeout` (5s).
+- When a POST fails (timeout, network error, 408, 429 or 5xx), the serialized batch is kept
+  byte-for-byte and resent unchanged, never merged with newer data, so the server can recognize a
+  resend of a batch that did land. Up to `telemetryMaxRetainedBatches` (5) batches /
+  `telemetryMaxRetainedBytes` (2MB) are kept for up to `telemetryMaxRetainedAge` (5 minutes);
+  beyond that the oldest is dropped, and a single batch larger than the byte cap is sent once and
+  never kept. Resends happen no sooner than 30s after a failure and after any `Retry-After`
+  (honored up to 10 minutes), oldest first, then the current window.
+- A 401, 403 or 404 means the SDK key or `telemetryUrl` is wrong: the SDK logs one error and
+  disables telemetry for the rest of the process. Any other 4xx drops that one batch with an error
+  (the server rejected the payload) and telemetry continues.
+
+**Logging** (through SLF4J, or the `logger(...)` you pass). A failed POST logs at DEBUG only. The
+first batch actually dropped logs one WARN with the last POST result and queue depth; further drops
+log at DEBUG with a summary WARN at most every 10 minutes; the first success after failures logs one
+INFO line.
+
+**`flush()` and `close()`.** `flush()` sends the current window now and waits for the POST (useful
+in serverless handlers); after a failure it respects the 30s floor and `Retry-After`, and it does
+not throw. `close()` sends the current window once with a 5s deadline, does not resend kept
+batches, and leaves no telemetry thread running.
+
+**Memory.** Everything is bounded: at most 10,000 evaluation-summary keys, 10,000 context-shape
+fields and 10,000 example contexts per window (`telemetryMaxEvaluationSummaries`,
+`telemetryMaxContextShapeFields`, `telemetryMaxExampleContexts`; keys already seen keep counting at
+the cap), a 100,000-entry example-context rate-limit map, and the 2MB retained queue.
+
+```java
+Options opts = Options.builder()
+    .sdkKey(System.getenv("QUONFIG_BACKEND_SDK_KEY"))
+    .telemetryFlushInterval(Duration.ofSeconds(60))   // default
+    .telemetryTimeout(Duration.ofSeconds(15))         // default
+    .telemetryConnectTimeout(Duration.ofSeconds(5))   // default
+    .telemetryMaxRetainedBatches(5)                   // default
+    .telemetryMaxRetainedBytes(2L * 1024 * 1024)      // default
+    .telemetryMaxRetainedAge(Duration.ofMinutes(5))   // default
+    .build();
+```
+
 ## Requirements
 
 - Java 17 or later

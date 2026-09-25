@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Changed
+
+- **Telemetry transport policy (qfg-y8je.9).** The telemetry POST timeout goes from 30s to 15s
+  (`telemetryTimeout`), plus a 5s connect/TLS timeout (`telemetryConnectTimeout`, was 10s). A failed
+  batch is kept byte-for-byte and resent (no merging, so the server dedups a resend of a batch that
+  did land); before, it was dropped. Resends happen no sooner than 30s after a failure and honor
+  `Retry-After` up to 10 min. The retained queue is capped at 5 batches / 2MB / 5 min (oldest
+  dropped; a batch larger than the byte cap is never kept). At most one POST is in flight.
+  401/403/404 disable telemetry for the process with one ERROR; any other 4xx drops that batch with
+  one ERROR. Logging: a failed POST logs at DEBUG, one WARN when data is actually dropped (then a
+  summary at most every 10 min), one INFO on recovery. Before this, every failed POST logged a WARN.
+  Telemetry now logs through the `logger(...)` option (default `com.quonfig.sdk`), like the rest of
+  the SDK.
+- **Fixed 60s cadence; the adaptive backoff is removed.** `telemetryMaxInterval` no longer has any
+  effect (the builder method and getter are kept, deprecated, so existing code compiles). The first
+  tick now fires after one flush interval instead of a separate 8s delay; an explicit
+  `telemetryInitialDelay` is still honored.
+- **`flush()`** sends the live window and waits for the POST (bounded by the timeout); after a
+  failure it respects the 30s floor and `Retry-After`, and it no longer throws
+  `IllegalStateException` on a failed POST (the batch is kept and resent).
+- **`close()`** sends the live window once with a 5s deadline, does not resend retained batches,
+  and stops the telemetry thread.
+- **Memory caps:** context-shape fields (before: context names only) are capped at 10,000 per
+  window alongside evaluation-summary keys and example contexts, and the example-context rate-limit
+  map at 100,000.
+
+### Added
+
+- Options: `telemetryTimeout`, `telemetryConnectTimeout`, `telemetryMaxRetainedBatches`,
+  `telemetryMaxRetainedBytes`, `telemetryMaxRetainedAge`, `telemetryMaxEvaluationSummaries`,
+  `telemetryMaxContextShapeFields`, `telemetryMaxExampleContexts`, and the test seams
+  `telemetryClock` / `telemetryScheduler`. Invalid values (null, zero, negative) fall back to the
+  default. `HttpTelemetrySender` gains a `(url, sdkKey, timeout, connectTimeout)` constructor and
+  `TelemetryReporter` an `Options`-based constructor; its old constructors,
+  `flushAndApplyBackoff()` and `currentInterval()` are deprecated.
+- `contextUploadMode` default is unchanged (`PERIODIC_EXAMPLE`). No wire change, no removed public
+  API, no new dependencies.
+
 ### Fixed
 
 - **`X-Quonfig-SDK-Version` now reports the real SDK version (qfg-y8je.2).** Telemetry POSTs
