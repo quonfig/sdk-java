@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`X-Quonfig-SDK-Version` now reports the real SDK version (qfg-y8je.2).** Telemetry POSTs
+  sent the literal `java-0.0.1`, and config delivery / SSE requests sent `java-0.0.1-SNAPSHOT`
+  because the published jar's manifest carries no `Implementation-Version`. The version is now
+  stamped into a `com/quonfig/sdk/sdk-version.properties` classpath resource at build time and
+  read by `Version`, so every request carries e.g. `java-1.2.1`.
+
 ## 1.2.1 - 2026-09-14
 
 ### Changed

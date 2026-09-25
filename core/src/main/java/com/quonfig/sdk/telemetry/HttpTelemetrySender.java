@@ -1,6 +1,7 @@
 package com.quonfig.sdk.telemetry;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.quonfig.sdk.Version;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -49,7 +50,7 @@ public final class HttpTelemetrySender implements TelemetrySender {
             .timeout(timeout)
             .header("Content-Type", "application/json")
             .header("Authorization", authHeader)
-            .header("X-Quonfig-SDK-Version", "java-0.0.1")
+            .header("X-Quonfig-SDK-Version", Version.header())
             .POST(HttpRequest.BodyPublishers.ofByteArray(body))
             .build();
     HttpResponse<Void> resp;
