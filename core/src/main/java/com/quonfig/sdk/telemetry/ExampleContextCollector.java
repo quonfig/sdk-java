@@ -25,7 +25,16 @@ public final class ExampleContextCollector {
   private final long rateLimitMs;
   private final List<long[]> timestamps = new ArrayList<>(); // [timestamp]
   private final List<ContextSet> data = new ArrayList<>();
+
+  /**
+   * Rate-limit map, kept in last-seen order (oldest first): a re-recorded key is removed and
+   * re-inserted, so {@link #pruneCache()} can stop at the first unexpired entry instead of scanning
+   * the whole map on the evaluation hot path.
+   */
   private final Map<String, Long> seen = new LinkedHashMap<>();
+
+  /** Test hook: total {@code seen} entries examined by {@link #pruneCache()}. */
+  long pruneScanned;
 
   public ExampleContextCollector(ContextUploadMode mode) {
     this(mode, 10_000, DEFAULT_RATE_LIMIT_MS);
@@ -58,6 +67,7 @@ public final class ExampleContextCollector {
 
     timestamps.add(new long[] {now});
     data.add(contexts);
+    if (lastSeen != null) seen.remove(key); // move to the tail: keep last-seen order
     seen.put(key, now);
   }
 
@@ -119,12 +129,19 @@ public final class ExampleContextCollector {
     return String.join("|", parts);
   }
 
+  /**
+   * Evict expired keys from the head of the (last-seen ordered) map, stopping at the first
+   * unexpired one. Cost is O(evicted + 1), so a full map of fresh keys rejects a new key without a
+   * scan.
+   */
   private void pruneCache() {
     long now = System.currentTimeMillis();
     Iterator<Map.Entry<String, Long>> it = seen.entrySet().iterator();
     while (it.hasNext()) {
       Map.Entry<String, Long> e = it.next();
-      if (now - e.getValue() > rateLimitMs) it.remove();
+      pruneScanned++;
+      if (now - e.getValue() <= rateLimitMs) break;
+      it.remove();
     }
   }
 

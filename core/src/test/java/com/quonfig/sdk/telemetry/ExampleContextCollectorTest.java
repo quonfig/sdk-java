@@ -109,4 +109,61 @@ class ExampleContextCollectorTest {
     assertNotNull(c.drain());
     assertNull(c.drain());
   }
+
+  @Test
+  void fullSeenMapOfFreshKeysDoesNotScanPerPush() {
+    // qfg-y8je.9: once the rate-limit map is at the cap with keys younger than the TTL, pushing an
+    // unseen key must be O(1), not a full scan of the map on the evaluation hot path.
+    ExampleContextCollector c =
+        new ExampleContextCollector(
+            ContextUploadMode.PERIODIC_EXAMPLE, Integer.MAX_VALUE, 60L * 60L * 1000L);
+    for (int i = 0; i < ExampleContextCollector.SEEN_CAP; i++) {
+      c.push(new ContextSet().withNamedContext("user", Map.of("key", "fill-" + i)));
+    }
+    long before = c.pruneScanned;
+    int m = 1_000;
+    for (int i = 0; i < m; i++) {
+      c.push(new ContextSet().withNamedContext("user", Map.of("key", "new-" + i)));
+    }
+    long scanned = c.pruneScanned - before;
+    assertTrue(scanned <= 2L * m, "scanned " + scanned + " entries for " + m + " pushes");
+
+    // Drop-newest when full: none of the new keys were recorded.
+    Map<String, Object> event = c.drain();
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> examples =
+        (List<Map<String, Object>>)
+            ((Map<String, Object>) event.get("exampleContexts")).get("examples");
+    assertEquals(ExampleContextCollector.SEEN_CAP, examples.size());
+  }
+
+  @Test
+  void expiredEntriesAreEvictedSoNewKeysRecordAgain() throws InterruptedException {
+    ExampleContextCollector c =
+        new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE, Integer.MAX_VALUE, 50L);
+    for (int i = 0; i < ExampleContextCollector.SEEN_CAP; i++) {
+      c.push(new ContextSet().withNamedContext("user", Map.of("key", "fill-" + i)));
+    }
+    assertNotNull(c.drain());
+    Thread.sleep(120);
+    c.push(new ContextSet().withNamedContext("user", Map.of("key", "late")));
+    Map<String, Object> event = c.drain();
+    assertNotNull(event);
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> examples =
+        (List<Map<String, Object>>)
+            ((Map<String, Object>) event.get("exampleContexts")).get("examples");
+    assertEquals(1, examples.size());
+  }
+
+  @Test
+  void reSeenKeyAfterTtlIsRecordedAgainAndStaysBounded() throws InterruptedException {
+    ExampleContextCollector c =
+        new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE, 10_000, 50L);
+    c.push(new ContextSet().withNamedContext("user", Map.of("key", "abc")));
+    assertNotNull(c.drain());
+    Thread.sleep(120);
+    c.push(new ContextSet().withNamedContext("user", Map.of("key", "abc")));
+    assertNotNull(c.drain());
+  }
 }

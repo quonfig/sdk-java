@@ -28,6 +28,12 @@
   window alongside evaluation-summary keys and example contexts, and the example-context rate-limit
   map at 100,000.
 
+### Fixed
+
+- Once the example-context rate-limit map was full of recent keys, every flag evaluation with a new
+  context key scanned all 100,000 entries under a lock. Expired keys are now pruned oldest-first,
+  so a full map rejects a new key without a scan.
+
 ### Added
 
 - Options: `telemetryTimeout`, `telemetryConnectTimeout`, `telemetryMaxRetainedBatches`,
