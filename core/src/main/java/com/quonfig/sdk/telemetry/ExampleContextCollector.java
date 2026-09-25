@@ -17,7 +17,10 @@ import java.util.TreeSet;
 public final class ExampleContextCollector {
   private static final long DEFAULT_RATE_LIMIT_MS = 60L * 60L * 1000L; // 1 hour
 
-  private final boolean enabled;
+  /** Bound on the rate-limit map of recently seen keys (qfg-y8je.9). */
+  static final int SEEN_CAP = 100_000;
+
+  private volatile boolean enabled;
   private final int maxDataSize;
   private final long rateLimitMs;
   private final List<long[]> timestamps = new ArrayList<>(); // [timestamp]
@@ -48,6 +51,10 @@ public final class ExampleContextCollector {
     long now = System.currentTimeMillis();
     Long lastSeen = seen.get(key);
     if (lastSeen != null && now - lastSeen < rateLimitMs) return;
+    if (lastSeen == null && seen.size() >= SEEN_CAP) {
+      pruneCache();
+      if (seen.size() >= SEEN_CAP) return; // drop newest: memory stays bounded
+    }
 
     timestamps.add(new long[] {now});
     data.add(contexts);
@@ -92,6 +99,14 @@ public final class ExampleContextCollector {
     return event;
   }
 
+  /** Stop recording and discard the window (telemetry disabled for the process). */
+  synchronized void disable() {
+    enabled = false;
+    data.clear();
+    timestamps.clear();
+    seen.clear();
+  }
+
   private String groupedKey(ContextSet contexts) {
     TreeSet<String> parts = new TreeSet<>();
     for (Map<String, Object> ctx : contexts.data().values()) {
@@ -111,5 +126,9 @@ public final class ExampleContextCollector {
       Map.Entry<String, Long> e = it.next();
       if (now - e.getValue() > rateLimitMs) it.remove();
     }
+  }
+
+  int maxDataSize() {
+    return maxDataSize;
   }
 }

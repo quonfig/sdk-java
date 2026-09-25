@@ -15,7 +15,7 @@ import java.util.Objects;
  * counters; counters are then grouped by (configKey, configType) into summary rows.
  */
 public final class EvaluationSummaryCollector {
-  private final boolean enabled;
+  private volatile boolean enabled;
   private final int maxDataSize;
   private final Map<SummaryKey, Map<CounterKey, CounterCell>> data = new LinkedHashMap<>();
   private Long startAt;
@@ -57,6 +57,13 @@ public final class EvaluationSummaryCollector {
     } else {
       cell.count++;
     }
+  }
+
+  /** Stop recording and discard the window (telemetry disabled for the process). */
+  synchronized void disable() {
+    enabled = false;
+    data.clear();
+    startAt = null;
   }
 
   public synchronized Map<String, Object> drain() {
@@ -187,5 +194,9 @@ public final class EvaluationSummaryCollector {
       this.count = count;
       this.reason = reason;
     }
+  }
+
+  int maxDataSize() {
+    return maxDataSize;
   }
 }

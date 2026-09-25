@@ -9,6 +9,9 @@ import java.util.Map;
 /**
  * Collects context shapes (named context → property name → field-type code) for telemetry.
  *
+ * <p>The cap ({@code maxDataSize}, default 10,000) bounds distinct (context name, field name) pairs
+ * per window; pairs beyond it are not recorded (qfg-y8je.9).
+ *
  * <p>Field-type codes match the rest of the SDK family: 1=int, 2=string, 4=double, 5=bool,
  * 10=string list / array.
  */
@@ -19,9 +22,10 @@ public final class ContextShapeCollector {
   static final int FIELD_TYPE_BOOL = 5;
   static final int FIELD_TYPE_ARRAY = 10;
 
-  private final boolean enabled;
+  private volatile boolean enabled;
   private final int maxDataSize;
   private final Map<String, Map<String, Integer>> shapes = new LinkedHashMap<>();
+  private int fieldCount;
 
   public ContextShapeCollector(ContextUploadMode mode) {
     this(mode, 10_000);
@@ -41,13 +45,19 @@ public final class ContextShapeCollector {
     for (Map.Entry<String, Map<String, Object>> e : contexts.data().entrySet()) {
       String name = e.getKey();
       Map<String, Integer> shape = shapes.get(name);
-      if (shape == null) {
-        if (shapes.size() >= maxDataSize) continue;
-        shape = new LinkedHashMap<>();
-        shapes.put(name, shape);
+      if (shape == null && e.getValue().isEmpty()) {
+        if (fieldCount < maxDataSize) shapes.put(name, new LinkedHashMap<>());
+        continue;
       }
       for (Map.Entry<String, Object> p : e.getValue().entrySet()) {
-        shape.putIfAbsent(p.getKey(), fieldTypeForValue(p.getValue()));
+        if (shape != null && shape.containsKey(p.getKey())) continue;
+        if (fieldCount >= maxDataSize) continue;
+        if (shape == null) {
+          shape = new LinkedHashMap<>();
+          shapes.put(name, shape);
+        }
+        shape.put(p.getKey(), fieldTypeForValue(p.getValue()));
+        fieldCount++;
       }
     }
   }
@@ -67,7 +77,15 @@ public final class ContextShapeCollector {
     event.put("contextShapes", envelope);
 
     shapes.clear();
+    fieldCount = 0;
     return event;
+  }
+
+  /** Stop recording and discard the window (telemetry disabled for the process). */
+  synchronized void disable() {
+    enabled = false;
+    shapes.clear();
+    fieldCount = 0;
   }
 
   static int fieldTypeForValue(Object v) {
@@ -78,5 +96,9 @@ public final class ContextShapeCollector {
     if (v instanceof Double || v instanceof Float) return FIELD_TYPE_DOUBLE;
     if (v instanceof Iterable || (v != null && v.getClass().isArray())) return FIELD_TYPE_ARRAY;
     return FIELD_TYPE_STRING;
+  }
+
+  int maxDataSize() {
+    return maxDataSize;
   }
 }

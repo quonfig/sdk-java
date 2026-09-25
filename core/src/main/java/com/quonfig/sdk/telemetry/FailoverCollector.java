@@ -24,12 +24,14 @@ public final class FailoverCollector {
   // Reserved for last-known-good resolution; backends emit 0 (kept on the wire for forward compat).
   private long resolvedFromLkg;
   private Long startAt;
+  private boolean disabled;
 
   /**
    * Counts one config-fetch cycle whose hedge fired the secondary leg (the primary was slow or
    * errored).
    */
   public synchronized void recordHedgeFired() {
+    if (disabled) return;
     ensureStart();
     hedgeFired++;
   }
@@ -42,6 +44,7 @@ public final class FailoverCollector {
    * backwards (qfg-rr5b, narrows qfg-41nh.18).
    */
   public synchronized void recordGuardRejected() {
+    if (disabled) return;
     ensureStart();
     guardRejected++;
   }
@@ -52,13 +55,19 @@ public final class FailoverCollector {
    * with no HTTP leg) is ignored.
    */
   public synchronized void recordResolvedFrom(int sourceIndex) {
-    if (sourceIndex < 0) return;
+    if (sourceIndex < 0 || disabled) return;
     ensureStart();
     if (sourceIndex == 0) {
       resolvedFromPrimary++;
     } else {
       resolvedFromSecondary++;
     }
+  }
+
+  /** Stop counting and reset (telemetry disabled for the process). */
+  synchronized void disable() {
+    disabled = true;
+    drain();
   }
 
   private void ensureStart() {
