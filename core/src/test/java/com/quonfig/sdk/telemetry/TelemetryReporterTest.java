@@ -98,79 +98,43 @@ class TelemetryReporterTest {
   }
 
   @Test
-  void backoffGrowsOnFailureAndResetsOnSuccess() throws IOException {
+  void failedSendIsRetainedAndResentUnchangedAfterTheFloor() throws IOException {
+    // The adaptive backoff is gone (transport policy P4, qfg-y8je.9): a failed batch is kept and
+    // resent unchanged on the first tick at least 30s after the failure.
     EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(true);
-    ContextShapeCollector shapes = new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE);
-    ExampleContextCollector examples =
-        new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
-
+    ManualScheduler clock = new ManualScheduler();
     CapturingSender sender = new CapturingSender();
-    sender.failuresLeft.set(2);
-
+    sender.failuresLeft.set(1);
     TelemetryReporter reporter =
         new TelemetryReporter(
             sender,
             "h",
             summaries,
-            shapes,
-            examples,
-            Duration.ofMillis(1000),
-            Duration.ofMillis(60_000),
-            Duration.ofMillis(600_000));
-    Duration baseline = reporter.currentInterval();
-    assertEquals(Duration.ofMillis(60_000), baseline);
+            new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE),
+            new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE),
+            null,
+            com.quonfig.sdk.Options.builder()
+                .telemetryClock(clock.clock())
+                .telemetryScheduler(clock)
+                .build());
 
     summaries.push(stat("x", "v"));
-    boolean ok1 = reporter.flushAndApplyBackoff();
-    assertFalse(ok1);
-    Duration afterFirstFail = reporter.currentInterval();
-    assertTrue(
-        afterFirstFail.toMillis() > 60_000,
-        "expected backoff > 60000 ms after failure, got " + afterFirstFail);
+    reporter.flush(); // fails: retained
+    assertTrue(sender.sent.isEmpty());
+    assertEquals(1, reporter.debugState().retainedCount());
 
-    summaries.push(stat("x", "v"));
-    boolean ok2 = reporter.flushAndApplyBackoff();
-    assertFalse(ok2);
-    Duration afterSecondFail = reporter.currentInterval();
-    assertTrue(
-        afterSecondFail.toMillis() > afterFirstFail.toMillis(),
-        "backoff should grow further on consecutive failures");
+    summaries.push(stat("y", "v"));
+    reporter.flush(); // inside the 30s floor: nothing sent, the live window keeps aggregating
+    assertTrue(sender.sent.isEmpty());
 
-    // Now sender succeeds — interval should reset to base
-    summaries.push(stat("x", "v"));
-    boolean ok3 = reporter.flushAndApplyBackoff();
-    assertTrue(ok3);
+    clock.advance(30_000);
+    reporter.flush(); // resend the retained batch, then the live window
+    assertEquals(2, sender.sent.size());
+    assertTrue(sender.sent.get(0).toString().contains("key=x"));
+    assertFalse(sender.sent.get(0).toString().contains("key=y"));
+    assertTrue(sender.sent.get(1).toString().contains("key=y"));
+    assertEquals(0, reporter.debugState().retainedCount());
     assertEquals(Duration.ofMillis(60_000), reporter.currentInterval());
-    assertEquals(1, sender.sent.size());
-  }
-
-  @Test
-  void backoffCappedAtMax() throws IOException {
-    EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(true);
-    ContextShapeCollector shapes = new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE);
-    ExampleContextCollector examples =
-        new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
-
-    CapturingSender sender = new CapturingSender();
-    sender.failuresLeft.set(50); // many failures
-
-    TelemetryReporter reporter =
-        new TelemetryReporter(
-            sender,
-            "h",
-            summaries,
-            shapes,
-            examples,
-            Duration.ofMillis(8000),
-            Duration.ofMillis(60_000),
-            Duration.ofMillis(600_000));
-
-    for (int i = 0; i < 50; i++) {
-      summaries.push(stat("x", "v"));
-      reporter.flushAndApplyBackoff();
-    }
-
-    assertTrue(reporter.currentInterval().toMillis() <= 600_000);
   }
 
   @Test

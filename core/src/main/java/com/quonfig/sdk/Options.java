@@ -7,9 +7,11 @@ import com.quonfig.sdk.eval.WeightedValueResolver;
 import com.quonfig.sdk.telemetry.ContextUploadMode;
 import com.quonfig.sdk.telemetry.TelemetrySender;
 import com.quonfig.sdk.wire.ConfigEnvelope;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,6 +101,16 @@ public final class Options {
   private final Duration telemetryInitialDelay;
   private final Duration telemetryFlushInterval;
   private final Duration telemetryMaxInterval;
+  private final Duration telemetryTimeout;
+  private final Duration telemetryConnectTimeout;
+  private final int telemetryMaxRetainedBatches;
+  private final long telemetryMaxRetainedBytes;
+  private final Duration telemetryMaxRetainedAge;
+  private final int telemetryMaxEvaluationSummaries;
+  private final int telemetryMaxContextShapeFields;
+  private final int telemetryMaxExampleContexts;
+  private final Clock telemetryClock;
+  private final ScheduledExecutorService telemetryScheduler;
   private final String instanceHash;
   private final String loggerKey;
   private final Duration sseReadWatchdog;
@@ -107,6 +119,27 @@ public final class Options {
   private final Boolean enableQuonfigUserContext;
 
   public static final long DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS = 200L;
+
+  /** Default {@link #telemetryFlushInterval()}: 60s (telemetry transport policy, qfg-y8je.9). */
+  public static final Duration DEFAULT_TELEMETRY_FLUSH_INTERVAL = Duration.ofSeconds(60);
+
+  /** Default {@link #telemetryTimeout()}: 15s overall deadline per telemetry POST. */
+  public static final Duration DEFAULT_TELEMETRY_TIMEOUT = Duration.ofSeconds(15);
+
+  /** Default {@link #telemetryConnectTimeout()}: 5s for TCP connect + TLS handshake. */
+  public static final Duration DEFAULT_TELEMETRY_CONNECT_TIMEOUT = Duration.ofSeconds(5);
+
+  /** Default {@link #telemetryMaxRetainedBatches()}: 5 failed batches kept for resend. */
+  public static final int DEFAULT_TELEMETRY_MAX_RETAINED_BATCHES = 5;
+
+  /** Default {@link #telemetryMaxRetainedBytes()}: 2MB (2,097,152 bytes) of retained batches. */
+  public static final long DEFAULT_TELEMETRY_MAX_RETAINED_BYTES = 2L * 1024 * 1024;
+
+  /** Default {@link #telemetryMaxRetainedAge()}: a retained batch older than 5 min is dropped. */
+  public static final Duration DEFAULT_TELEMETRY_MAX_RETAINED_AGE = Duration.ofMinutes(5);
+
+  /** Default cap on each telemetry aggregator (summaries, shape fields, example contexts). */
+  public static final int DEFAULT_TELEMETRY_MAX_AGGREGATOR_ENTRIES = 10_000;
 
   private Options(Builder b) {
     Resolver.EnvLookup env = b.envLookup != null ? b.envLookup : Resolver.DEFAULT_ENV_LOOKUP;
@@ -174,12 +207,40 @@ public final class Options {
     this.contextUploadMode =
         b.contextUploadMode != null ? b.contextUploadMode : ContextUploadMode.PERIODIC_EXAMPLE;
     this.telemetrySender = b.telemetrySender;
-    this.telemetryInitialDelay =
-        b.telemetryInitialDelay != null ? b.telemetryInitialDelay : Duration.ofSeconds(8);
     this.telemetryFlushInterval =
-        b.telemetryFlushInterval != null ? b.telemetryFlushInterval : Duration.ofSeconds(60);
+        positiveOr(b.telemetryFlushInterval, DEFAULT_TELEMETRY_FLUSH_INTERVAL);
+    // The first tick used to fire after a separate 8s delay; it now defaults to one flush interval
+    // (fixed cadence: tick k at k * interval). An explicit value is still honored.
+    this.telemetryInitialDelay = positiveOr(b.telemetryInitialDelay, this.telemetryFlushInterval);
     this.telemetryMaxInterval =
         b.telemetryMaxInterval != null ? b.telemetryMaxInterval : Duration.ofSeconds(600);
+    this.telemetryTimeout = positiveOr(b.telemetryTimeout, DEFAULT_TELEMETRY_TIMEOUT);
+    this.telemetryConnectTimeout =
+        positiveOr(b.telemetryConnectTimeout, DEFAULT_TELEMETRY_CONNECT_TIMEOUT);
+    this.telemetryMaxRetainedBatches =
+        b.telemetryMaxRetainedBatches > 0
+            ? b.telemetryMaxRetainedBatches
+            : DEFAULT_TELEMETRY_MAX_RETAINED_BATCHES;
+    this.telemetryMaxRetainedBytes =
+        b.telemetryMaxRetainedBytes > 0
+            ? b.telemetryMaxRetainedBytes
+            : DEFAULT_TELEMETRY_MAX_RETAINED_BYTES;
+    this.telemetryMaxRetainedAge =
+        positiveOr(b.telemetryMaxRetainedAge, DEFAULT_TELEMETRY_MAX_RETAINED_AGE);
+    this.telemetryMaxEvaluationSummaries =
+        b.telemetryMaxEvaluationSummaries > 0
+            ? b.telemetryMaxEvaluationSummaries
+            : DEFAULT_TELEMETRY_MAX_AGGREGATOR_ENTRIES;
+    this.telemetryMaxContextShapeFields =
+        b.telemetryMaxContextShapeFields > 0
+            ? b.telemetryMaxContextShapeFields
+            : DEFAULT_TELEMETRY_MAX_AGGREGATOR_ENTRIES;
+    this.telemetryMaxExampleContexts =
+        b.telemetryMaxExampleContexts > 0
+            ? b.telemetryMaxExampleContexts
+            : DEFAULT_TELEMETRY_MAX_AGGREGATOR_ENTRIES;
+    this.telemetryClock = b.telemetryClock;
+    this.telemetryScheduler = b.telemetryScheduler;
     this.instanceHash =
         b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
     this.loggerKey = b.loggerKey;
@@ -189,6 +250,11 @@ public final class Options {
         b.dataDirAutoReloadDebounceMs > 0
             ? b.dataDirAutoReloadDebounceMs
             : DEFAULT_DATADIR_AUTORELOAD_DEBOUNCE_MS;
+  }
+
+  /** A positive duration, else the default (null, zero and negative fall back). */
+  private static Duration positiveOr(Duration v, Duration fallback) {
+    return v != null && !v.isNegative() && !v.isZero() ? v : fallback;
   }
 
   /**
@@ -402,16 +468,85 @@ public final class Options {
     return telemetrySender;
   }
 
+  /** Delay before the first telemetry tick. Defaults to {@link #telemetryFlushInterval()}. */
   public Duration telemetryInitialDelay() {
     return telemetryInitialDelay;
   }
 
+  /** Telemetry tick interval: one POST (plus any resends) per tick. Default 60s. */
   public Duration telemetryFlushInterval() {
     return telemetryFlushInterval;
   }
 
+  /**
+   * Ignored since the telemetry transport policy (qfg-y8je.9): the adaptive backoff it capped was
+   * removed. Failed batches are resent no sooner than 30s after a failure and after any {@code
+   * Retry-After}.
+   *
+   * @deprecated no longer read by the SDK; kept so existing callers compile.
+   */
+  @Deprecated
   public Duration telemetryMaxInterval() {
     return telemetryMaxInterval;
+  }
+
+  /** Overall deadline for one telemetry POST, request start to response end. Default 15s. */
+  public Duration telemetryTimeout() {
+    return telemetryTimeout;
+  }
+
+  /** TCP connect + TLS handshake deadline for telemetry POSTs. Default 5s. */
+  public Duration telemetryConnectTimeout() {
+    return telemetryConnectTimeout;
+  }
+
+  /** Most failed telemetry batches kept for resend. Default 5. */
+  public int telemetryMaxRetainedBatches() {
+    return telemetryMaxRetainedBatches;
+  }
+
+  /**
+   * Byte cap on retained telemetry batches; a single batch larger than this is sent once and never
+   * kept. Default 2,097,152 (2MB).
+   */
+  public long telemetryMaxRetainedBytes() {
+    return telemetryMaxRetainedBytes;
+  }
+
+  /** A retained telemetry batch older than this is dropped. Default 5 min. */
+  public Duration telemetryMaxRetainedAge() {
+    return telemetryMaxRetainedAge;
+  }
+
+  /** Distinct (configKey, configType) evaluation-summary keys per window. Default 10,000. */
+  public int telemetryMaxEvaluationSummaries() {
+    return telemetryMaxEvaluationSummaries;
+  }
+
+  /** Distinct (contextName, fieldName) context-shape pairs per window. Default 10,000. */
+  public int telemetryMaxContextShapeFields() {
+    return telemetryMaxContextShapeFields;
+  }
+
+  /** Example contexts per window. Default 10,000. */
+  public int telemetryMaxExampleContexts() {
+    return telemetryMaxExampleContexts;
+  }
+
+  /**
+   * Time source for the telemetry reporter (tick cadence, retry floor, batch age). {@code null}
+   * means the system clock. Surfaced for tests; production should leave this unset.
+   */
+  public Clock telemetryClock() {
+    return telemetryClock;
+  }
+
+  /**
+   * Scheduler for telemetry ticks and POST deadlines. {@code null} means the reporter owns a single
+   * daemon thread. Surfaced for tests; production should leave this unset.
+   */
+  public ScheduledExecutorService telemetryScheduler() {
+    return telemetryScheduler;
   }
 
   public String instanceHash() {
@@ -516,6 +651,16 @@ public final class Options {
     private Duration telemetryInitialDelay;
     private Duration telemetryFlushInterval;
     private Duration telemetryMaxInterval;
+    private Duration telemetryTimeout;
+    private Duration telemetryConnectTimeout;
+    private int telemetryMaxRetainedBatches;
+    private long telemetryMaxRetainedBytes;
+    private Duration telemetryMaxRetainedAge;
+    private int telemetryMaxEvaluationSummaries;
+    private int telemetryMaxContextShapeFields;
+    private int telemetryMaxExampleContexts;
+    private Clock telemetryClock;
+    private ScheduledExecutorService telemetryScheduler;
     private String instanceHash;
     private String loggerKey;
     private Duration sseReadWatchdog;
@@ -708,18 +853,103 @@ public final class Options {
       return this;
     }
 
+    /** Delay before the first telemetry tick. Default: one {@link #telemetryFlushInterval}. */
     public Builder telemetryInitialDelay(Duration v) {
       this.telemetryInitialDelay = v;
       return this;
     }
 
+    /** Telemetry tick interval. Default 60s. Null, zero or negative means the default. */
     public Builder telemetryFlushInterval(Duration v) {
       this.telemetryFlushInterval = v;
       return this;
     }
 
+    /**
+     * No effect since the telemetry transport policy (qfg-y8je.9): the adaptive backoff this capped
+     * was removed.
+     *
+     * @deprecated ignored; kept so existing callers compile.
+     */
+    @Deprecated
     public Builder telemetryMaxInterval(Duration v) {
       this.telemetryMaxInterval = v;
+      return this;
+    }
+
+    /**
+     * Overall deadline for one telemetry POST, request start to response end. Default 15s. A
+     * timed-out batch is kept and resent. Null, zero or negative means the default.
+     */
+    public Builder telemetryTimeout(Duration v) {
+      this.telemetryTimeout = v;
+      return this;
+    }
+
+    /** TCP connect + TLS handshake deadline for telemetry POSTs. Default 5s. */
+    public Builder telemetryConnectTimeout(Duration v) {
+      this.telemetryConnectTimeout = v;
+      return this;
+    }
+
+    /** Most failed telemetry batches kept for resend (oldest dropped first). Default 5. */
+    public Builder telemetryMaxRetainedBatches(int v) {
+      this.telemetryMaxRetainedBatches = v;
+      return this;
+    }
+
+    /**
+     * Byte cap on retained telemetry batches (oldest dropped first). A single batch larger than
+     * this is sent once and never kept. Default 2,097,152 (2MB).
+     */
+    public Builder telemetryMaxRetainedBytes(long v) {
+      this.telemetryMaxRetainedBytes = v;
+      return this;
+    }
+
+    /** A retained telemetry batch older than this is dropped. Default 5 min. */
+    public Builder telemetryMaxRetainedAge(Duration v) {
+      this.telemetryMaxRetainedAge = v;
+      return this;
+    }
+
+    /**
+     * Distinct (configKey, configType) evaluation-summary keys per window; new keys beyond the cap
+     * are not recorded, keys already present keep counting. Default 10,000.
+     */
+    public Builder telemetryMaxEvaluationSummaries(int v) {
+      this.telemetryMaxEvaluationSummaries = v;
+      return this;
+    }
+
+    /** Distinct (contextName, fieldName) context-shape pairs per window. Default 10,000. */
+    public Builder telemetryMaxContextShapeFields(int v) {
+      this.telemetryMaxContextShapeFields = v;
+      return this;
+    }
+
+    /** Example contexts per window. Default 10,000. */
+    public Builder telemetryMaxExampleContexts(int v) {
+      this.telemetryMaxExampleContexts = v;
+      return this;
+    }
+
+    /**
+     * Time source for the telemetry reporter. Surfaced for tests; production should leave this
+     * unset (system clock).
+     */
+    public Builder telemetryClock(Clock v) {
+      this.telemetryClock = v;
+      return this;
+    }
+
+    /**
+     * Scheduler for telemetry ticks and POST deadlines. The SDK does not shut down a supplied
+     * scheduler. Surfaced for tests; production should leave this unset (the reporter owns one
+     * daemon thread).
+     */
+    public Builder telemetryScheduler(ScheduledExecutorService v) {
+      this.telemetryScheduler = v;
       return this;
     }
 

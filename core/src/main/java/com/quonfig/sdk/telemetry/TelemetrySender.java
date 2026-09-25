@@ -6,8 +6,9 @@ import java.util.Map;
 /**
  * Sends a telemetry envelope to api-telemetry.
  *
- * <p>Implementations must throw {@link IOException} (or any subclass) on transport failure so the
- * reporter can apply exponential backoff. Returning normally signals success.
+ * <p>Implementations must throw {@link IOException} (or any subclass) on transport failure; the
+ * reporter then keeps the batch and resends it under the telemetry transport policy. Returning
+ * normally signals success.
  */
 @FunctionalInterface
 public interface TelemetrySender {

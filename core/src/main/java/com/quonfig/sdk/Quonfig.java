@@ -257,9 +257,14 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     TelemetrySender sender = resolveTelemetrySender(options);
     if (sender != null && !options.disableTelemetry()) {
       ContextUploadMode mode = options.contextUploadMode();
-      this.summaryCollector = new EvaluationSummaryCollector(options.collectEvaluationSummaries());
-      this.shapeCollector = new ContextShapeCollector(mode);
-      this.exampleCollector = new ExampleContextCollector(mode);
+      this.summaryCollector =
+          new EvaluationSummaryCollector(
+              options.collectEvaluationSummaries(), options.telemetryMaxEvaluationSummaries());
+      this.shapeCollector =
+          new ContextShapeCollector(mode, options.telemetryMaxContextShapeFields());
+      this.exampleCollector =
+          new ExampleContextCollector(
+              mode, options.telemetryMaxExampleContexts(), 60L * 60L * 1000L);
       this.failoverCollector = new FailoverCollector();
       this.telemetryReporter =
           new TelemetryReporter(
@@ -269,9 +274,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               shapeCollector,
               exampleCollector,
               failoverCollector,
-              options.telemetryInitialDelay(),
-              options.telemetryFlushInterval(),
-              options.telemetryMaxInterval());
+              options);
       this.telemetryReporter.start();
     } else {
       this.summaryCollector = null;
@@ -285,7 +288,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private static TelemetrySender resolveTelemetrySender(Options options) {
     if (options.telemetrySender() != null) return options.telemetrySender();
     if (options.sdkKey() == null || options.sdkKey().isEmpty()) return null;
-    return new HttpTelemetrySender(options.telemetryUrl(), options.sdkKey());
+    return new HttpTelemetrySender(
+        options.telemetryUrl(),
+        options.sdkKey(),
+        options.telemetryTimeout(),
+        options.telemetryConnectTimeout());
   }
 
   private void installRows(List<ConfigRow> rows) {
@@ -1077,14 +1084,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
   }
 
-  /** Drains pending telemetry synchronously and posts it. No-op when telemetry is disabled. */
+  /**
+   * Sends pending telemetry now and waits for the POST (bounded by the telemetry timeout). No-op
+   * when telemetry is disabled. After a failed POST it respects the 30s resend floor and {@code
+   * Retry-After}; a failed batch is kept and resent later, so this does not throw.
+   */
   public void flush() {
     awaitInit();
     if (telemetryReporter != null) {
       try {
         telemetryReporter.flush();
       } catch (IOException e) {
-        // Surface as unchecked so callers don't have to declare; the reporter itself logs.
+        // Not thrown since the telemetry transport policy; kept for the reporter's signature.
         throw new IllegalStateException("telemetry flush failed: " + e.getMessage(), e);
       }
     }
