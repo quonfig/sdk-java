@@ -406,6 +406,12 @@ public final class SseClient {
       log.warn("SSE: discarding malformed envelope: {}", e.getMessage());
       return;
     }
+    if (env == null || !env.isDeliveryEnvelope()) {
+      // Valid JSON but not a delivery envelope (no meta.version) — installing it would wipe every
+      // held config. Drop it exactly like malformed JSON (qfg-9dxb.3).
+      log.warn("SSE: discarding non-envelope payload (missing meta.version)");
+      return;
+    }
     try {
       cb.accept(env);
     } catch (RuntimeException e) {

@@ -498,8 +498,54 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * HttpTransport#lastResolvedIndex()}), or {@code -1} when the source leg is irrelevant (SSE).
    */
   private boolean installDeliveryBody(String body, int sourceIndex) throws IOException {
+    return installDelivery(parseDeliveryEnvelope(body), sourceIndex);
+  }
+
+  /**
+   * Decodes a delivery response body and rejects anything that is not a real envelope (no {@code
+   * meta} object with a non-empty {@code version}; see {@link
+   * ConfigEnvelope#isDeliveryEnvelope()}). A {@code {}} or error-object 200 would otherwise decode
+   * to an empty envelope and wipe every held config (qfg-9dxb.3). The check is independent of the
+   * mapper's unknown-property handling.
+   */
+  private static ConfigEnvelope parseDeliveryEnvelope(String body) throws IOException {
     ConfigEnvelope envelope = ENVELOPE_MAPPER.readValue(body, ConfigEnvelope.class);
-    return installDelivery(envelope, sourceIndex);
+    if (envelope == null || !envelope.isDeliveryEnvelope()) {
+      throw new IOException("not a config envelope (missing meta.version)");
+    }
+    return envelope;
+  }
+
+  /**
+   * One sequential config fetch ({@code refresh()} and the fallback poller): walks the [primary,
+   * secondary] legs and installs the first answer through the reject-older guard. A 200 whose body
+   * is not a valid envelope is a leg error, so the walk fails over to the next leg instead of
+   * returning it (qfg-9dxb.3). Returns {@code true} iff an envelope was installed; throws when
+   * every leg failed.
+   */
+  private boolean fetchAndInstallSequential(HttpTransport http) throws Exception {
+    java.util.concurrent.atomic.AtomicReference<ConfigEnvelope> parsed =
+        new java.util.concurrent.atomic.AtomicReference<>();
+    HttpResponse<String> resp =
+        http.get(
+                URI.create(CONFIGS_PATH),
+                null,
+                body -> {
+                  try {
+                    parsed.set(parseDeliveryEnvelope(body));
+                    return true;
+                  } catch (IOException e) {
+                    options
+                        .logger()
+                        .debug("quonfig: rejecting config response body: {}", e.getMessage());
+                    return false;
+                  }
+                })
+            .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
+    if (resp.statusCode() == 304) {
+      return false;
+    }
+    return installDelivery(parsed.get(), http.lastResolvedIndex());
   }
 
   /**
@@ -518,7 +564,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *       strictly older payload is (qfg-rr5b); see the accounting note at the guard itself.
    *   <li>An unversioned snapshot (generation absent or {@code <= 0} — a server that predates the
    *       watermark, or one whose rev-count failed) carries no ordering information, so it is never
-   *       rejected as "older"; freezing an established client on stale config would be worse.
+   *       rejected as "older"; freezing an established client on stale config would be worse. It
+   *       installs but keeps the held generation at its prior max (qfg-9dxb.3).
    * </ul>
    *
    * <p>The decision and the install are made under {@link #installLock} so they are atomic with
@@ -559,7 +606,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       }
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
       installEnvelopeRows(envelope, true);
-      heldGeneration = incoming;
+      // An unversioned install (incoming <= 0) carries no ordering info: it installs (no-freeze
+      // carve-out) but must never LOWER a positive held generation, or the next older positive
+      // snapshot would be accepted and move the client backward (qfg-9dxb.3). A positive incoming
+      // is strictly greater here (or this is the first install), so this keeps the held max.
+      if (incoming > 0) {
+        heldGeneration = incoming;
+      }
       configInstalls++;
       if (sourceIndex >= 0) {
         resolvedFromIndex = sourceIndex;
@@ -771,15 +824,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     HttpTransport http = this.httpTransport;
     if (http == null) return;
     try {
-      HttpResponse<String> resp =
-          http.get(URI.create(CONFIGS_PATH), null)
-              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
       // Reject-older guard: a fallback poll that fails over to an older secondary must not regress
       // the held generation (qfg-7h5d.1.10). Only fire the update callbacks on an actual install —
       // but an ANSWERED poll (304, or a 200 the guard dropped) is still a successful refresh, so
       // it stamps liveness either way (qfg-41nh.15; sdk-go qfg-41nh.11 parity).
-      boolean installed =
-          resp.statusCode() != 304 && installDeliveryBody(resp.body(), http.lastResolvedIndex());
+      boolean installed = fetchAndInstallSequential(http);
       recordSuccessfulRefresh();
       if (installed) {
         fireConfigUpdate();
@@ -1011,9 +1060,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   /**
-   * {@code Meta.generation} of the config the client is currently holding ({@code 0} before the
-   * first install, or when the server predates the watermark). A higher generation is strictly
-   * newer; this is the value the canonical-ordering guard compares against on every install path.
+   * Highest {@code Meta.generation} the client has installed ({@code 0} before the first install,
+   * or while only unversioned servers have answered). A higher generation is strictly newer; this
+   * is the value the canonical-ordering guard compares against on every install path. An
+   * unversioned install (generation absent or {@code <= 0}) still installs but leaves this value
+   * unchanged — it never lowers a positive held generation (qfg-9dxb.3).
    */
   public int heldGeneration() {
     return heldGeneration;
@@ -1067,14 +1118,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       return;
     }
     try {
-      HttpResponse<String> resp =
-          http.get(URI.create(CONFIGS_PATH), null)
-              .get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
       // An answered poll (304, or a 200 whose envelope the reject-older guard dropped) is a
       // successful refresh even when nothing installs; only an actual install fires the update
       // callbacks (qfg-41nh.15; sdk-go qfg-41nh.11 parity).
-      boolean installed =
-          resp.statusCode() != 304 && installDeliveryBody(resp.body(), http.lastResolvedIndex());
+      boolean installed = fetchAndInstallSequential(http);
       recordSuccessfulRefresh();
       if (installed) {
         fireConfigUpdate();

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Non-envelope delivery payloads are rejected (qfg-9dxb.3).** A 200 (or SSE event) whose body is
+  not a config envelope — no `meta` object with a non-empty `version`, e.g. `{}` or an error object
+  from a misbehaving proxy — used to decode to an empty envelope and wipe every held config. It is
+  now a leg error on HTTP: the init hedge fires the secondary and `refresh()` / the fallback poller
+  fail over to the next URL. On SSE the event is dropped like malformed JSON. `qfg serve` payloads
+  (version + environment, no generation) still install.
+- **An unversioned install no longer lowers `heldGeneration()` (qfg-9dxb.3).** An envelope with no
+  (or a `<= 0`) `meta.generation` still installs, but `heldGeneration()` now keeps the highest
+  generation installed so far instead of resetting to `0`. Before, the reset let a later, older
+  positive snapshot install and move the client backward.
+
+### Added
+
+- `ConfigEnvelope.isDeliveryEnvelope()` and an `HttpTransport.get(URI, String, Predicate<String>)`
+  overload that treats a rejected 2xx body as a leg error.
+
 ## 1.3.0 - 2026-09-25
 
 ### Changed

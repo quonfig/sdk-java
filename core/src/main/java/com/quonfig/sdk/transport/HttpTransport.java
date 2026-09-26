@@ -11,6 +11,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Predicate;
 
 /**
  * HTTP transport for api-delivery (config fetch + GETs with ETag) and api-telemetry (POST). Uses
@@ -94,8 +95,21 @@ public final class HttpTransport {
    * regular {@link HttpResponse}, not raised.
    */
   public CompletableFuture<HttpResponse<String>> get(URI url, String etag) {
+    return get(url, etag, null);
+  }
+
+  /**
+   * Like {@link #get(URI, String)}, but a 2xx whose body {@code acceptBody} rejects (returns {@code
+   * false} or throws) is treated as a leg error rather than a success: the walk fails over to the
+   * next base URL exactly as it would on a 5xx, and on the last URL the future completes
+   * exceptionally with {@link HttpTransportException}. {@link #lastResolvedIndex()} is only stamped
+   * for an accepted body. A 304 is never passed to the validator. {@code null} accepts every body
+   * (qfg-9dxb.3).
+   */
+  public CompletableFuture<HttpResponse<String>> get(
+      URI url, String etag, Predicate<String> acceptBody) {
     Objects.requireNonNull(url, "url");
-    return tryFrom(url, etag, "GET", null, 0)
+    return tryFrom(url, etag, "GET", null, 0, acceptBody)
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
@@ -147,12 +161,12 @@ public final class HttpTransport {
   public CompletableFuture<HttpResponse<String>> post(URI url, String body) {
     Objects.requireNonNull(url, "url");
     Objects.requireNonNull(body, "body");
-    return tryFrom(url, null, "POST", body, 0)
+    return tryFrom(url, null, "POST", body, 0, null)
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
   private CompletableFuture<HttpResponse<String>> tryFrom(
-      URI input, String etag, String method, String body, int idx) {
+      URI input, String etag, String method, String body, int idx, Predicate<String> acceptBody) {
     URI target = rebase(baseUrls.get(idx), input);
     HttpRequest req = buildRequest(target, method, body, etag);
     return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
@@ -167,10 +181,22 @@ public final class HttpTransport {
                           0, "", "transport error contacting " + target + ": " + cause, cause);
                   return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
                 }
-                return tryFrom(input, etag, method, body, idx + 1);
+                return tryFrom(input, etag, method, body, idx + 1, acceptBody);
               }
               int sc = resp.statusCode();
               if (sc >= 200 && sc < 300) {
+                if (acceptBody != null && !accepts(acceptBody, resp.body())) {
+                  // A 2xx the caller can't use (e.g. not a config envelope) is a leg error, so the
+                  // walk fails over just as it would on a 5xx (qfg-9dxb.3).
+                  if (isLast) {
+                    String excerpt = excerpt(resp.body());
+                    HttpTransportException ex =
+                        new HttpTransportException(
+                            sc, excerpt, "HTTP " + sc + " from " + target + ": rejected body");
+                    return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
+                  }
+                  return tryFrom(input, etag, method, body, idx + 1, acceptBody);
+                }
                 lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
               }
@@ -184,9 +210,17 @@ public final class HttpTransport {
                     new HttpTransportException(sc, excerpt, "HTTP " + sc + " from " + target);
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
               }
-              return tryFrom(input, etag, method, body, idx + 1);
+              return tryFrom(input, etag, method, body, idx + 1, acceptBody);
             })
         .thenCompose(f -> f);
+  }
+
+  private static boolean accepts(Predicate<String> acceptBody, String body) {
+    try {
+      return acceptBody.test(body);
+    } catch (RuntimeException e) {
+      return false;
+    }
   }
 
   private HttpRequest buildRequest(URI target, String method, String body, String etag) {

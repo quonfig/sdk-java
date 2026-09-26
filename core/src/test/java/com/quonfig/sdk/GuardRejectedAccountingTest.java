@@ -205,8 +205,10 @@ final class GuardRejectedAccountingTest {
       primary.stop();
       Thread.sleep(200);
       client.refresh();
-      assertEquals(0, client.heldGeneration(), "gen-0 carve-out: unversioned snapshot installs");
-      assertEquals(2, client.configInstallCount(), "the carve-out install advances the count");
+      assertEquals(
+          2, client.configInstallCount(), "gen-0 carve-out: unversioned snapshot installs");
+      assertEquals(
+          42, client.heldGeneration(), "an unversioned install keeps the prior held max (9dxb.3)");
 
       client.flush();
       Map<String, Object> f = failoverEvent(sender);

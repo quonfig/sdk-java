@@ -432,6 +432,50 @@ class SseClientTest {
     assertEquals(-1, client.connectedStreamIndex(), "must be -1 again after stop()");
   }
 
+  /**
+   * qfg-9dxb.3 Fix B: a data frame that parses as JSON but is not a delivery envelope (no {@code
+   * meta} object with a non-empty {@code version}) is dropped exactly like malformed JSON — the
+   * handler never sees it, so it can never wipe the client's held keys.
+   */
+  @Test
+  void dropsNonEnvelopePayloads() throws Exception {
+    BlockingQueue<ConfigEnvelope> received = new LinkedBlockingQueue<>();
+
+    HttpServer s =
+        start(
+            (HttpExchange ex) -> {
+              ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+              ex.sendResponseHeaders(200, 0);
+              OutputStream out = ex.getResponseBody();
+              try {
+                writeFrame(out, "junk1", "{}");
+                writeFrame(out, "junk2", "{\"configs\":[]}");
+                writeFrame(out, "junk3", "{\"configs\":[],\"meta\":{\"version\":\"\"}}");
+                writeFrame(out, "junk4", "{\"configs\":[],\"meta\":{\"environment\":\"prod\"}}");
+                writeFrame(out, "v2", "{\"meta\":{\"version\":\"v2\"},\"configs\":[]}");
+                Thread.sleep(2000);
+              } catch (IOException | InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+              } finally {
+                ex.close();
+              }
+            });
+
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s)))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .build();
+    client.onEnvelope(received::add);
+    client.start();
+
+    ConfigEnvelope first = received.poll(3, TimeUnit.SECONDS);
+    assertNotNull(first, "expected the valid envelope past the junk frames");
+    assertEquals("v2", first.meta().version(), "non-envelope frames must be dropped");
+  }
+
   /** stop() must unwind a connected reader within a couple of seconds. */
   @Test
   void stopUnblocksWhileConnected() throws Exception {

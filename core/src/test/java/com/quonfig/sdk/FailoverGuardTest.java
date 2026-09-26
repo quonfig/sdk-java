@@ -150,10 +150,11 @@ final class FailoverGuardTest {
         Thread.sleep(200);
         client.refresh();
 
-        // The carve-out must install gen 0 — never freeze the established client on 42.
-        assertEquals(
-            0, client.heldGeneration(), "gen-0 carve-out: unversioned snapshot must install");
+        // The carve-out must install gen 0 — never freeze the established client on 42 — but the
+        // held generation keeps its prior max (qfg-9dxb.3): an unversioned install never lowers it.
         assertEquals(2, client.configInstallCount(), "carve-out install must advance the count");
+        assertEquals(
+            42, client.heldGeneration(), "unversioned install must keep the prior held max");
       } finally {
         client.close();
       }
