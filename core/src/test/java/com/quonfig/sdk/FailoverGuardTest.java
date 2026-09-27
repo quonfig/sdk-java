@@ -119,13 +119,12 @@ final class FailoverGuardTest {
   }
 
   /**
-   * Carve-out (qfg-7h5d.1.18): an established client must still install an UNVERSIONED snapshot
-   * (generation 0 — a server that predates the watermark, or one whose rev-count failed). It
-   * carries no ordering information, so the guard must not reject it as "older"; freezing the
-   * client on stale config would be worse. Mirrors sdk-node's long-standing carve-out.
+   * qfg-9dxb.9 (replaces the qfg-7h5d.1.18 established-client carve-out): once a real generation is
+   * held, an UNVERSIONED snapshot (generation 0 — today only a server whose rev-count failed on a
+   * damaged object store) must not install over it. Pre-watermark gen-0-always servers are gone.
    */
   @Test
-  void carveOut_installsUnversionedSnapshotOnEstablishedClient() throws Exception {
+  void unversionedSnapshot_doesNotInstallOnClientHoldingRealGeneration() throws Exception {
     Upstream primary = Upstream.serving(42);
     Upstream secondary = Upstream.serving(0);
     int deadStream = closedPort();
@@ -150,11 +149,9 @@ final class FailoverGuardTest {
         Thread.sleep(200);
         client.refresh();
 
-        // The carve-out must install gen 0 — never freeze the established client on 42 — but the
-        // held generation keeps its prior max (qfg-9dxb.3): an unversioned install never lowers it.
-        assertEquals(2, client.configInstallCount(), "carve-out install must advance the count");
-        assertEquals(
-            42, client.heldGeneration(), "unversioned install must keep the prior held max");
+        // Gen 0 must not install over held gen 42, and held is unchanged.
+        assertEquals(1, client.configInstallCount(), "gen 0 must not install over held gen 42");
+        assertEquals(42, client.heldGeneration(), "gen 0 must not change the held generation");
       } finally {
         client.close();
       }

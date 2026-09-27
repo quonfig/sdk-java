@@ -562,10 +562,14 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *   <li>A same-generation snapshot is a no-op (not strictly greater), so an equal second leg
    *       can't re-install or flap. It is deliberately NOT counted as a guard rejection — only a
    *       strictly older payload is (qfg-rr5b); see the accounting note at the guard itself.
-   *   <li>An unversioned snapshot (generation absent or {@code <= 0} — a server that predates the
-   *       watermark, or one whose rev-count failed) carries no ordering information, so it is never
-   *       rejected as "older"; freezing an established client on stale config would be worse. It
-   *       installs but keeps the held generation at its prior max (qfg-9dxb.3).
+   *   <li>An unversioned snapshot (generation absent or {@code <= 0}) installs ONLY while the
+   *       client has never held a real generation ({@code heldGeneration == 0}), so a client that
+   *       has only ever seen gen-0 servers (e.g. {@code qfg serve}) keeps taking each payload. Once
+   *       a positive generation is held, a gen-0 payload is a silent no-op (qfg-9dxb.9): the
+   *       pre-watermark servers that sent gen 0 on every payload are long gone, and gen 0 now only
+   *       comes from a server whose git object store is damaged (rev-count failed) — it must not
+   *       override a held real generation. It is not counted as a guard rejection, since it is not
+   *       provably older. An unversioned install never changes the held generation (qfg-9dxb.3).
    * </ul>
    *
    * <p>The decision and the install are made under {@link #installLock} so they are atomic with
@@ -576,9 +580,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private boolean installDelivery(ConfigEnvelope envelope, int sourceIndex) {
     int incoming = envelope.meta() != null ? envelope.meta().generation() : 0;
     synchronized (installLock) {
+      if (configInstalls != 0 && incoming <= 0 && heldGeneration > 0) {
+        // Unversioned payload on a client that holds a real generation (qfg-9dxb.9): gen 0 today
+        // only comes from a damaged-store server (rev-count failed), so it must not override the
+        // held envelope. Silent no-op — not provably older, so NOT counted as guardRejected.
+        options
+            .logger()
+            .debug(
+                "quonfig: unversioned payload while holding generation {} — no-op", heldGeneration);
+        return false;
+      }
       if (configInstalls != 0 && incoming > 0 && incoming <= heldGeneration) {
-        // Reject-older / same-generation: keep the held envelope, do not flap. An unversioned
-        // (incoming <= 0) snapshot carries no ordering info and falls through to install.
+        // Reject-older / same-generation: keep the held envelope, do not flap.
         //
         // Accounting (qfg-rr5b, narrows qfg-41nh.18): only a STRICTLY older payload is counted as
         // a guard rejection — "a leg tried to move us backwards" is the one thing guardRejected is
@@ -606,10 +619,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       }
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
       installEnvelopeRows(envelope, true);
-      // An unversioned install (incoming <= 0) carries no ordering info: it installs (no-freeze
-      // carve-out) but must never LOWER a positive held generation, or the next older positive
-      // snapshot would be accepted and move the client backward (qfg-9dxb.3). A positive incoming
-      // is strictly greater here (or this is the first install), so this keeps the held max.
+      // An unversioned install (incoming <= 0) only reaches here on a first install or while held
+      // is still 0 (qfg-9dxb.9); it never changes the held generation (qfg-9dxb.3). A positive
+      // incoming is strictly greater here (or this is the first install), so this keeps the max.
       if (incoming > 0) {
         heldGeneration = incoming;
       }
@@ -1063,8 +1075,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * Highest {@code Meta.generation} the client has installed ({@code 0} before the first install,
    * or while only unversioned servers have answered). A higher generation is strictly newer; this
    * is the value the canonical-ordering guard compares against on every install path. An
-   * unversioned install (generation absent or {@code <= 0}) still installs but leaves this value
-   * unchanged — it never lowers a positive held generation (qfg-9dxb.3).
+   * unversioned payload (generation absent or {@code <= 0}) installs only while this is {@code 0}
+   * (qfg-9dxb.9) and never changes it (qfg-9dxb.3).
    */
   public int heldGeneration() {
     return heldGeneration;

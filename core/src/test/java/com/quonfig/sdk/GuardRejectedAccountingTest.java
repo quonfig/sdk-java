@@ -41,8 +41,8 @@ import org.junit.jupiter.api.Test;
  *       counted.
  *   <li>An EQUAL-generation re-delivery is a silent no-op: still not installed, still advances
  *       liveness exactly where it did before, but NOT counted.
- *   <li>The unversioned carve-out ({@code generation <= 0}) is untouched — it installs, so it was
- *       never counted.
+ *   <li>An unversioned payload ({@code generation <= 0}) on a client holding a real generation is
+ *       dropped (qfg-9dxb.9) but NOT counted — it is not provably older.
  * </ul>
  *
  * <p>No wire, ClickHouse, or dashboard change: the field simply becomes accurate.
@@ -187,12 +187,13 @@ final class GuardRejectedAccountingTest {
   }
 
   /**
-   * Carve-out pin (qfg-7h5d.1.18): an UNVERSIONED snapshot (generation absent or {@code <= 0})
-   * carries no ordering information, so the guard never treats it as older — it installs, and
-   * therefore is not counted. Untouched by qfg-rr5b; pinned here so the narrowing can't disturb it.
+   * qfg-9dxb.9: an UNVERSIONED snapshot (generation absent or {@code <= 0}) on a client holding a
+   * real generation is dropped, but it carries no ordering information — it is not provably older —
+   * so it is a silent no-op and NOT counted as guardRejected.
    */
   @Test
-  void unversionedSnapshot_installsAndIsNotCountedAsGuardRejected() throws Exception {
+  void unversionedSnapshot_onHeldGeneration_isDroppedAndNotCountedAsGuardRejected()
+      throws Exception {
     Upstream primary = serving(42);
     Upstream secondary = serving(0);
     CapturingSender sender = new CapturingSender();
@@ -206,9 +207,8 @@ final class GuardRejectedAccountingTest {
       Thread.sleep(200);
       client.refresh();
       assertEquals(
-          2, client.configInstallCount(), "gen-0 carve-out: unversioned snapshot installs");
-      assertEquals(
-          42, client.heldGeneration(), "an unversioned install keeps the prior held max (9dxb.3)");
+          1, client.configInstallCount(), "gen 0 must not install over a held real generation");
+      assertEquals(42, client.heldGeneration(), "gen 0 must not change the held generation");
 
       client.flush();
       Map<String, Object> f = failoverEvent(sender);
@@ -216,7 +216,7 @@ final class GuardRejectedAccountingTest {
       assertEquals(
           0L,
           num(f, "guardRejected"),
-          "an unversioned snapshot installs, so it is never a guard rejection");
+          "a dropped unversioned snapshot is not provably older, so never a guard rejection");
     } finally {
       client.close();
     }

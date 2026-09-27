@@ -27,8 +27,9 @@ import org.junit.jupiter.api.Test;
  *   <li>Fix B — a 200 whose body is not a delivery envelope (no {@code meta} object with a
  *       non-empty {@code version}) is a leg error: it never installs (so it cannot wipe the held
  *       keys), and the hedge / sequential failover moves on to the next leg.
- *   <li>Fix A — an unversioned envelope (generation absent or {@code <= 0}) still installs (the
- *       qfg-7h5d.1.18 no-freeze carve-out), but the held generation keeps its prior maximum.
+ *   <li>Fix A — an unversioned envelope (generation absent or {@code <= 0}) never changes the held
+ *       generation. Since qfg-9dxb.9 it installs only while the held generation is still 0; once a
+ *       real generation is held it is a silent no-op.
  * </ul>
  */
 final class EnvelopeValidationTest {
@@ -118,10 +119,11 @@ final class EnvelopeValidationTest {
 
   /**
    * A {@code qfg serve} payload carries version + environment but no generation. It is a valid
-   * envelope and installs through the carve-out; the held generation keeps its prior max (Fix A).
+   * envelope, but once the client holds a real generation it no longer installs (qfg-9dxb.9); the
+   * held generation is unchanged.
    */
   @Test
-  void qfgServePayload_installsViaCarveOut_andKeepsHeldGeneration() throws Exception {
+  void qfgServePayload_onClientHoldingRealGeneration_isNoOp() throws Exception {
     Upstream primary = upstream(envelope("greeting", "hello", 42));
     Quonfig client = client(List.of(primary.url()));
     try {
@@ -135,12 +137,11 @@ final class EnvelopeValidationTest {
       client.refresh();
 
       assertEquals(
-          "from-serve",
+          "hello",
           client.getString("greeting", "<missing>"),
-          "qfg serve payload must install");
-      assertEquals(2, client.configInstallCount());
-      assertEquals(
-          42, client.heldGeneration(), "an unversioned install must keep the prior held max");
+          "an unversioned payload must not install over a held real generation");
+      assertEquals(1, client.configInstallCount());
+      assertEquals(42, client.heldGeneration(), "an unversioned payload must not change held");
     } finally {
       client.close();
     }
@@ -159,6 +160,66 @@ final class EnvelopeValidationTest {
       client.initFuture().get(8, TimeUnit.SECONDS);
       assertTrue(client.ready());
       assertEquals("from-serve", client.getString("greeting", "<missing>"));
+      assertEquals(0, client.heldGeneration());
+    } finally {
+      client.close();
+    }
+  }
+
+  /**
+   * qfg-9dxb.9: once the client holds a real generation, a gen-0 payload (today only a
+   * damaged-store server whose rev-count failed) must not install. Before, it installed OLD content
+   * and — because held stays at N (9dxb.3) — the healthy gen-N re-delivery was then rejected as
+   * same-generation, sticking the client on OLD until gen N+1.
+   */
+  @Test
+  void gen0_afterHeldPositive_doesNotInstall_andGenNRedeliveryKeepsNew() throws Exception {
+    Upstream primary = upstream(envelope("greeting", "NEW", 42));
+    Quonfig client = client(List.of(primary.url()));
+    try {
+      client.initFuture().get(8, TimeUnit.SECONDS);
+      assertEquals(42, client.heldGeneration());
+      assertEquals("NEW", client.getString("greeting", "<missing>"));
+
+      primary.body.set(envelope("greeting", "OLD", 0));
+      client.refresh();
+      assertEquals(
+          "NEW",
+          client.getString("greeting", "<missing>"),
+          "a gen-0 payload must not install over a held positive generation");
+      assertEquals(42, client.heldGeneration());
+      assertEquals(1, client.configInstallCount(), "a rejected gen-0 payload must not install");
+
+      primary.body.set(envelope("greeting", "NEW", 42));
+      client.refresh();
+      assertEquals(
+          "NEW",
+          client.getString("greeting", "<missing>"),
+          "gen-N re-delivery after a gen-0 payload must leave the client on NEW");
+      assertEquals(42, client.heldGeneration());
+    } finally {
+      client.close();
+    }
+  }
+
+  /** qfg-9dxb.9: a client that has only ever seen gen 0 keeps installing each gen-0 payload. */
+  @Test
+  void gen0Only_client_installsEveryGen0Payload() throws Exception {
+    Upstream primary = upstream(envelope("greeting", "a", 0));
+    Quonfig client = client(List.of(primary.url()));
+    try {
+      client.initFuture().get(8, TimeUnit.SECONDS);
+      assertEquals("a", client.getString("greeting", "<missing>"));
+      assertEquals(0, client.heldGeneration());
+
+      primary.body.set(envelope("greeting", "b", 0));
+      client.refresh();
+      assertEquals("b", client.getString("greeting", "<missing>"));
+
+      primary.body.set(envelope("greeting", "c", 0));
+      client.refresh();
+      assertEquals("c", client.getString("greeting", "<missing>"));
+      assertEquals(3, client.configInstallCount(), "every gen-0 payload installs while held == 0");
       assertEquals(0, client.heldGeneration());
     } finally {
       client.close();

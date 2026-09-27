@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **A gen-0 payload no longer installs over a held real generation (qfg-9dxb.9).** An envelope with
+  no (or a `<= 0`) `meta.generation` now installs only while `heldGeneration()` is still `0` (a
+  client that has only seen gen-0 servers, e.g. `qfg serve`, keeps taking each payload). Once a
+  positive generation is held, a gen-0 payload is a silent no-op and is not counted as
+  `guardRejected`. Gen 0 now only comes from a server whose git object store is damaged; before,
+  it could move the client back to old content and keep it there until the next generation.
 - **Non-envelope delivery payloads are rejected (qfg-9dxb.3).** A 200 (or SSE event) whose body is
   not a config envelope — no `meta` object with a non-empty `version`, e.g. `{}` or an error object
   from a misbehaving proxy — used to decode to an empty envelope and wipe every held config. It is
@@ -11,8 +17,8 @@
   fail over to the next URL. On SSE the event is dropped like malformed JSON. `qfg serve` payloads
   (version + environment, no generation) still install.
 - **An unversioned install no longer lowers `heldGeneration()` (qfg-9dxb.3).** An envelope with no
-  (or a `<= 0`) `meta.generation` still installs, but `heldGeneration()` now keeps the highest
-  generation installed so far instead of resetting to `0`. Before, the reset let a later, older
+  (or a `<= 0`) `meta.generation` no longer resets `heldGeneration()` to `0` when it installs; it keeps the
+  highest generation installed so far. Before, the reset let a later, older
   positive snapshot install and move the client backward.
 
 ### Added
