@@ -176,6 +176,43 @@ class TelemetryTest {
   }
 
   @Test
+  @DisplayName("reason is SPLIT for weighted value landing in bucket 0")
+  void reasonIsSplitForWeightedValueLandingInBucket0() throws Exception {
+    Object aggregator = TestSetup.buildAggregator("evaluation_summary", TestSetup.map());
+    TestSetup.feedAggregator(
+        aggregator,
+        "evaluation_summary",
+        TestSetup.map("keys", TestSetup.list("feature-flag.weighted")),
+        TestSetup.map("user", TestSetup.map("tracking_id", "3e9459d6")));
+    assertEquals(
+        TestSetup.list(
+            TestSetup.map(
+                "key",
+                "feature-flag.weighted",
+                "type",
+                "FEATURE_FLAG",
+                "value",
+                1L,
+                "value_type",
+                "int",
+                "count",
+                1L,
+                "reason",
+                3L,
+                "selected_value",
+                TestSetup.map("int", 1L),
+                "summary",
+                TestSetup.map(
+                    "config_row_index",
+                    0L,
+                    "conditional_value_index",
+                    0L,
+                    "weighted_value_index",
+                    0L))),
+        TestSetup.aggregatorPost(aggregator, "evaluation_summary", "/api/v1/telemetry"));
+  }
+
+  @Test
   @DisplayName("reason is TARGETING_MATCH for feature flag fallthrough with targeting rules")
   void reasonIsTargetingMatchForFeatureFlagFallthroughWithTargetingRules() throws Exception {
     Object aggregator = TestSetup.buildAggregator("evaluation_summary", TestSetup.map());
