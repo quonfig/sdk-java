@@ -13,26 +13,22 @@
 - **New fields from the server no longer stop config updates (qfg-2nvg).** If the delivery
   server added a new field to the config response (at the top level or in `meta`), the Java SDK
   failed to parse it on both HTTP and SSE and stayed on its current config. Unknown fields are now
-  ignored. Error bodies such as `{"error":"x"}` are still rejected, by the existing envelope check.
-- **A gen-0 payload no longer replaces config from a real generation (qfg-9dxb.9).** An envelope
-  with no (or a `<= 0`) `meta.generation` now installs only while `heldGeneration()` is still `0`
-  (a client that has only seen gen-0 servers, e.g. `qfg serve`, keeps taking each payload). Once a
-  positive generation is held, a gen-0 payload is ignored and is not counted as `guardRejected`.
-  Gen 0 now only comes from a server whose git object store is damaged. In 1.3.0 such a payload
-  installed, which could briefly move the client back to older config until the next response
-  that carried a real generation. The trade-off: while the client holds a real generation, any
-  change delivered only in a gen-0 payload is not applied; the client picks it up from the next
-  response that carries a higher generation.
+  tolerated in server payloads and in datafiles. Error bodies such as `{"error":"x"}` are still
+  rejected, by the new envelope check below. A datafile that is not a config file (for example
+  `{"error":"x"}`, `{}`, or a single per-config file) still fails at startup.
+- **A gen-0 payload no longer rolls config back (qfg-9dxb.9, qfg-9dxb.3).** Once the client has
+  config from the server, a response with no generation number (sent only by a server with a
+  damaged git store, which repairs itself) is ignored instead of possibly rolling config back.
+  Clients that have only seen `qfg serve` still take every update. Such a response also no longer
+  lowers `heldGeneration()`, and it is not counted as `guardRejected`. The trade-off: a change
+  that arrives only in a gen-0 payload is applied from the next response that carries a higher
+  generation.
 - **Non-envelope delivery payloads are rejected (qfg-9dxb.3).** A 200 (or SSE event) whose body is
-  not a config envelope — no `meta` object with a non-empty `version`, e.g. `{}` or an error object
-  from a misbehaving proxy — used to decode to an empty envelope and wipe every held config. It is
-  now a leg error on HTTP: the init hedge fires the secondary and `refresh()` / the fallback poller
-  fail over to the next URL. On SSE the event is dropped like malformed JSON. `qfg serve` payloads
-  (version + environment, no generation) still install.
-- **An unversioned install no longer lowers `heldGeneration()` (qfg-9dxb.3).** An envelope with no
-  (or a `<= 0`) `meta.generation` no longer resets `heldGeneration()` to `0` when it installs; it keeps the
-  highest generation installed so far. Before, the reset let a later, older
-  positive snapshot install and move the client backward.
+  not a config envelope (no `meta` object with a non-empty `version`) is now rejected by a new
+  envelope check. Before, a body such as `{}` or `{"configs":[]}` decoded to an empty envelope and
+  wiped every held config. It is now a leg error on HTTP: the init hedge fires the secondary and
+  `refresh()` / the fallback poller fail over to the next URL. On SSE the event is dropped like
+  malformed JSON. `qfg serve` payloads (version + environment, no generation) still install.
 
 ### Added
 
