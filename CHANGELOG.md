@@ -13,9 +13,9 @@
 - **New fields from the server no longer stop config updates (qfg-2nvg).** If the delivery
   server added a new field to the config response (at the top level or in `meta`), the Java SDK
   failed to parse it on both HTTP and SSE and stayed on its current config. Unknown fields are now
-  tolerated in server payloads and in datafiles. Error bodies such as `{"error":"x"}` are still
-  rejected, by the new envelope check below. A datafile that is not a config file (for example
-  `{"error":"x"}`, `{}`, or a single per-config file) still fails at startup.
+  tolerated in server payloads and datafiles. Error bodies such as `{"error":"x"}` from the server
+  are still rejected, by the new envelope check below. A datafile that is not a config file (for
+  example `{"error":"x"}` or a single per-config file) still fails at startup, as in 1.3.0.
 - **A gen-0 payload no longer rolls config back (qfg-9dxb.9, qfg-9dxb.3).** Once the client has
   config from the server, a response with no generation number (sent only by a server with a
   damaged git store, which repairs itself) is ignored instead of possibly rolling config back.

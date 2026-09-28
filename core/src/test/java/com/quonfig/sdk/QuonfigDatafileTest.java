@@ -93,13 +93,18 @@ class QuonfigDatafileTest {
 
   // qfg-2nvg follow-up: the envelope mapper tolerates unknown fields, so a file that is not a
   // datafile at all must still fail loudly at construction instead of loading zero configs.
+  // Each of these also failed at construction in v1.3.0.
   @Test
   void datafile_notAnEnvelope_throwsOnConstruct(@TempDir Path tmp) throws Exception {
     String[] bodies = {
       "{\"error\":\"x\"}",
-      "{}",
       "{\"key\":\"a\",\"type\":\"feature_flag\",\"valueType\":\"bool\","
-          + "\"default\":{\"rules\":[]}}"
+          + "\"default\":{\"rules\":[]}}",
+      "[]",
+      "[{\"configs\":[]}]",
+      "\"configs\"",
+      "null",
+      ""
     };
     for (String body : bodies) {
       Path file = tmp.resolve("not-a-datafile.json");
@@ -110,6 +115,38 @@ class QuonfigDatafileTest {
               () -> new Quonfig(Options.builder().datafile(file.toString()).build()),
               "expected construction to fail for " + body);
       assertTrue(e.getMessage().contains("configs"), "unhelpful message: " + e.getMessage());
+    }
+  }
+
+  @Test
+  void datafile_errorObject_messageNamesUnexpectedField(@TempDir Path tmp) throws Exception {
+    Path file = tmp.resolve("not-a-datafile.json");
+    Files.writeString(file, "{\"meta\":{\"version\":\"v1\"},\"error\":\"x\"}");
+    IllegalStateException e =
+        assertThrows(
+            IllegalStateException.class,
+            () -> new Quonfig(Options.builder().datafile(file.toString()).build()));
+    assertTrue(
+        e.getMessage().contains("unexpected top-level field \"error\" and no \"configs\""),
+        e.getMessage());
+  }
+
+  // v1.3.0 loaded these as zero configs; they must keep loading (no regression vs 1.3.0).
+  @Test
+  void datafile_emptyOrEnvelopeOnlyShapes_loadAsZeroConfigs(@TempDir Path tmp) throws Exception {
+    String[] bodies = {
+      "{}",
+      "{\"configs\":null}",
+      "{\"configs\":[]}",
+      "{\"meta\":{\"version\":\"v1\",\"environment\":\"production\"}}",
+      "{\"meta\":null}"
+    };
+    for (String body : bodies) {
+      Path file = tmp.resolve("empty-datafile.json");
+      Files.writeString(file, body);
+      try (Quonfig q = new Quonfig(Options.builder().datafile(file.toString()).build())) {
+        assertEquals("fallback", q.getString("greeting", "fallback"), "for " + body);
+      }
     }
   }
 

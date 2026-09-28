@@ -35,6 +35,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -49,6 +50,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import org.slf4j.event.Level;
 
 /**
@@ -84,6 +86,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    */
   private static final ObjectMapper ENVELOPE_MAPPER =
       new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+  /** Top-level JSON field names {@link ConfigEnvelope} declares (configs, meta). */
+  private static final Set<String> ENVELOPE_FIELDS =
+      Set.copyOf(
+          ENVELOPE_MAPPER
+              .getDeserializationConfig()
+              .introspect(ENVELOPE_MAPPER.constructType(ConfigEnvelope.class))
+              .findProperties()
+              .stream()
+              .map(p -> p.getName())
+              .collect(Collectors.toSet()));
 
   private static final String CONFIGS_PATH = "/api/v2/configs";
 
@@ -690,16 +703,30 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
     Path file = Path.of(options.datafile());
     try {
-      // ENVELOPE_MAPPER ignores unknown fields (qfg-2nvg), so a file that is not a datafile
-      // (an error object, {}, a single per-config file) would decode to zero configs. Require a
-      // configs array so pointing at the wrong file still fails at construction.
+      // ENVELOPE_MAPPER ignores unknown fields (qfg-2nvg), so a file that is not a datafile (an
+      // error object, a single per-config file) would decode to zero configs. Reject a non-object,
+      // or an object with no "configs" that carries a field the envelope does not declare. Shapes
+      // v1.3.0 loaded as zero configs ({}, {"configs":null}, meta only) still load.
       JsonNode tree = ENVELOPE_MAPPER.readTree(Files.readAllBytes(file));
-      JsonNode configs = tree == null ? null : tree.get("configs");
-      if (configs == null || !configs.isArray()) {
+      if (tree == null || !tree.isObject()) {
         throw new IllegalStateException(
             "datafile "
                 + file
                 + " is not a Quonfig datafile: expected a top-level \"configs\" array");
+      }
+      if (!tree.has("configs")) {
+        Iterator<String> names = tree.fieldNames();
+        while (names.hasNext()) {
+          String name = names.next();
+          if (!ENVELOPE_FIELDS.contains(name)) {
+            throw new IllegalStateException(
+                "datafile "
+                    + file
+                    + " is not a Quonfig datafile: unexpected top-level field \""
+                    + name
+                    + "\" and no \"configs\"");
+          }
+        }
       }
       return ENVELOPE_MAPPER.treeToValue(tree, ConfigEnvelope.class);
     } catch (IOException e) {
