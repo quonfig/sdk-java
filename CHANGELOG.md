@@ -14,12 +14,15 @@
   server added a new field to the config response (at the top level or in `meta`), the Java SDK
   failed to parse it on both HTTP and SSE and stayed on its current config. Unknown fields are now
   ignored. Error bodies such as `{"error":"x"}` are still rejected, by the existing envelope check.
-- **A gen-0 payload no longer installs over a held real generation (qfg-9dxb.9).** An envelope with
-  no (or a `<= 0`) `meta.generation` now installs only while `heldGeneration()` is still `0` (a
-  client that has only seen gen-0 servers, e.g. `qfg serve`, keeps taking each payload). Once a
-  positive generation is held, a gen-0 payload is a silent no-op and is not counted as
-  `guardRejected`. Gen 0 now only comes from a server whose git object store is damaged; before,
-  it could move the client back to old content and keep it there until the next generation.
+- **A gen-0 payload no longer replaces config from a real generation (qfg-9dxb.9).** An envelope
+  with no (or a `<= 0`) `meta.generation` now installs only while `heldGeneration()` is still `0`
+  (a client that has only seen gen-0 servers, e.g. `qfg serve`, keeps taking each payload). Once a
+  positive generation is held, a gen-0 payload is ignored and is not counted as `guardRejected`.
+  Gen 0 now only comes from a server whose git object store is damaged. In 1.3.0 such a payload
+  installed, which could briefly move the client back to older config until the next response
+  that carried a real generation. The trade-off: while the client holds a real generation, any
+  change delivered only in a gen-0 payload is not applied; the client picks it up from the next
+  response that carries a higher generation.
 - **Non-envelope delivery payloads are rejected (qfg-9dxb.3).** A 200 (or SSE event) whose body is
   not a config envelope — no `meta` object with a non-empty `version`, e.g. `{}` or an error object
   from a misbehaving proxy — used to decode to an empty envelope and wipe every held config. It is

@@ -230,6 +230,38 @@ final class EnvelopeValidationTest {
     }
   }
 
+  /**
+   * qfg-9dxb.9 follow-up (sdk-node regression check): an ignored gen-0 200 must not leave its ETag
+   * behind. The server can later repair the generation for the SAME sha (same ETag); if the client
+   * sent that ETag as If-None-Match it would get 304 forever and stay on A until the next commit.
+   */
+  @Test
+  void ignoredGen0_thenSameEtagRepairedGeneration_installs() throws Exception {
+    Upstream primary = upstream(envelope("greeting", "A", 5));
+    primary.etag.set("shaA");
+    Quonfig client = client(List.of(primary.url()));
+    try {
+      client.initFuture().get(8, TimeUnit.SECONDS);
+      assertEquals("A", client.getString("greeting", "<missing>"));
+      assertEquals(5, client.heldGeneration());
+
+      primary.body.set(envelope("greeting", "B", 0));
+      primary.etag.set("shaB");
+      client.refresh();
+      assertEquals("A", client.getString("greeting", "<missing>"), "gen-0 B must be ignored");
+
+      primary.body.set(envelope("greeting", "B", 6));
+      client.refresh();
+      assertEquals(
+          "B",
+          client.getString("greeting", "<missing>"),
+          "repaired gen-6 B under the same ETag must install, not 304");
+      assertEquals(6, client.heldGeneration());
+    } finally {
+      client.close();
+    }
+  }
+
   // ---- qfg-2nvg: additive server fields must not break the install ----
 
   @Test
@@ -327,6 +359,10 @@ final class EnvelopeValidationTest {
   /** A minimal api-delivery stand-in whose 200 body can be swapped mid-test. */
   private static final class Upstream {
     final AtomicReference<String> body;
+
+    /** When non-null, sent as ETag; a matching If-None-Match gets a 304. */
+    final AtomicReference<String> etag = new AtomicReference<>();
+
     private final HttpServer server;
 
     Upstream(String initialBody) throws IOException {
@@ -342,8 +378,17 @@ final class EnvelopeValidationTest {
       server.createContext(
           "/api/v2/configs",
           (HttpExchange ex) -> {
+            String tag = etag.get();
+            if (tag != null && tag.equals(ex.getRequestHeaders().getFirst("If-None-Match"))) {
+              ex.sendResponseHeaders(304, -1);
+              ex.close();
+              return;
+            }
             byte[] b = body.get().getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().add("Content-Type", "application/json");
+            if (tag != null) {
+              ex.getResponseHeaders().add("ETag", tag);
+            }
             ex.sendResponseHeaders(200, b.length);
             try (OutputStream out = ex.getResponseBody()) {
               out.write(b);
