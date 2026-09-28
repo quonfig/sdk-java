@@ -34,6 +34,13 @@
 
 - `ConfigEnvelope.isDeliveryEnvelope()` and an `HttpTransport.get(URI, String, Predicate<String>)`
   overload that treats a rejected 2xx body as a leg error.
+- **`EvaluationDetails.metadata()` reports `hashPropertyMissing: true` when a weighted rollout
+  hashes on a property missing from the context (qfg-9dxb.8).** Such evaluations serve the first
+  variant with reason `SPLIT`, as before. The SDK now logs one warning per flag per client when
+  this happens. A property that is present but null or empty is still hashed and is not reported
+  as missing. Custom `WeightedValueResolver` implementations can report the fallback through the
+  new `Resolved(Value, int, String)` constructor and `Resolved.missingHashProperty()`;
+  `EvaluationMatch.missingHashProperty()` is also new.
 
 ## 1.3.0 - 2026-09-25
 

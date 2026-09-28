@@ -44,6 +44,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -97,6 +98,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final CompletableFuture<Void> initFuture;
   private final CopyOnWriteArrayList<Runnable> configUpdateListeners = new CopyOnWriteArrayList<>();
   private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
+  // Config keys already warned about a weighted rollout hashing on a missing property (qfg-9dxb.8).
+  private final Set<String> warnedMissingHashProperty = ConcurrentHashMap.newKeySet();
 
   /**
    * Environment used for evaluation and emitted in metadata.
@@ -1556,6 +1559,20 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
 
     Integer variantIndex = r == Reason.SPLIT ? match.weightedValueIndex() : null;
+    Map<String, Object> metadata =
+        metadataFor(cfg, r, match.ruleIndex(), match.weightedValueIndex());
+    if (match.missingHashProperty() != null) {
+      metadata.put("hashPropertyMissing", true);
+      if (warnedMissingHashProperty.add(cfg.key())) {
+        options
+            .logger()
+            .warn(
+                "quonfig: weighted rollout for \"{}\" hashes on \"{}\" which is missing from"
+                    + " context; using first variant",
+                cfg.key(),
+                match.missingHashProperty());
+      }
+    }
     return new EvaluationDetails<>(
         typed,
         r,
@@ -1563,7 +1580,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         variantIndex,
         null,
         null,
-        metadataFor(cfg, r, match.ruleIndex(), match.weightedValueIndex()));
+        metadata);
   }
 
   private static int reasonNumber(Reason r) {

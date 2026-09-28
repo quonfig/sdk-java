@@ -32,23 +32,40 @@ public final class EvaluationMatch {
   private final int ruleIndex;
   private final int weightedValueIndex;
   private final Reason reason;
+  private final String missingHashProperty;
 
   private EvaluationMatch(
-      boolean isMatch, Value value, int ruleIndex, int weightedValueIndex, Reason reason) {
+      boolean isMatch,
+      Value value,
+      int ruleIndex,
+      int weightedValueIndex,
+      Reason reason,
+      String missingHashProperty) {
     this.isMatch = isMatch;
     this.value = value;
     this.ruleIndex = ruleIndex;
     this.weightedValueIndex = weightedValueIndex;
     this.reason = reason;
+    this.missingHashProperty = missingHashProperty;
   }
 
   static EvaluationMatch matched(
       Value value, int ruleIndex, int weightedValueIndex, Reason reason) {
-    return new EvaluationMatch(true, value, ruleIndex, weightedValueIndex, reason);
+    return matched(value, ruleIndex, weightedValueIndex, reason, null);
+  }
+
+  static EvaluationMatch matched(
+      Value value,
+      int ruleIndex,
+      int weightedValueIndex,
+      Reason reason,
+      String missingHashProperty) {
+    return new EvaluationMatch(
+        true, value, ruleIndex, weightedValueIndex, reason, missingHashProperty);
   }
 
   static EvaluationMatch noMatch() {
-    return new EvaluationMatch(false, null, -1, -1, Reason.DEFAULT);
+    return new EvaluationMatch(false, null, -1, -1, Reason.DEFAULT, null);
   }
 
   public boolean isMatch() {
@@ -69,5 +86,13 @@ public final class EvaluationMatch {
 
   public Reason reason() {
     return reason;
+  }
+
+  /**
+   * The weighted rollout's {@code hashByPropertyName} when it was missing from the context and the
+   * first variant was served as a fallback (qfg-9dxb.8); null otherwise.
+   */
+  public String missingHashProperty() {
+    return missingHashProperty;
   }
 }

@@ -68,12 +68,14 @@ public final class Evaluator {
       if (allCriteriaMatch(config, rule.criteria(), contexts, segPath)) {
         Value v = rule.value();
         int weightedIndex = -1;
+        String missingHashProperty = null;
 
         if (v.type() == ValueType.WEIGHTED_VALUES && weightedResolver != null) {
           WeightedValueResolver.Resolved r = weightedResolver.resolve(config.key(), v, contexts);
           if (r != null) {
             v = r.value();
             weightedIndex = r.index();
+            missingHashProperty = r.missingHashProperty();
           }
         }
 
@@ -90,7 +92,7 @@ public final class Evaluator {
             (i == 0 && !hasTargetingRules(config))
                 ? EvaluationMatch.Reason.STATIC
                 : EvaluationMatch.Reason.TARGETING_MATCH;
-        return EvaluationMatch.matched(v, i, weightedIndex, reason);
+        return EvaluationMatch.matched(v, i, weightedIndex, reason, missingHashProperty);
       }
     }
     return null;

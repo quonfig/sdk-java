@@ -15,10 +15,20 @@ public interface WeightedValueResolver {
   final class Resolved {
     private final Value value;
     private final int index;
+    private final String missingHashProperty;
 
     public Resolved(Value value, int index) {
+      this(value, index, null);
+    }
+
+    /**
+     * @param missingHashProperty the {@code hashByPropertyName} that was absent from the context
+     *     when the resolver fell back to the first variant; null when no fallback happened.
+     */
+    public Resolved(Value value, int index, String missingHashProperty) {
       this.value = Objects.requireNonNull(value, "value");
       this.index = index;
+      this.missingHashProperty = missingHashProperty;
     }
 
     public Value value() {
@@ -27,6 +37,14 @@ public interface WeightedValueResolver {
 
     public int index() {
       return index;
+    }
+
+    /**
+     * The {@code hashByPropertyName} that was missing from the context, forcing the first-variant
+     * fallback; null when the property was present or no hash property was configured.
+     */
+    public String missingHashProperty() {
+      return missingHashProperty;
     }
   }
 }

@@ -34,6 +34,12 @@ public final class Murmur3WeightedValueResolver implements WeightedValueResolver
         wvData.get("hashByPropertyName") instanceof String
             ? (String) wvData.get("hashByPropertyName")
             : null;
+    String missingHashProperty =
+        hashByProperty != null
+                && !hashByProperty.isEmpty()
+                && (contexts == null || !contexts.getContextValue(hashByProperty).exists())
+            ? hashByProperty
+            : null;
     double fraction = userFraction(configKey, hashByProperty, contexts);
 
     long total = 0;
@@ -58,11 +64,11 @@ public final class Murmur3WeightedValueResolver implements WeightedValueResolver
       if ((double) running >= threshold) {
         Value subValue = parseSubValue(entry.get("value"));
         if (subValue == null) return null;
-        return new Resolved(subValue, i);
+        return new Resolved(subValue, i, missingHashProperty);
       }
     }
     Value first = parseSubValue(entries.get(0).get("value"));
-    return first == null ? null : new Resolved(first, 0);
+    return first == null ? null : new Resolved(first, 0, missingHashProperty);
   }
 
   private static double userFraction(String configKey, String hashByProperty, ContextSet ctx) {

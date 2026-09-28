@@ -29,7 +29,9 @@ import java.util.Objects;
  *   <li>{@link #metadata()} — never null; immutable. Standard keys (camelCase, per Java idiom):
  *       {@code configId}, {@code configKey}, {@code configType}, {@code ruleIndex} (only on {@link
  *       Reason#TARGETING_MATCH} or {@link Reason#SPLIT}), {@code weightedValueIndex} (only on
- *       {@link Reason#SPLIT}), {@code environment} (omitted when not known).
+ *       {@link Reason#SPLIT}), {@code environment} (omitted when not known), {@code
+ *       hashPropertyMissing} ({@code true} only when a weighted rollout's hash property was missing
+ *       from the context and the first variant was served; omitted otherwise).
  * </ul>
  *
  * @param <T> the typed value's Java type (String, Boolean, Long, Double, List&lt;String&gt;, …).
