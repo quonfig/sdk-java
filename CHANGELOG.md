@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **New fields from the server no longer stop config updates (qfg-2nvg).** If the delivery
+  server added a new field to the config response (at the top level or in `meta`), the Java SDK
+  failed to parse it on both HTTP and SSE and stayed on its current config. Unknown fields are now
+  ignored. Error bodies such as `{"error":"x"}` are still rejected, by the existing envelope check.
 - **A gen-0 payload no longer installs over a held real generation (qfg-9dxb.9).** An envelope with
   no (or a `<= 0`) `meta.generation` now installs only while `heldGeneration()` is still `0` (a
   client that has only seen gen-0 servers, e.g. `qfg serve`, keeps taking each payload). Once a

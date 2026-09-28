@@ -1,5 +1,6 @@
 package com.quonfig.sdk.transport;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.Version;
 import com.quonfig.sdk.wire.ConfigEnvelope;
@@ -60,7 +61,15 @@ import org.slf4j.LoggerFactory;
 public final class SseClient {
 
   private static final Logger log = LoggerFactory.getLogger(SseClient.class);
-  private static final ObjectMapper MAPPER = new ObjectMapper();
+
+  /**
+   * Ignores unknown properties so an additive server field (top-level or in {@code meta}) never
+   * breaks decoding (qfg-2nvg). Envelope shape is validated explicitly via {@link
+   * ConfigEnvelope#isDeliveryEnvelope()}, not by mapper strictness.
+   */
+  private static final ObjectMapper MAPPER =
+      new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
   private static final String SSE_PATH = "/api/v2/sse/config";
 
   private final List<URI> streamUrls;

@@ -1,5 +1,6 @@
 package com.quonfig.sdk;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.datadir.DatadirWatcher;
@@ -75,7 +76,14 @@ import org.slf4j.event.Level;
  */
 public final class Quonfig implements AutoCloseable, LoggerClient {
 
-  private static final ObjectMapper ENVELOPE_MAPPER = new ObjectMapper();
+  /**
+   * Ignores unknown properties so an additive server field (top-level or in {@code meta}) never
+   * breaks decoding (qfg-2nvg). Envelope shape is validated explicitly via {@link
+   * ConfigEnvelope#isDeliveryEnvelope()}, not by mapper strictness.
+   */
+  private static final ObjectMapper ENVELOPE_MAPPER =
+      new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
   private static final String CONFIGS_PATH = "/api/v2/configs";
 
   /**

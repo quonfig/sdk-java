@@ -49,6 +49,10 @@ final class EnvelopeValidationTest {
     assertJunk200KeepsHeldState("{}");
   }
 
+  /**
+   * qfg-2nvg: the envelope mapper now ignores unknown properties, so {@code {"error":"x"}} is
+   * rejected by the explicit shape check (isDeliveryEnvelope), not by Jackson strictness.
+   */
   @Test
   void errorObject200_onEstablishedClient_doesNotWipeKeysOrLowerGeneration() throws Exception {
     assertJunk200KeepsHeldState("{\"error\":\"x\"}");
@@ -221,6 +225,52 @@ final class EnvelopeValidationTest {
       assertEquals("c", client.getString("greeting", "<missing>"));
       assertEquals(3, client.configInstallCount(), "every gen-0 payload installs while held == 0");
       assertEquals(0, client.heldGeneration());
+    } finally {
+      client.close();
+    }
+  }
+
+  // ---- qfg-2nvg: additive server fields must not break the install ----
+
+  @Test
+  void extraTopLevelEnvelopeField_installs() throws Exception {
+    assertInstallsOnFreshClient(
+        "{\"configs\":["
+            + configJson("greeting", "hello")
+            + "],\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":5},"
+            + "\"futureTopLevel\":{\"nested\":[1,2,3]}}");
+  }
+
+  @Test
+  void extraMetaField_installs() throws Exception {
+    assertInstallsOnFreshClient(
+        "{\"configs\":["
+            + configJson("greeting", "hello")
+            + "],\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":5,"
+            + "\"futureMeta\":\"x\"}}");
+  }
+
+  @Test
+  void extraFieldsOnConfigRuleAndValue_install() throws Exception {
+    String cfg =
+        "{\"id\":\"c-greeting\",\"key\":\"greeting\",\"type\":\"config\",\"valueType\":\"string\","
+            + "\"futureConfigField\":true,"
+            + "\"default\":{\"futureRuleSetField\":1,\"rules\":[{\"futureRuleField\":\"r\",\"criteria\":[],"
+            + "\"value\":{\"type\":\"string\",\"value\":\"hello\",\"futureValueField\":{}}}]}}";
+    assertInstallsOnFreshClient(
+        "{\"configs\":["
+            + cfg
+            + "],\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":5}}");
+  }
+
+  private void assertInstallsOnFreshClient(String body) throws Exception {
+    Upstream primary = upstream(body);
+    Quonfig client = client(List.of(primary.url()));
+    try {
+      client.initFuture().get(8, TimeUnit.SECONDS);
+      assertEquals("hello", client.getString("greeting", "<missing>"));
+      assertEquals(5, client.heldGeneration());
+      assertEquals(1, client.configInstallCount());
     } finally {
       client.close();
     }

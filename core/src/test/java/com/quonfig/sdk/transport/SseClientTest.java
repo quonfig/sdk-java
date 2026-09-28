@@ -452,6 +452,8 @@ class SseClientTest {
                 writeFrame(out, "junk2", "{\"configs\":[]}");
                 writeFrame(out, "junk3", "{\"configs\":[],\"meta\":{\"version\":\"\"}}");
                 writeFrame(out, "junk4", "{\"configs\":[],\"meta\":{\"environment\":\"prod\"}}");
+                // qfg-2nvg: rejected by the shape check, not by mapper strictness.
+                writeFrame(out, "junk5", "{\"error\":\"x\"}");
                 writeFrame(out, "v2", "{\"meta\":{\"version\":\"v2\"},\"configs\":[]}");
                 Thread.sleep(2000);
               } catch (IOException | InterruptedException ignored) {
@@ -474,6 +476,63 @@ class SseClientTest {
     ConfigEnvelope first = received.poll(3, TimeUnit.SECONDS);
     assertNotNull(first, "expected the valid envelope past the junk frames");
     assertEquals("v2", first.meta().version(), "non-envelope frames must be dropped");
+  }
+
+  /**
+   * qfg-2nvg: additive server fields (top-level, meta, and on nested config/rule/value entries)
+   * must not make the SSE parser discard the envelope.
+   */
+  @Test
+  void acceptsEnvelopesWithUnknownFields() throws Exception {
+    BlockingQueue<ConfigEnvelope> received = new LinkedBlockingQueue<>();
+    String cfg =
+        "{\"id\":\"c-greeting\",\"key\":\"greeting\",\"type\":\"config\",\"valueType\":\"string\","
+            + "\"futureConfigField\":true,\"default\":{\"rules\":[{\"futureRuleField\":1,"
+            + "\"criteria\":[],\"value\":{\"type\":\"string\",\"value\":\"hello\",\"futureValueField\":{}}}]}}";
+
+    HttpServer s =
+        start(
+            (HttpExchange ex) -> {
+              ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+              ex.sendResponseHeaders(200, 0);
+              OutputStream out = ex.getResponseBody();
+              try {
+                writeFrame(
+                    out,
+                    "v1",
+                    "{\"configs\":[],\"meta\":{\"version\":\"v1\"},\"futureTopLevel\":[1]}");
+                writeFrame(
+                    out,
+                    "v2",
+                    "{\"configs\":[],\"meta\":{\"version\":\"v2\",\"futureMeta\":\"x\"}}");
+                writeFrame(out, "v3", "{\"configs\":[" + cfg + "],\"meta\":{\"version\":\"v3\"}}");
+                Thread.sleep(2000);
+              } catch (IOException | InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+              } finally {
+                ex.close();
+              }
+            });
+
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s)))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .build();
+    client.onEnvelope(received::add);
+    client.start();
+
+    for (String v : List.of("v1", "v2", "v3")) {
+      ConfigEnvelope env = received.poll(3, TimeUnit.SECONDS);
+      assertNotNull(env, "envelope " + v + " with unknown fields must not be discarded");
+      assertEquals(v, env.meta().version());
+      if (v.equals("v3")) {
+        assertEquals(
+            "greeting", com.quonfig.sdk.DatadirLoader.parseConfigNode(env.configs().get(0)).key());
+      }
+    }
   }
 
   /** stop() must unwind a connected reader within a couple of seconds. */
