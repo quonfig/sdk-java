@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **A segment or encryption key that refers back to itself no longer crashes evaluation
+  (qfg-9dxb.7).** A segment that includes itself through `IN_SEG` / `NOT_IN_SEG` (directly or via
+  another segment), or a `decryptWith` key chain that loops, used to recurse until a
+  `StackOverflowError` escaped the SDK. A looping segment reference is now treated like a missing
+  segment (`IN_SEG` is false, `NOT_IN_SEG` is true), and a looping `decryptWith` chain fails like
+  any other decryption error. This matches sdk-go.
 - **New fields from the server no longer stop config updates (qfg-2nvg).** If the delivery
   server added a new field to the config response (at the top level or in `meta`), the Java SDK
   failed to parse it on both HTTP and SSE and stayed on its current config. Unknown fields are now

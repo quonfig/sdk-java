@@ -285,6 +285,39 @@ class ResolverTest {
     assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
   }
 
+  // ----- qfg-9dxb.7: decryptWith cycles are a decryption failure, not a stack overflow -----
+
+  @Test
+  void resolve_decryptWithSelfCycle_throwsUnableToDecrypt() {
+    ConfigRow keyCfg =
+        row(
+            "k.self",
+            ValueType.STRING,
+            new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.self"));
+    MapStore store = new MapStore().put(keyCfg);
+    Value secret = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "k.self");
+    ConfigRow cfg = rowNoRules("a.secret", ValueType.STRING);
+    Resolver r = new Resolver(store, new Evaluator(store), key -> Optional.empty());
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(secret, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+  }
+
+  @Test
+  void resolve_decryptWithTwoHopCycle_throwsUnableToDecrypt() {
+    ConfigRow a =
+        row("k.a", ValueType.STRING, new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.b"));
+    ConfigRow b =
+        row("k.b", ValueType.STRING, new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.a"));
+    MapStore store = new MapStore().put(a).put(b);
+    Value secret = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "k.a");
+    ConfigRow cfg = rowNoRules("a.secret", ValueType.STRING);
+    Resolver r = new Resolver(store, new Evaluator(store), key -> Optional.empty());
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(secret, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+  }
+
   // ----- ReportableValueFor: telemetry redaction -----
 
   @Test

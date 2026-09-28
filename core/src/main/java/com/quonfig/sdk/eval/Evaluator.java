@@ -1,5 +1,6 @@
 package com.quonfig.sdk.eval;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -32,26 +33,39 @@ public final class Evaluator {
   }
 
   public EvaluationMatch evaluate(ConfigRow config, String envId, ContextSet contexts) {
+    return evaluate(config, envId, contexts, null);
+  }
+
+  /**
+   * {@link #evaluate(ConfigRow, String, ContextSet)} plus {@code segPath}: the keys of the configs
+   * currently being evaluated above this one through IN_SEG / NOT_IN_SEG. A segment reference back
+   * onto the path is a cycle and is treated like a missing segment (IN_SEG false, NOT_IN_SEG true)
+   * instead of recursing until StackOverflowError (qfg-9dxb.7, mirrors sdk-go qfg-9dxb.4). It is a
+   * path, not a global visited set, so a diamond still resolves. {@code null} means empty.
+   */
+  private EvaluationMatch evaluate(
+      ConfigRow config, String envId, ContextSet contexts, List<String> segPath) {
     if (contexts == null) contexts = new ContextSet();
 
     if (envId != null && !envId.isEmpty()) {
       Environment env = config.findEnvironment(envId);
       if (env != null) {
-        EvaluationMatch m = evaluateRules(config, env.rules(), contexts);
+        EvaluationMatch m = evaluateRules(config, env.rules(), contexts, segPath);
         if (m != null) return m;
       }
     }
 
-    EvaluationMatch m = evaluateRules(config, config.defaultRules().rules(), contexts);
+    EvaluationMatch m = evaluateRules(config, config.defaultRules().rules(), contexts, segPath);
     if (m != null) return m;
 
     return EvaluationMatch.noMatch();
   }
 
-  private EvaluationMatch evaluateRules(ConfigRow config, List<Rule> rules, ContextSet contexts) {
+  private EvaluationMatch evaluateRules(
+      ConfigRow config, List<Rule> rules, ContextSet contexts, List<String> segPath) {
     for (int i = 0; i < rules.size(); i++) {
       Rule rule = rules.get(i);
-      if (allCriteriaMatch(config, rule.criteria(), contexts)) {
+      if (allCriteriaMatch(config, rule.criteria(), contexts, segPath)) {
         Value v = rule.value();
         int weightedIndex = -1;
 
@@ -106,22 +120,31 @@ public final class Evaluator {
   }
 
   private boolean allCriteriaMatch(
-      ConfigRow config, List<Criterion> criteria, ContextSet contexts) {
+      ConfigRow config, List<Criterion> criteria, ContextSet contexts, List<String> segPath) {
     for (Criterion c : criteria) {
-      if (!evaluateOne(config, c, contexts)) return false;
+      if (!evaluateOne(config, c, contexts, segPath)) return false;
     }
     return true;
   }
 
-  private boolean evaluateOne(ConfigRow config, Criterion criterion, ContextSet contexts) {
+  private boolean evaluateOne(
+      ConfigRow config, Criterion criterion, ContextSet contexts, List<String> segPath) {
     ContextSet.Lookup lookup = contexts.getContextValue(criterion.propertyName());
 
     SegmentResolver segmentResolver =
         segKey -> {
           if (configStore == null) return SegmentResolver.Result.notFound();
+          // A reference back onto the current evaluation path is a cycle: treat it like a
+          // missing segment rather than recursing forever (qfg-9dxb.7).
+          if (segKey.equals(config.key()) || (segPath != null && segPath.contains(segKey))) {
+            return SegmentResolver.Result.notFound();
+          }
           ConfigRow seg = configStore.getConfig(segKey);
           if (seg == null) return SegmentResolver.Result.notFound();
-          EvaluationMatch m = evaluate(seg, "", contexts);
+          List<String> childPath = new ArrayList<>(segPath == null ? 1 : segPath.size() + 1);
+          if (segPath != null) childPath.addAll(segPath);
+          childPath.add(config.key());
+          EvaluationMatch m = evaluate(seg, "", contexts, childPath);
           if (!m.isMatch() || m.value() == null) return SegmentResolver.Result.notFound();
           Object raw = m.value().value();
           boolean v = raw instanceof Boolean && (Boolean) raw;

@@ -7,6 +7,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -75,13 +76,25 @@ public final class Resolver {
    * env-var-sourced values; decrypts AES-GCM confidentials.
    */
   public Value resolve(Value val, ConfigRow cfg, String envId, ContextSet contexts) {
+    return resolve(val, cfg, envId, contexts, null);
+  }
+
+  /**
+   * {@link #resolve(Value, ConfigRow, String, ContextSet)} plus {@code keyPath}: the config keys
+   * already being resolved above this one through decryptWith. A decryptWith pointing back onto the
+   * path is a cycle and fails with {@link ResolverException.Kind#UNABLE_TO_DECRYPT} instead of
+   * recursing until StackOverflowError (qfg-9dxb.7, mirrors sdk-go qfg-9dxb.4). {@code null} means
+   * empty.
+   */
+  private Value resolve(
+      Value val, ConfigRow cfg, String envId, ContextSet contexts, List<String> keyPath) {
     if (val == null) return null;
 
     if (val.type() == ValueType.PROVIDED) {
       return resolveProvided(val, cfg);
     }
     if (val.confidential() && val.decryptWith() != null && !val.decryptWith().isEmpty()) {
-      return resolveDecryption(val, cfg, envId, contexts);
+      return resolveDecryption(val, cfg, envId, contexts, keyPath);
     }
     return val;
   }
@@ -106,11 +119,21 @@ public final class Resolver {
     return new Value(cfg.valueType(), coerce(envValue.get(), cfg.valueType(), cfg.key()));
   }
 
-  private Value resolveDecryption(Value val, ConfigRow cfg, String envId, ContextSet contexts) {
+  private Value resolveDecryption(
+      Value val, ConfigRow cfg, String envId, ContextSet contexts, List<String> keyPath) {
     if (configStore == null || evaluator == null) {
       throw new ResolverException(
           ResolverException.Kind.UNABLE_TO_DECRYPT,
           "no config store available for decryption key lookup");
+    }
+
+    List<String> path = new ArrayList<>(keyPath == null ? 1 : keyPath.size() + 1);
+    if (keyPath != null) path.addAll(keyPath);
+    path.add(cfg.key());
+    if (path.contains(val.decryptWith())) {
+      throw new ResolverException(
+          ResolverException.Kind.UNABLE_TO_DECRYPT,
+          "decryption key config \"" + val.decryptWith() + "\" is part of a decryptWith cycle");
     }
 
     ConfigRow keyCfg = configStore.getConfig(val.decryptWith());
@@ -129,7 +152,7 @@ public final class Resolver {
 
     Value resolvedKey;
     try {
-      resolvedKey = resolve(keyMatch.value(), keyCfg, envId, contexts);
+      resolvedKey = resolve(keyMatch.value(), keyCfg, envId, contexts, path);
     } catch (ResolverException e) {
       throw new ResolverException(
           ResolverException.Kind.UNABLE_TO_DECRYPT,

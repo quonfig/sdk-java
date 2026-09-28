@@ -302,6 +302,100 @@ class EvaluatorTest {
     assertEquals(false, m.value().value());
   }
 
+  // ----- qfg-9dxb.7: IN_SEG / NOT_IN_SEG reference cycles (sdk-go qfg-9dxb.4 semantics) -----
+
+  private static ConfigRow segment(String key, Rule... rules) {
+    return new ConfigRow(
+        key,
+        key,
+        ConfigType.SEGMENT,
+        ValueType.BOOL,
+        false,
+        new RuleSet(Arrays.asList(rules)),
+        Collections.emptyList());
+  }
+
+  private static Criterion seg(String op, String segKey) {
+    return new Criterion(null, op, new Value(ValueType.STRING, segKey));
+  }
+
+  /** A cycle is treated like a missing segment: IN_SEG false, NOT_IN_SEG true. */
+  @Test
+  void segmentCycle_selfReference_treatedAsMissingSegment() {
+    ConfigRow inSelf =
+        segment(
+            "seg.in-self",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.in-self")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow notInSelf =
+        segment(
+            "seg.not-in-self",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.NOT_IN_SEG, "seg.not-in-self")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    Evaluator ev = new Evaluator(new MapStore().put(inSelf).put(notInSelf));
+
+    assertEquals(false, ev.evaluate(inSelf, "", new ContextSet()).value().value());
+    assertEquals(true, ev.evaluate(notInSelf, "", new ContextSet()).value().value());
+  }
+
+  @Test
+  void segmentCycle_twoHop_treatedAsMissingSegment() {
+    ConfigRow a =
+        segment(
+            "seg.a",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.b")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow b =
+        segment(
+            "seg.b",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.a")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow gated =
+        flag(
+            "flag.gated",
+            ValueType.BOOL,
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.a")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow notGated =
+        flag(
+            "flag.not-gated",
+            ValueType.BOOL,
+            rule(new Value(ValueType.BOOL, true), seg(Operators.NOT_IN_SEG, "seg.a")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    Evaluator ev = new Evaluator(new MapStore().put(a).put(b).put(gated).put(notGated));
+
+    // seg.a -> seg.b -> seg.a: the back-reference is missing, so seg.b and seg.a are false.
+    assertEquals(false, ev.evaluate(gated, "", new ContextSet()).value().value());
+    assertEquals(true, ev.evaluate(notGated, "", new ContextSet()).value().value());
+  }
+
+  /** A diamond (two segments referencing a third) is not a cycle and still resolves. */
+  @Test
+  void segmentDiamond_stillResolves() {
+    ConfigRow leaf = segment("seg.leaf", emptyRule(new Value(ValueType.BOOL, true)));
+    ConfigRow left =
+        segment(
+            "seg.left",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.leaf")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow right =
+        segment(
+            "seg.right",
+            rule(new Value(ValueType.BOOL, true), seg(Operators.IN_SEG, "seg.leaf")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    ConfigRow top =
+        flag(
+            "flag.top",
+            ValueType.BOOL,
+            rule(
+                new Value(ValueType.BOOL, true),
+                seg(Operators.IN_SEG, "seg.left"),
+                seg(Operators.IN_SEG, "seg.right")),
+            emptyRule(new Value(ValueType.BOOL, false)));
+    Evaluator ev = new Evaluator(new MapStore().put(leaf).put(left).put(right).put(top));
+    assertEquals(true, ev.evaluate(top, "", new ContextSet()).value().value());
+  }
+
   // ----- DEFAULT reason: empty rule set in both env and default -----
 
   @Test
