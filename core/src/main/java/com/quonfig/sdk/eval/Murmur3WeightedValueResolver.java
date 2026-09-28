@@ -34,13 +34,14 @@ public final class Murmur3WeightedValueResolver implements WeightedValueResolver
         wvData.get("hashByPropertyName") instanceof String
             ? (String) wvData.get("hashByPropertyName")
             : null;
-    String missingHashProperty =
-        hashByProperty != null
-                && !hashByProperty.isEmpty()
-                && (contexts == null || !contexts.getContextValue(hashByProperty).exists())
-            ? hashByProperty
-            : null;
-    double fraction = userFraction(configKey, hashByProperty, contexts);
+    boolean hasHashProperty = hashByProperty != null && !hashByProperty.isEmpty();
+    // One lookup decides both the bucket fraction and whether the property was missing.
+    ContextSet.Lookup lookup =
+        hasHashProperty && contexts != null ? contexts.getContextValue(hashByProperty) : null;
+    boolean found = lookup != null && lookup.exists();
+    String missingHashProperty = hasHashProperty && !found ? hashByProperty : null;
+    double fraction =
+        found ? murmur3HashZeroToOne(configKey + String.valueOf(lookup.value())) : 0.0;
 
     long total = 0;
     List<Map<String, Object>> entries = new ArrayList<>();
@@ -69,15 +70,6 @@ public final class Murmur3WeightedValueResolver implements WeightedValueResolver
     }
     Value first = parseSubValue(entries.get(0).get("value"));
     return first == null ? null : new Resolved(first, 0, missingHashProperty);
-  }
-
-  private static double userFraction(String configKey, String hashByProperty, ContextSet ctx) {
-    if (hashByProperty == null || hashByProperty.isEmpty() || ctx == null) {
-      return 0.0;
-    }
-    ContextSet.Lookup lookup = ctx.getContextValue(hashByProperty);
-    if (!lookup.exists()) return 0.0;
-    return murmur3HashZeroToOne(configKey + String.valueOf(lookup.value()));
   }
 
   /** Mirrors {@code float64(murmur3.Sum32(value)) / float64(math.MaxUint32)} from sdk-go. */
