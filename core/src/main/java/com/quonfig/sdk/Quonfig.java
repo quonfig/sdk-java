@@ -687,7 +687,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
     Path file = Path.of(options.datafile());
     try {
-      return ENVELOPE_MAPPER.readValue(Files.readAllBytes(file), ConfigEnvelope.class);
+      // ENVELOPE_MAPPER ignores unknown fields (qfg-2nvg), so a file that is not a datafile
+      // (an error object, {}, a single per-config file) would decode to zero configs. Require a
+      // configs array so pointing at the wrong file still fails at construction.
+      JsonNode tree = ENVELOPE_MAPPER.readTree(Files.readAllBytes(file));
+      JsonNode configs = tree == null ? null : tree.get("configs");
+      if (configs == null || !configs.isArray()) {
+        throw new IllegalStateException(
+            "datafile "
+                + file
+                + " is not a Quonfig datafile: expected a top-level \"configs\" array");
+      }
+      return ENVELOPE_MAPPER.treeToValue(tree, ConfigEnvelope.class);
     } catch (IOException e) {
       throw new IllegalStateException("failed to read datafile " + file + ": " + e.getMessage(), e);
     }

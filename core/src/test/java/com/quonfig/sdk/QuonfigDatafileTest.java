@@ -91,6 +91,54 @@ class QuonfigDatafileTest {
         () -> new Quonfig(Options.builder().datafile(missing.toString()).build()));
   }
 
+  // qfg-2nvg follow-up: the envelope mapper tolerates unknown fields, so a file that is not a
+  // datafile at all must still fail loudly at construction instead of loading zero configs.
+  @Test
+  void datafile_notAnEnvelope_throwsOnConstruct(@TempDir Path tmp) throws Exception {
+    String[] bodies = {
+      "{\"error\":\"x\"}",
+      "{}",
+      "{\"key\":\"a\",\"type\":\"feature_flag\",\"valueType\":\"bool\","
+          + "\"default\":{\"rules\":[]}}"
+    };
+    for (String body : bodies) {
+      Path file = tmp.resolve("not-a-datafile.json");
+      Files.writeString(file, body);
+      IllegalStateException e =
+          assertThrows(
+              IllegalStateException.class,
+              () -> new Quonfig(Options.builder().datafile(file.toString()).build()),
+              "expected construction to fail for " + body);
+      assertTrue(e.getMessage().contains("configs"), "unhelpful message: " + e.getMessage());
+    }
+  }
+
+  @Test
+  void datafile_unknownTopLevelAndMetaFields_stillLoads(@TempDir Path tmp) throws Exception {
+    String withExtras =
+        ENVELOPE_JSON
+            .replace("\"workspaceId\":\"ws-1\"", "\"workspaceId\":\"ws-1\",\"futureMeta\":7")
+            .replaceFirst("\\{", "{\"futureTopLevel\":{\"a\":1},");
+    Path file = tmp.resolve("quonfig-datafile.json");
+    Files.writeString(file, withExtras);
+    try (Quonfig q = new Quonfig(Options.builder().datafile(file.toString()).build())) {
+      assertEquals("hello-prod", q.getString("greeting", "fallback"));
+    }
+  }
+
+  @Test
+  void datafile_withoutMeta_stillLoads(@TempDir Path tmp) throws Exception {
+    // Loaded in v1.3.0; a hand-written datafile may omit meta entirely.
+    String noMeta = "{" + ENVELOPE_JSON.substring(ENVELOPE_JSON.indexOf("\"configs\""));
+    Path file = tmp.resolve("quonfig-datafile.json");
+    Files.writeString(file, noMeta);
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder().datafile(file.toString()).environment("production").build())) {
+      assertEquals("hello-prod", q.getString("greeting", "fallback"));
+    }
+  }
+
   // qfg-srj8 / chaos scenario 10: a RuntimeException thrown by an onConfigUpdate listener
   // must NOT crash the client and MUST be logged at ERROR with a message matching
   // /callback|onConfigUpdate/i so the chaos harness's sdkLog matcher can find it. Mirrors
