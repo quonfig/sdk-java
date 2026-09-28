@@ -129,28 +129,35 @@ class Murmur3WeightedValueResolverTest {
     return totalWeight - 1;
   }
 
-  // ----- Fallback when hashByPropertyName is missing or property absent -----
+  // ----- No hashByPropertyName, or property missing from context (qfg-9dxb.8, qfg-t9wo) -----
 
   @Test
-  void absentHashByPropertyName_fallsBackToZerothBucket() {
+  void absentHashByPropertyName_picksRandomVariantPerEvaluation() {
     WeightedValueResolver r = new Murmur3WeightedValueResolver();
     Value v = wv(null, Arrays.asList(entry(1, "string", "first"), entry(1, "string", "second")));
 
-    WeightedValueResolver.Resolved res = r.resolve("flag.x", v, new ContextSet());
-    assertNotNull(res);
-    assertEquals(0, res.index());
-    assertEquals("first", res.value().value());
+    int[] counts = new int[2];
+    for (int i = 0; i < 1000; i++) {
+      WeightedValueResolver.Resolved res = r.resolve("flag.x", v, new ContextSet());
+      assertNotNull(res);
+      assertEquals(null, res.missingHashProperty());
+      counts[res.index()]++;
+    }
+    assertTrue(counts[0] > 300 && counts[1] > 300, "counts: " + Arrays.toString(counts));
   }
 
   @Test
-  void contextMissingProperty_fallsBackToZerothBucket() {
+  void contextMissingProperty_hashesEmptyValue() {
     WeightedValueResolver r = new Murmur3WeightedValueResolver();
     Value v =
         wv("user.id", Arrays.asList(entry(1, "string", "first"), entry(1, "string", "second")));
 
-    // Empty context → property "user.id" not present.
+    // Empty context -> property "user.id" not present: same bucket as a present "".
     WeightedValueResolver.Resolved res = r.resolve("flag.x", v, new ContextSet());
+    WeightedValueResolver.Resolved empty = r.resolve("flag.x", v, user("id", ""));
     assertNotNull(res);
-    assertEquals(0, res.index());
+    assertEquals(empty.index(), res.index());
+    assertEquals("user.id", res.missingHashProperty());
+    assertEquals(null, empty.missingHashProperty());
   }
 }

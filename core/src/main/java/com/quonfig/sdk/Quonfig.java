@@ -1595,7 +1595,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             .logger()
             .warn(
                 "quonfig: weighted rollout for \"{}\" hashes on \"{}\" which is missing from"
-                    + " context; using first variant",
+                    + " context; hashing an empty value instead",
                 cfg.key(),
                 match.missingHashProperty());
       }

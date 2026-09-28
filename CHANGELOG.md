@@ -2,8 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- **A weighted rollout that hashes on a missing property now hashes an empty value
+  (qfg-9dxb.8).** When a weighted rollout hashes on a property that is missing from the context
+  (or is null), the SDK now hashes an empty value, so every such caller gets the same variant for
+  that flag: the variant a present empty string gets. In 1.3.0 such callers always got the first
+  variant, even one with weight 0, and a null value was hashed as the text `"null"`.
+  `EvaluationDetails.metadata()` reports `hashPropertyMissing: true` for these evaluations (not
+  for a present empty string), the reason stays `SPLIT`, and the SDK logs one warning per flag per
+  client. Results for a present, non-empty value are unchanged.
+
 ### Fixed
 
+- **A weighted rollout with no hash property picks a random variant again (qfg-t9wo).** A weighted
+  rollout with no hash property configured now picks a random variant on every evaluation,
+  weighted by the weights. In 1.3.0 it always served the first variant, so a 10/90 split served
+  the first variant 100% of the time.
 - **A segment or encryption key that refers back to itself no longer crashes evaluation
   (qfg-9dxb.7).** A segment that includes itself through `IN_SEG` / `NOT_IN_SEG` (directly or via
   another segment), or a `decryptWith` key chain that loops, used to recurse until a
@@ -34,13 +49,11 @@
 
 - `ConfigEnvelope.isDeliveryEnvelope()` and an `HttpTransport.get(URI, String, Predicate<String>)`
   overload that treats a rejected 2xx body as a leg error.
-- **`EvaluationDetails.metadata()` reports `hashPropertyMissing: true` when a weighted rollout
-  hashes on a property missing from the context (qfg-9dxb.8).** Such evaluations serve the first
-  variant with reason `SPLIT`, as before. The SDK now logs one warning per flag per client when
-  this happens. A property that is present but null or empty is still hashed and is not reported
-  as missing. Custom `WeightedValueResolver` implementations can report the fallback through the
-  new `Resolved(Value, int, String)` constructor and `Resolved.missingHashProperty()`;
-  `EvaluationMatch.missingHashProperty()` is also new.
+- `EvaluationDetails.metadata()` key `hashPropertyMissing` (see Changed above). Custom
+  `WeightedValueResolver` implementations can report a missing hash property through the new
+  `Resolved(Value, int, String)` constructor and `Resolved.missingHashProperty()`;
+  `EvaluationMatch.missingHashProperty()` is also new. The existing `Resolved(Value, int)`
+  constructor still works and reports nothing missing.
 
 ## 1.3.0 - 2026-09-25
 

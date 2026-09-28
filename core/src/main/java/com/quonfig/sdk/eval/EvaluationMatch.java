@@ -89,8 +89,8 @@ public final class EvaluationMatch {
   }
 
   /**
-   * The weighted rollout's {@code hashByPropertyName} when it was missing from the context and the
-   * first variant was served as a fallback (qfg-9dxb.8); null otherwise.
+   * The weighted rollout's {@code hashByPropertyName} when it was missing (or null) in the context
+   * and an empty value was hashed instead (qfg-9dxb.8); null otherwise.
    */
   public String missingHashProperty() {
     return missingHashProperty;

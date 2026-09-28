@@ -444,7 +444,7 @@ class QuonfigDatadirTest {
   void getStringDetails_split_usesAutoWiredMurmur3Resolver_whenNoneSupplied() throws Exception {
     // No weightedValueResolver is configured: the SDK must auto-wire Murmur3 by default so a
     // weighted config still resolves to a concrete value AND reports reason SPLIT. With no
-    // hashByPropertyName the resolver deterministically picks bucket 0. qfg-q7yz.
+    // hashByPropertyName the resolver picks a random variant per evaluation (qfg-t9wo). qfg-q7yz.
     writeConfig(
         "configs",
         "ab.auto",
@@ -458,11 +458,13 @@ class QuonfigDatadirTest {
         new Quonfig(
             Options.builder().datadir(workspaceDir.toString()).environment("production").build())) {
       EvaluationDetails<String> d = q.getStringDetails("ab.auto", "fallback");
-      assertEquals("a", d.value(), "auto-wired Murmur3 resolved the weighted value");
+      int idx = "a".equals(d.value()) ? 0 : 1;
+      assertEquals(
+          idx == 0 ? "a" : "b", d.value(), "auto-wired Murmur3 resolved the weighted value");
       assertEquals(Reason.SPLIT, d.reason());
-      assertEquals("split:0", d.variant());
-      assertEquals(Integer.valueOf(0), d.variantIndex());
-      assertEquals(0, d.metadata().get("weightedValueIndex"));
+      assertEquals("split:" + idx, d.variant());
+      assertEquals(Integer.valueOf(idx), d.variantIndex());
+      assertEquals(idx, d.metadata().get("weightedValueIndex"));
     }
   }
 

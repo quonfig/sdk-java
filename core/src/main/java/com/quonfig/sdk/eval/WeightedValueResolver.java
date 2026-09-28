@@ -22,8 +22,8 @@ public interface WeightedValueResolver {
     }
 
     /**
-     * @param missingHashProperty the {@code hashByPropertyName} that was absent from the context
-     *     when the resolver fell back to the first variant; null when no fallback happened.
+     * @param missingHashProperty the {@code hashByPropertyName} that was missing (or null) in the
+     *     context, so the resolver hashed an empty value; null otherwise.
      */
     public Resolved(Value value, int index, String missingHashProperty) {
       this.value = Objects.requireNonNull(value, "value");
@@ -40,8 +40,8 @@ public interface WeightedValueResolver {
     }
 
     /**
-     * The {@code hashByPropertyName} that was missing from the context, forcing the first-variant
-     * fallback; null when the property was present or no hash property was configured.
+     * The {@code hashByPropertyName} that was missing (or null) in the context, so an empty value
+     * was hashed; null when the property was present or no hash property was configured.
      */
     public String missingHashProperty() {
       return missingHashProperty;
