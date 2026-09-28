@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-09-28
 
 ### Changed
 
@@ -19,6 +19,13 @@
   rollout with no hash property configured now picks a random variant on every evaluation,
   weighted by the weights. In 1.3.0 it always served the first variant, so a 10/90 split served
   the first variant 100% of the time.
+- **A gen-0 payload no longer rolls config back (qfg-9dxb.9, qfg-9dxb.3).** Once the client has
+  config from the server, a response with no generation number (sent only by a server with a
+  damaged git store, which repairs itself) is ignored instead of possibly rolling config back.
+  Clients that have only seen `qfg serve` still take every update. Such a response also no longer
+  lowers `heldGeneration()`, and it is not counted as `guardRejected`. The trade-off: a change
+  that arrives only in a gen-0 payload is applied from the next response that carries a higher
+  generation.
 - **A segment or encryption key that refers back to itself no longer crashes evaluation
   (qfg-9dxb.7).** A segment that includes itself through `IN_SEG` / `NOT_IN_SEG` (directly or via
   another segment), or a `decryptWith` key chain that loops, used to recurse until a
@@ -31,13 +38,6 @@
   tolerated in server payloads and datafiles. Error bodies such as `{"error":"x"}` from the server
   are still rejected, by the new envelope check below. A datafile that is not a config file (for
   example `{"error":"x"}` or a single per-config file) still fails at startup, as in 1.3.0.
-- **A gen-0 payload no longer rolls config back (qfg-9dxb.9, qfg-9dxb.3).** Once the client has
-  config from the server, a response with no generation number (sent only by a server with a
-  damaged git store, which repairs itself) is ignored instead of possibly rolling config back.
-  Clients that have only seen `qfg serve` still take every update. Such a response also no longer
-  lowers `heldGeneration()`, and it is not counted as `guardRejected`. The trade-off: a change
-  that arrives only in a gen-0 payload is applied from the next response that carries a higher
-  generation.
 - **Non-envelope delivery payloads are rejected (qfg-9dxb.3).** A 200 (or SSE event) whose body is
   not a config envelope (no `meta` object with a non-empty `version`) is now rejected by a new
   envelope check. Before, a body such as `{}` or `{"configs":[]}` decoded to an empty envelope and
