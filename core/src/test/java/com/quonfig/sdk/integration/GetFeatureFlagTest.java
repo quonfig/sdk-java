@@ -7,6 +7,7 @@ package com.quonfig.sdk.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.quonfig.sdk.Quonfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,8 +16,8 @@ class GetFeatureFlagTest {
   @Test
   @DisplayName("get returns the underlying value for a feature flag")
   void getReturnsTheUnderlyingValueForAFeatureFlag() throws Exception {
-    Object actual = TestSetup.resolveCase("feature-flag.integer", TestSetup.map());
-    assertEquals(3L, actual);
+    Quonfig client = TestSetup.client();
+    assertEquals(3L, client.getLong("feature-flag.integer", null));
   }
 
   @Test
@@ -24,9 +25,12 @@ class GetFeatureFlagTest {
       "get returns the underlying value for a feature flag that matches the highest precedent rule")
   void getReturnsTheUnderlyingValueForAFeatureFlagThatMatchesTheHighestPrecedentRule()
       throws Exception {
-    Object actual =
-        TestSetup.resolveCase(
-            "feature-flag.integer", TestSetup.map("user", TestSetup.map("key", "michael")));
-    assertEquals(5L, actual);
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        5L,
+        client.getLong(
+            "feature-flag.integer",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("key", "michael")))));
   }
 }

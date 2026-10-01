@@ -38,6 +38,16 @@
   newer tier's named context replaces the whole same-named context and that named contexts it does
   not mention survive, for global + per-call, global + `withContext`, `withContext` + per-call, all
   three tiers together, and the injected dev-context `quonfig-user` under a customer global context.
+- **The cross-SDK integration suite runs through the public API (qfg-2agi.30).** The generated
+  `com.quonfig.sdk.integration` tests now call `Quonfig` / `BoundQuonfig` exactly as a customer
+  does: the YAML `type:` picks the typed getter, `enabled` calls `featureIsOn`, and `get_or_raise`
+  calls the `get*OrThrow` getters. Context tiers go through `Options.globalContext`,
+  `withContext` and the per-call `ContextSet` instead of being merged by the generator, and
+  telemetry cases assert the payload a real client sends on `flush()`. `TestSetup` no longer
+  evaluates, resolves or throws on the SDK's behalf. Planting any of seven bugs in the SDK (duration
+  getter returns 0, `featureIsOn` always false, typed getter ignores the default, global context
+  ignored, telemetry reason changed, redaction dropped, `get*OrThrow` never throws) now turns the
+  suite red. One case is marked `@Disabled` because sdk-java has no `on_init_failure` option.
   Each test uses disjoint attributes, so a property-level merge would fail it. No behaviour change.
 - **Integration get_or_raise cases go through the public client (qfg-2agi.27).** The test
   harness's `runRaiseCase` now calls the public `get*OrThrow` getter for the config's type and lets

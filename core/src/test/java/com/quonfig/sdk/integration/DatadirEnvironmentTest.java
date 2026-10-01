@@ -8,6 +8,7 @@ package com.quonfig.sdk.integration;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.quonfig.sdk.Quonfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -16,11 +17,11 @@ class DatadirEnvironmentTest {
   @Test
   @DisplayName("datadir with environment option gets environment-specific value")
   void datadirWithEnvironmentOptionGetsEnvironmentSpecificValue() throws Exception {
-    Object actual =
-        TestSetup.datadirGet(
-            TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"),
-            "james.test.key");
-    assertEquals("test4", actual);
+    try (Quonfig client =
+        TestSetup.datadirClient(
+            TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"))) {
+      assertEquals("test4", client.getString("james.test.key", null));
+    }
   }
 
   @Test
@@ -29,9 +30,10 @@ class DatadirEnvironmentTest {
     TestSetup.withEnv(
         TestSetup.map("QUONFIG_ENVIRONMENT", "Production"),
         () -> {
-          Object actual =
-              TestSetup.datadirGet(TestSetup.map("datadir", TestSetup.DATADIR), "james.test.key");
-          assertEquals("test4", actual);
+          try (Quonfig client =
+              TestSetup.datadirClient(TestSetup.map("datadir", TestSetup.DATADIR))) {
+            assertEquals("test4", client.getString("james.test.key", null));
+          }
         });
   }
 
@@ -41,22 +43,23 @@ class DatadirEnvironmentTest {
     TestSetup.withEnv(
         TestSetup.map("QUONFIG_ENVIRONMENT", "nonexistent"),
         () -> {
-          Object actual =
-              TestSetup.datadirGet(
-                  TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"),
-                  "james.test.key");
-          assertEquals("test4", actual);
+          try (Quonfig client =
+              TestSetup.datadirClient(
+                  TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"))) {
+            assertEquals("test4", client.getString("james.test.key", null));
+          }
         });
   }
 
   @Test
   @DisplayName("config without environment override returns default value")
   void configWithoutEnvironmentOverrideReturnsDefaultValue() throws Exception {
-    Object actual =
-        TestSetup.datadirGet(
-            TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"),
-            "config.with.only.default.env.row");
-    assertEquals("hello from no env row", actual);
+    try (Quonfig client =
+        TestSetup.datadirClient(
+            TestSetup.map("datadir", TestSetup.DATADIR, "environment", "Production"))) {
+      assertEquals(
+          "hello from no env row", client.getString("config.with.only.default.env.row", null));
+    }
   }
 
   @Test
