@@ -377,12 +377,11 @@ class GetTest {
         client.getDuration("test.duration.malformed.30s", java.time.Duration.ofMillis(7000L));
     assertNotNull(actual, "getDuration returned null");
     assertEquals(7000L, actual.toMillis());
-    assertEquals(
-        7000L,
-        client
-            .getDurationDetails("test.duration.malformed.30s", java.time.Duration.ofMillis(7000L))
-            .value()
-            .toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "test.duration.malformed.30s", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
   }
 
   @Test
@@ -400,13 +399,11 @@ class GetTest {
         client.getDuration("test.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L));
     assertNotNull(actual, "getDuration returned null");
     assertEquals(7000L, actual.toMillis());
-    assertEquals(
-        7000L,
-        client
-            .getDurationDetails(
-                "test.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L))
-            .value()
-            .toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "test.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
   }
 
   @Test
@@ -424,12 +421,11 @@ class GetTest {
         client.getDuration("test.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L));
     assertNotNull(actual, "getDuration returned null");
     assertEquals(7000L, actual.toMillis());
-    assertEquals(
-        7000L,
-        client
-            .getDurationDetails("test.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L))
-            .value()
-            .toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "test.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
   }
 
   @Test
@@ -447,13 +443,11 @@ class GetTest {
         client.getDuration("test.duration.malformed.garbage", java.time.Duration.ofMillis(7000L));
     assertNotNull(actual, "getDuration returned null");
     assertEquals(7000L, actual.toMillis());
-    assertEquals(
-        7000L,
-        client
-            .getDurationDetails(
-                "test.duration.malformed.garbage", java.time.Duration.ofMillis(7000L))
-            .value()
-            .toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "test.duration.malformed.garbage", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
   }
 
   @Test
@@ -471,12 +465,11 @@ class GetTest {
         client.getDuration("test.duration.malformed.empty", java.time.Duration.ofMillis(7000L));
     assertNotNull(actual, "getDuration returned null");
     assertEquals(7000L, actual.toMillis());
-    assertEquals(
-        7000L,
-        client
-            .getDurationDetails("test.duration.malformed.empty", java.time.Duration.ofMillis(7000L))
-            .value()
-            .toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "test.duration.malformed.empty", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
   }
 
   @Test
@@ -498,13 +491,11 @@ class GetTest {
                   "provided.duration.malformed.30s", java.time.Duration.ofMillis(7000L));
           assertNotNull(actual, "getDuration returned null");
           assertEquals(7000L, actual.toMillis());
-          assertEquals(
-              7000L,
-              client
-                  .getDurationDetails(
-                      "provided.duration.malformed.30s", java.time.Duration.ofMillis(7000L))
-                  .value()
-                  .toMillis());
+          com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+              client.getDurationDetails(
+                  "provided.duration.malformed.30s", java.time.Duration.ofMillis(7000L));
+          assertEquals(7000L, details.value().toMillis());
+          assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
         });
   }
 
@@ -531,13 +522,11 @@ class GetTest {
                   "provided.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L));
           assertNotNull(actual, "getDuration returned null");
           assertEquals(7000L, actual.toMillis());
-          assertEquals(
-              7000L,
-              client
-                  .getDurationDetails(
-                      "provided.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L))
-                  .value()
-                  .toMillis());
+          com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+              client.getDurationDetails(
+                  "provided.duration.malformed.PT0.5H", java.time.Duration.ofMillis(7000L));
+          assertEquals(7000L, details.value().toMillis());
+          assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
         });
   }
 
@@ -564,13 +553,11 @@ class GetTest {
                   "provided.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L));
           assertNotNull(actual, "getDuration returned null");
           assertEquals(7000L, actual.toMillis());
-          assertEquals(
-              7000L,
-              client
-                  .getDurationDetails(
-                      "provided.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L))
-                  .value()
-                  .toMillis());
+          com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+              client.getDurationDetails(
+                  "provided.duration.malformed.P1DT", java.time.Duration.ofMillis(7000L));
+          assertEquals(7000L, details.value().toMillis());
+          assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
         });
   }
 
@@ -597,13 +584,11 @@ class GetTest {
                   "provided.duration.malformed.garbage", java.time.Duration.ofMillis(7000L));
           assertNotNull(actual, "getDuration returned null");
           assertEquals(7000L, actual.toMillis());
-          assertEquals(
-              7000L,
-              client
-                  .getDurationDetails(
-                      "provided.duration.malformed.garbage", java.time.Duration.ofMillis(7000L))
-                  .value()
-                  .toMillis());
+          com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+              client.getDurationDetails(
+                  "provided.duration.malformed.garbage", java.time.Duration.ofMillis(7000L));
+          assertEquals(7000L, details.value().toMillis());
+          assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
         });
   }
 
