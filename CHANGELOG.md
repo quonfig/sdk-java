@@ -56,8 +56,9 @@
 - **Integration DURATION cases now go through the public getter (qfg-2agi.4).** The generated
   cross-SDK tests assert every DURATION case via `Quonfig#getDuration` and
   `Quonfig#getDurationDetails` with exact millisecond comparison. The test-only ISO-8601 parser and
-  the +/-1ms tolerance are gone. The `PT0.5H` and `PT1.5M` cases are now red (the public getter
-  throws on them); the fix is tracked in qfg-2agi.8.
+  the +/-1ms tolerance are gone. `PT0.5H` and `PT1.5M` (fractions outside the seconds field) are
+  invalid under the shared duration grammar: the corpus now expects `PT30M` as a valid value and
+  treats `PT0.5H` as malformed, and every DURATION case passes.
 
 ## 1.4.0 - 2026-09-28
 
