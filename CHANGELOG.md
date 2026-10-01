@@ -34,6 +34,11 @@
 
 ### Internal
 
+- **Tests pin the context-merge rule (qfg-2agi.38).** New `ContextMergeRuleTest` checks that a
+  newer tier's named context replaces the whole same-named context and that named contexts it does
+  not mention survive, for global + per-call, global + `withContext`, `withContext` + per-call, all
+  three tiers together, and the injected dev-context `quonfig-user` under a customer global context.
+  Each test uses disjoint attributes, so a property-level merge would fail it. No behaviour change.
 - **Integration get_or_raise cases go through the public client (qfg-2agi.27).** The test
   harness's `runRaiseCase` now calls the public `get*OrThrow` getter for the config's type and lets
   the SDK throw. Before, the harness evaluated the key itself and threw the expected exception class
