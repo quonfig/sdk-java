@@ -161,6 +161,78 @@ public final class BoundQuonfig {
     return client.getJsonDetails(key, def, bound);
   }
 
+  // ---- throwing variants; see Quonfig#getStringOrThrow(String) ----
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public String getStringOrThrow(String key) {
+    return client.getStringOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public String getStringOrThrow(String key, ContextSet ctx) {
+    return client.getStringOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public Boolean getBoolOrThrow(String key) {
+    return client.getBoolOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public Boolean getBoolOrThrow(String key, ContextSet ctx) {
+    return client.getBoolOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public Long getLongOrThrow(String key) {
+    return client.getLongOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public Long getLongOrThrow(String key, ContextSet ctx) {
+    return client.getLongOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public Double getDoubleOrThrow(String key) {
+    return client.getDoubleOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public Double getDoubleOrThrow(String key, ContextSet ctx) {
+    return client.getDoubleOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public List<String> getStringListOrThrow(String key) {
+    return client.getStringListOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public List<String> getStringListOrThrow(String key, ContextSet ctx) {
+    return client.getStringListOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public Duration getDurationOrThrow(String key) {
+    return client.getDurationOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public Duration getDurationOrThrow(String key, ContextSet ctx) {
+    return client.getDurationOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
+  public Object getJsonOrThrow(String key) {
+    return client.getJsonOrThrow(key, bound);
+  }
+
+  /** See {@link Quonfig#getStringOrThrow(String)} — bound context merged with {@code ctx}. */
+  public Object getJsonOrThrow(String key, ContextSet ctx) {
+    return client.getJsonOrThrow(key, Quonfig.merge(bound, ctx));
+  }
+
   public boolean featureIsOn(String key) {
     return client.featureIsOn(key, bound);
   }

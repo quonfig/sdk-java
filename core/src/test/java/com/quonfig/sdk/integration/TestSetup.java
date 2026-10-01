@@ -9,12 +9,8 @@ import com.quonfig.sdk.eval.EvaluationMatch;
 import com.quonfig.sdk.eval.Evaluator;
 import com.quonfig.sdk.eval.Murmur3WeightedValueResolver;
 import com.quonfig.sdk.eval.Resolver;
-import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
-import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
-import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
-import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
 import com.quonfig.sdk.telemetry.ContextShapeCollector;
 import com.quonfig.sdk.telemetry.ContextUploadMode;
 import com.quonfig.sdk.telemetry.EvaluationStat;
@@ -186,73 +182,32 @@ final class TestSetup {
   }
 
   /**
-   * Evaluate the key like {@link #resolveCase}, but raise the appropriate {@code
-   * com.quonfig.sdk.exceptions.*} class for the YAML's expected error key. Matches the generator's
-   * {@code expected.status: raise} cases.
+   * {@code expected.status: raise} cases (qfg-2agi.27): call the PUBLIC {@code get*OrThrow} getter
+   * for the config's value type and let the SDK throw its own {@code com.quonfig.sdk.exceptions.*}
+   * class. The generated test asserts the class for {@code errKey}; this harness maps nothing. A
+   * key that does not exist goes through {@link Quonfig#getStringOrThrow}.
    */
   static Object runRaiseCase(String key, Map<String, Object> contextMap, String errKey) {
-    ConfigRow cfg = STORE.getConfig(key);
-    if (cfg == null) {
-      // missing_default — the SDK's "key not found" surface.
-      throw new QuonfigKeyNotFoundException("config \"" + key + "\" not found");
-    }
+    Quonfig client = publicClient();
     ContextSet ctx = toContextSet(contextMap);
-    EvaluationMatch match;
-    try {
-      match = EVALUATOR.evaluate(cfg, ENV_ID, ctx);
-    } catch (RuntimeException e) {
-      throw mapResolverError(errKey, e);
-    }
-    if (!match.isMatch() || match.value() == null) {
-      throw new QuonfigKeyNotFoundException("config \"" + key + "\" produced no match");
-    }
-    try {
-      Value resolved = RESOLVER.resolve(match.value(), cfg, ENV_ID, ctx);
-      if (cfg.valueType() == ValueType.DURATION) {
-        // A stored malformed duration resolves fine and only fails coercion. sdk-java has no
-        // public get_or_raise (qfg-2agi.27), so raise from the public Details getter's ERROR
-        // outcome: the same coercion-error class as an ENV_VAR value (qfg-2agi.7, .8).
-        com.quonfig.sdk.EvaluationDetails<Duration> d =
-            publicClient().getDurationDetails(key, null, ctx);
-        if (d.reason() == com.quonfig.sdk.Reason.ERROR) {
-          throw mapResolverError(errKey, new IllegalArgumentException(d.errorMessage()));
-        }
-      }
-      // Some errKeys (e.g. unable_to_coerce_env_var) only surface at resolve time; if we got
-      // here with a happy resolve, fall through and return the value so callers can still see
-      // the unexpected success rather than a misleading exception.
-      return resolved == null ? null : resolved.value();
-    } catch (ResolverException e) {
-      throw mapResolverException(errKey, e);
-    } catch (RuntimeException e) {
-      throw mapResolverError(errKey, e);
-    }
-  }
-
-  private static RuntimeException mapResolverException(String errKey, ResolverException e) {
-    switch (e.kind()) {
-      case MISSING_ENV_VAR:
-        return new QuonfigEnvVarNotSetException(e.getMessage(), e);
-      case UNABLE_TO_COERCE:
-        // sdk-python maps unable_to_coerce_env_var → QuonfigKeyNotFoundError; mirror that.
-        return new QuonfigKeyNotFoundException(e.getMessage(), e);
-      case UNABLE_TO_DECRYPT:
-        return new QuonfigDecryptionException(e.getMessage(), e);
-      case MISSING_DEFAULT:
+    ConfigRow cfg = STORE.getConfig(key);
+    ValueType vt = cfg == null ? ValueType.STRING : cfg.valueType();
+    switch (vt) {
+      case BOOL:
+        return client.getBoolOrThrow(key, ctx);
+      case INT:
+        return client.getLongOrThrow(key, ctx);
+      case DOUBLE:
+        return client.getDoubleOrThrow(key, ctx);
+      case STRING_LIST:
+        return client.getStringListOrThrow(key, ctx);
+      case DURATION:
+        return client.getDurationOrThrow(key, ctx);
+      case JSON:
+        return client.getJsonOrThrow(key, ctx);
       default:
-        return new QuonfigKeyNotFoundException(e.getMessage(), e);
+        return client.getStringOrThrow(key, ctx);
     }
-  }
-
-  private static RuntimeException mapResolverError(String errKey, RuntimeException e) {
-    if ("missing_env_var".equals(errKey))
-      return new QuonfigEnvVarNotSetException(e.getMessage(), e);
-    if ("unable_to_decrypt".equals(errKey))
-      return new QuonfigDecryptionException(e.getMessage(), e);
-    if ("missing_default".equals(errKey) || "unable_to_coerce_env_var".equals(errKey)) {
-      return new QuonfigKeyNotFoundException(e.getMessage(), e);
-    }
-    return e;
   }
 
   // ---------------------------------------------------------------------------

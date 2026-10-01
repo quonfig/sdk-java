@@ -13,6 +13,10 @@ import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
+import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
+import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
+import com.quonfig.sdk.exceptions.QuonfigInitTimeoutException;
+import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
 import com.quonfig.sdk.supervisor.FallbackPoller;
 import com.quonfig.sdk.supervisor.Supervisor;
 import com.quonfig.sdk.telemetry.ContextShapeCollector;
@@ -1474,14 +1478,146 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return typedDetails(key, def, ctx, ValueType.JSON, Object.class);
   }
 
+  // ---- throwing variants (get_or_raise) ----
+
+  /**
+   * Returns the value of a STRING config, or throws when there is no value to return. This is the
+   * SDK's {@code get_or_raise} (python {@code get} with {@code on_no_default="error"}, go {@code
+   * GetStringValue}'s error): use it when a missing or broken config must fail loudly instead of
+   * falling back to a default.
+   *
+   * <p>Every {@code get*OrThrow} method throws:
+   *
+   * <ul>
+   *   <li>{@link QuonfigKeyNotFoundException} when the key does not exist or no rule produced a
+   *       value, and when the value cannot be coerced to the requested type (an ENV_VAR value such
+   *       as {@code "not_a_number"} for an INT, or a malformed duration, stored or ENV_VAR).
+   *   <li>{@link QuonfigEnvVarNotSetException} when an ENV_VAR-provided value's variable is unset.
+   *   <li>{@link QuonfigDecryptionException} when a confidential value cannot be decrypted.
+   *   <li>{@link QuonfigInitTimeoutException} when the client did not initialize within {@link
+   *       Options#initTimeout()}.
+   *   <li>{@link IllegalArgumentException} when the config's value type does not match the getter
+   *       (for example {@code getLongOrThrow} on a STRING config).
+   *   <li>{@link IllegalStateException} when the client is closed.
+   * </ul>
+   */
+  public String getStringOrThrow(String key) {
+    return getStringOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public String getStringOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.STRING, String.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Boolean getBoolOrThrow(String key) {
+    return getBoolOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Boolean getBoolOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.BOOL, Boolean.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Long getLongOrThrow(String key) {
+    return getLongOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Long getLongOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.INT, Long.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Double getDoubleOrThrow(String key) {
+    return getDoubleOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Double getDoubleOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.DOUBLE, Double.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public List<String> getStringListOrThrow(String key) {
+    return getStringListOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  @SuppressWarnings("unchecked")
+  public List<String> getStringListOrThrow(String key, ContextSet ctx) {
+    return (List<String>) typedOrThrow(key, ctx, ValueType.STRING_LIST, List.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Duration getDurationOrThrow(String key) {
+    return getDurationOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Duration getDurationOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.DURATION, Duration.class);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Object getJsonOrThrow(String key) {
+    return getJsonOrThrow(key, null);
+  }
+
+  /** See {@link #getStringOrThrow(String)}. */
+  public Object getJsonOrThrow(String key, ContextSet ctx) {
+    return typedOrThrow(key, ctx, ValueType.JSON, Object.class);
+  }
+
   // ---- core evaluation ----
 
-  @SuppressWarnings("unchecked")
   private <T> EvaluationDetails<T> typedDetails(
       String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
+    return evaluateTyped(key, def, ctx, expectedType, javaType, false);
+  }
+
+  private <T> T typedOrThrow(
+      String key, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
+    return evaluateTyped(key, null, ctx, expectedType, javaType, true).value();
+  }
+
+  private static String noValueMessage(String key) {
+    return "No value found for key '" + key + "'";
+  }
+
+  private static RuntimeException resolverFailure(String key, ResolverException e) {
+    String msg = "resolve failed for \"" + key + "\": " + e.getMessage();
+    switch (e.kind()) {
+      case MISSING_ENV_VAR:
+        return new QuonfigEnvVarNotSetException(msg, e);
+      case UNABLE_TO_DECRYPT:
+        return new QuonfigDecryptionException(msg, e);
+      case UNABLE_TO_COERCE:
+      case MISSING_DEFAULT:
+      default:
+        return new QuonfigKeyNotFoundException(msg, e);
+    }
+  }
+
+  /**
+   * Shared evaluation for the typed getters. With {@code raise} false every failure becomes a
+   * {@link Reason#ERROR} details carrying {@code def}; with {@code raise} true (the {@code
+   * get*OrThrow} family) every failure, and a missing value, throws instead.
+   */
+  @SuppressWarnings("unchecked")
+  private <T> EvaluationDetails<T> evaluateTyped(
+      String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType, boolean raise) {
     try {
       awaitInit();
     } catch (IllegalStateException e) {
+      if (raise) {
+        if (e.getCause() instanceof TimeoutException) {
+          throw new QuonfigInitTimeoutException(e.getMessage(), e);
+        }
+        throw e;
+      }
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -1495,6 +1631,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
     ConfigRow cfg = store.getConfig(key);
     if (cfg == null) {
+      if (raise) throw new QuonfigKeyNotFoundException(noValueMessage(key));
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -1509,6 +1646,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (exampleCollector != null) exampleCollector.push(effective);
 
     if (!isCompatible(cfg.valueType(), expectedType)) {
+      if (raise) {
+        throw new IllegalArgumentException(
+            "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType);
+      }
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -1523,6 +1664,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     try {
       match = evaluator.evaluate(cfg, effectiveEnvironment, effective);
     } catch (RuntimeException e) {
+      if (raise) {
+        if (e instanceof ResolverException) throw resolverFailure(key, (ResolverException) e);
+        throw e;
+      }
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -1534,6 +1679,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
 
     if (!match.isMatch()) {
+      if (raise) throw new QuonfigKeyNotFoundException(noValueMessage(key));
       return new EvaluationDetails<>(
           def,
           Reason.DEFAULT,
@@ -1548,6 +1694,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     try {
       resolvedVal = resolver.resolve(match.value(), cfg, effectiveEnvironment, effective);
     } catch (ResolverException e) {
+      if (raise) throw resolverFailure(key, e);
       if (expectedType == ValueType.DURATION
           && e.kind() == ResolverException.Kind.UNABLE_TO_COERCE) {
         warnMalformedDuration(key);
@@ -1570,7 +1717,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       typed = (T) coerceToJavaType(payload, expectedType, javaType);
     } catch (DateTimeException | ArithmeticException e) {
       // Malformed duration value (qfg-2agi.8): the same contract as an ENV_VAR value that fails
-      // to coerce — caller's default, Reason.ERROR, one WARN per key, never a throw.
+      // to coerce — caller's default, Reason.ERROR, one WARN per key, never a throw. The
+      // get*OrThrow family raises the same coercion error as an ENV_VAR value instead.
+      if (raise) {
+        throw new QuonfigKeyNotFoundException(
+            "cannot convert \"" + key + "\" to " + expectedType + ": " + e.getMessage(), e);
+      }
       warnMalformedDuration(key);
       return new EvaluationDetails<>(
           def,
@@ -1581,6 +1733,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           "cannot convert \"" + key + "\" to " + expectedType + ": " + e.getMessage(),
           metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     } catch (ClassCastException | IllegalArgumentException e) {
+      if (raise) {
+        throw new IllegalArgumentException(
+            "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage(), e);
+      }
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,

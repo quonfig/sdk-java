@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **`get*OrThrow` getters: the SDK's get_or_raise (qfg-2agi.27).** `Quonfig` and `BoundQuonfig`
+  gain `getStringOrThrow`, `getBoolOrThrow`, `getLongOrThrow`, `getDoubleOrThrow`,
+  `getStringListOrThrow`, `getDurationOrThrow` and `getJsonOrThrow`, each with an optional
+  `ContextSet`. They return the value, or throw instead of falling back to a default: a missing key
+  or no matching value throws `QuonfigKeyNotFoundException`, as does a value that cannot be coerced
+  (an ENV_VAR `"not_a_number"` for an INT, or a malformed duration, stored or ENV_VAR); an unset
+  env var throws `QuonfigEnvVarNotSetException`; a decryption failure throws
+  `QuonfigDecryptionException`; an init timeout throws `QuonfigInitTimeoutException`; a value-type
+  mismatch throws `IllegalArgumentException`. The exception classes existed before, but no SDK code
+  threw them. The existing getters are unchanged.
+
 ### Fixed
 
 - **A malformed duration no longer throws from the typed getters (qfg-2agi.8).** When a duration
@@ -21,6 +34,10 @@
 
 ### Internal
 
+- **Integration get_or_raise cases go through the public client (qfg-2agi.27).** The test
+  harness's `runRaiseCase` now calls the public `get*OrThrow` getter for the config's type and lets
+  the SDK throw. Before, the harness evaluated the key itself and threw the expected exception class
+  on the SDK's behalf.
 - **Integration DURATION cases now go through the public getter (qfg-2agi.4).** The generated
   cross-SDK tests assert every DURATION case via `Quonfig#getDuration` and
   `Quonfig#getDurationDetails` with exact millisecond comparison. The test-only ISO-8601 parser and
