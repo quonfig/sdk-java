@@ -13,6 +13,11 @@
 - **Durations round half up to whole milliseconds (qfg-2agi.8).** `getDuration` now returns a
   whole number of milliseconds, rounded half up from the exact value: `PT0.0005S` is 1 ms and
   `PT0.999999999S` is 1000 ms. Before, `Duration#toMillis` truncated them to 0 ms and 999 ms.
+- **Datadir mode rejects an unknown environment at init (qfg-2agi.19).** `new Quonfig(...)` with
+  `datadir(...)` and an `environment(...)` not declared in the workspace's `quonfig.json` now
+  throws `IllegalStateException` naming the available environments. Before, the client built fine
+  and served default-row values. A workspace whose `quonfig.json` declares no environments still
+  accepts any name.
 
 ### Internal
 

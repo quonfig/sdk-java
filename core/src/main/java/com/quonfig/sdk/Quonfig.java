@@ -210,6 +210,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         throw new IllegalStateException(
             "environment required for datadir mode; set Options.builder().environment(...) or QUONFIG_ENVIRONMENT");
       }
+      DatadirLoader.requireKnownEnvironment(Path.of(options.datadir()), options.environment());
       List<ConfigRow> rows = DatadirLoader.load(Path.of(options.datadir()));
       installRows(rows);
       this.initFuture = CompletableFuture.completedFuture(null);

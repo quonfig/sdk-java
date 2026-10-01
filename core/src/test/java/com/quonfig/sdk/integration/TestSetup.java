@@ -384,17 +384,7 @@ final class TestSetup {
     b.disableTelemetry(true);
     if (datadirOpt != null) b.datadir(datadirOpt);
     if (envOpt != null) b.environment(envOpt);
-    Options options = b.build();
-
-    // Quonfig-the-class only checks for null/empty environment. The cross-SDK suite also
-    // requires that an explicit environment be one declared in the workspace's quonfig.json
-    // (the "invalid environment fails to init" case). Enforce that here so the datadir-mode
-    // raise cases match the same surface as sdk-python / sdk-go.
-    String resolvedEnv = options.environment();
-    if (datadirOpt != null && resolvedEnv != null && !resolvedEnv.isEmpty()) {
-      requireKnownEnvironment(Paths.get(datadirOpt), resolvedEnv);
-    }
-    return new Quonfig(options);
+    return new Quonfig(b.build());
   }
 
   /**
@@ -418,9 +408,8 @@ final class TestSetup {
           "datadir mode requires environment; set Options.environment(...) or QUONFIG_ENVIRONMENT");
     }
 
-    // Validate the environment is one declared in workspace's quonfig.json. The integration
-    // test corpus's "invalid environment fails to init" case relies on this.
-    requireKnownEnvironment(Paths.get(datadirOpt), envOpt);
+    // The public constructor rejects an environment the workspace does not declare.
+    datadirClient(map("datadir", datadirOpt, "environment", envOpt)).close();
 
     List<ConfigRow> rows = com.quonfig.sdk.DatadirLoader.load(Paths.get(datadirOpt));
     MapConfigStore store = new MapConfigStore(rows);
@@ -462,7 +451,7 @@ final class TestSetup {
           "datadir mode requires environment; set Options.environment(...) or QUONFIG_ENVIRONMENT");
     }
 
-    requireKnownEnvironment(Paths.get(datadirOpt), envOpt);
+    datadirClient(map("datadir", datadirOpt, "environment", envOpt)).close();
 
     List<ConfigRow> rows = com.quonfig.sdk.DatadirLoader.load(Paths.get(datadirOpt));
     MapConfigStore store = new MapConfigStore(rows);
@@ -500,25 +489,6 @@ final class TestSetup {
               + key
               + "\", got "
               + (raw == null ? "null" : raw.getClass().getName() + " (" + raw + ")"));
-    }
-  }
-
-  private static void requireKnownEnvironment(Path datadirPath, String envId) {
-    Path manifest = datadirPath.resolve("quonfig.json");
-    if (!Files.isRegularFile(manifest)) return; // no manifest → don't enforce
-    try {
-      String body = Files.readString(manifest);
-      com.fasterxml.jackson.databind.JsonNode root =
-          new com.fasterxml.jackson.databind.ObjectMapper().readTree(body);
-      com.fasterxml.jackson.databind.JsonNode envs = root.path("environments");
-      if (envs.isMissingNode() || !envs.isArray() || envs.size() == 0) return;
-      for (com.fasterxml.jackson.databind.JsonNode e : envs) {
-        if (e.isTextual() && envId.equals(e.asText())) return;
-        if (e.isObject() && envId.equals(e.path("id").asText(""))) return;
-      }
-      throw new RuntimeException("environment \"" + envId + "\" is not declared in " + manifest);
-    } catch (IOException io) {
-      throw new RuntimeException("failed to read " + manifest, io);
     }
   }
 

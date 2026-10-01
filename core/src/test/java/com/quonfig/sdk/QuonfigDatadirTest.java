@@ -49,6 +49,22 @@ class QuonfigDatadirTest {
   void noop() {}
 
   @Test
+  void constructor_throws_whenEnvironmentNotDeclaredInWorkspace() {
+    IllegalStateException e =
+        assertThrows(IllegalStateException.class, () -> newClient("nonexistent"));
+    assertTrue(e.getMessage().contains("\"nonexistent\""), e.getMessage());
+    assertTrue(e.getMessage().contains("production, staging"), e.getMessage());
+  }
+
+  @Test
+  void constructor_acceptsAnyEnvironment_whenManifestDeclaresNone() throws Exception {
+    Files.writeString(workspaceDir.resolve("quonfig.json"), "{\"workspace\":\"test-ws\"}");
+    try (Quonfig q = newClient("anything")) {
+      assertEquals("fallback", q.getString("nope", "fallback"));
+    }
+  }
+
+  @Test
   void getString_returnsValueFromStaticRule() throws Exception {
     writeConfig(
         "configs",

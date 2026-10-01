@@ -62,6 +62,41 @@ public final class DatadirLoader {
     return out;
   }
 
+  /**
+   * Fails datadir init when {@code environment} is not one of the environments declared in the
+   * workspace's {@code quonfig.json}. A workspace whose manifest is absent or declares no
+   * environments accepts any name (sdk-go {@code resolveWorkspaceEnvironment} parity).
+   */
+  static void requireKnownEnvironment(Path datadir, String environment) {
+    List<String> known = declaredEnvironments(datadir.resolve("quonfig.json"));
+    if (!known.isEmpty() && !known.contains(environment)) {
+      throw new IllegalStateException(
+          "environment \""
+              + environment
+              + "\" not found in workspace "
+              + datadir
+              + "; available environments: "
+              + String.join(", ", known));
+    }
+  }
+
+  private static List<String> declaredEnvironments(Path manifest) {
+    if (!Files.isRegularFile(manifest)) return List.of();
+    JsonNode envs;
+    try {
+      envs = MAPPER.readTree(Files.readAllBytes(manifest)).path("environments");
+    } catch (IOException e) {
+      throw new UncheckedIOException("parse " + manifest, e);
+    }
+    if (!envs.isArray()) return List.of();
+    List<String> out = new ArrayList<>();
+    for (JsonNode e : envs) {
+      String name = e.isObject() ? e.path("id").asText("") : e.asText("");
+      if (!name.trim().isEmpty()) out.add(name.trim());
+    }
+    return out;
+  }
+
   private static ConfigRow parseConfigFile(Path file) throws IOException {
     JsonNode root = MAPPER.readTree(Files.readAllBytes(file));
     return parseConfigNode(root);
