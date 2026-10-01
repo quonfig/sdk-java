@@ -11,6 +11,7 @@ import com.quonfig.sdk.eval.Murmur3WeightedValueResolver;
 import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
+import com.quonfig.sdk.eval.ValueType;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
@@ -207,6 +208,16 @@ final class TestSetup {
     }
     try {
       Value resolved = RESOLVER.resolve(match.value(), cfg, ENV_ID, ctx);
+      if (cfg.valueType() == ValueType.DURATION) {
+        // A stored malformed duration resolves fine and only fails coercion. sdk-java has no
+        // public get_or_raise (qfg-2agi.27), so raise from the public Details getter's ERROR
+        // outcome: the same coercion-error class as an ENV_VAR value (qfg-2agi.7, .8).
+        com.quonfig.sdk.EvaluationDetails<Duration> d =
+            publicClient().getDurationDetails(key, null, ctx);
+        if (d.reason() == com.quonfig.sdk.Reason.ERROR) {
+          throw mapResolverError(errKey, new IllegalArgumentException(d.errorMessage()));
+        }
+      }
       // Some errKeys (e.g. unable_to_coerce_env_var) only surface at resolve time; if we got
       // here with a happy resolve, fall through and return the value so callers can still see
       // the unexpected success rather than a misleading exception.

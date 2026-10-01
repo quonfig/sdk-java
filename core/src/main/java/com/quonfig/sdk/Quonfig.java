@@ -32,6 +32,7 @@ import java.net.URI;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -113,6 +114,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
   // Config keys already warned about a weighted rollout hashing on a missing property (qfg-9dxb.8).
   private final Set<String> warnedMissingHashProperty = ConcurrentHashMap.newKeySet();
+  // Config keys already warned about a malformed duration value (qfg-2agi.8).
+  private final Set<String> warnedMalformedDuration = ConcurrentHashMap.newKeySet();
 
   /**
    * Environment used for evaluation and emitted in metadata.
@@ -1544,6 +1547,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     try {
       resolvedVal = resolver.resolve(match.value(), cfg, effectiveEnvironment, effective);
     } catch (ResolverException e) {
+      if (expectedType == ValueType.DURATION
+          && e.kind() == ResolverException.Kind.UNABLE_TO_COERCE) {
+        warnMalformedDuration(key);
+      }
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -1560,6 +1567,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     T typed;
     try {
       typed = (T) coerceToJavaType(payload, expectedType, javaType);
+    } catch (DateTimeException | ArithmeticException e) {
+      // Malformed duration value (qfg-2agi.8): the same contract as an ENV_VAR value that fails
+      // to coerce — caller's default, Reason.ERROR, one WARN per key, never a throw.
+      warnMalformedDuration(key);
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
+          null,
+          ErrorCode.GENERAL,
+          "cannot convert \"" + key + "\" to " + expectedType + ": " + e.getMessage(),
+          metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     } catch (ClassCastException | IllegalArgumentException e) {
       return new EvaluationDetails<>(
           def,
@@ -1608,6 +1627,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         null,
         null,
         metadata);
+  }
+
+  private void warnMalformedDuration(String key) {
+    if (warnedMalformedDuration.add(key)) {
+      options
+          .logger()
+          .warn(
+              "quonfig: \"{}\" holds a malformed duration (expected ISO 8601, e.g. PT30S);"
+                  + " returning the default",
+              key);
+    }
   }
 
   private static int reasonNumber(Reason r) {
@@ -1659,8 +1689,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private static Object coerceToJavaType(Object payload, ValueType vt, Class<?> javaType) {
     if (payload == null) return null;
     if (vt == ValueType.DURATION) {
-      if (payload instanceof Duration) return payload;
-      if (payload instanceof String) return Duration.parse((String) payload);
+      if (payload instanceof Duration) return roundHalfUpToMillis((Duration) payload);
+      if (payload instanceof String) return roundHalfUpToMillis(Duration.parse((String) payload));
     }
     if (vt == ValueType.INT) {
       if (payload instanceof Long) return payload;
@@ -1674,6 +1704,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (vt == ValueType.STRING_LIST) return payload;
     if (javaType.isInstance(payload)) return payload;
     throw new ClassCastException(payload.getClass() + " is not " + javaType);
+  }
+
+  /**
+   * A duration means an integer millisecond count, rounded half up from the exact decimal value
+   * (qfg-2agi decision 2): PT0.0005S is 1 ms, PT0.0004S is 0 ms. {@link Duration#toMillis()} alone
+   * truncates.
+   */
+  static Duration roundHalfUpToMillis(Duration d) {
+    // getNano() is always in [0, 1e9), so this is floor(d) in ms; then round the remainder.
+    long ms = Math.addExact(Math.multiplyExact(d.getSeconds(), 1000L), d.getNano() / 1_000_000);
+    if (d.getNano() % 1_000_000 >= 500_000) ms = Math.addExact(ms, 1L);
+    return Duration.ofMillis(ms);
   }
 
   private static Reason mapEngineReason(EvaluationMatch.Reason r) {

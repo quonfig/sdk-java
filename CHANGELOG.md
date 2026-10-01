@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A malformed duration no longer throws from the typed getters (qfg-2agi.8).** When a duration
+  config holds a value that is not a valid ISO 8601 duration (for example `30s`, `PT0.5H` or
+  `P1DT`), `getDuration` and `getDurationDetails` now return the caller's default (or `null`) with
+  `Reason.ERROR`, and the SDK logs one warning per key. Before, a stored malformed value threw a
+  `DateTimeParseException`. A malformed value from an environment variable already returned the
+  default; it now logs the same warning.
+- **Durations round half up to whole milliseconds (qfg-2agi.8).** `getDuration` now returns a
+  whole number of milliseconds, rounded half up from the exact value: `PT0.0005S` is 1 ms and
+  `PT0.999999999S` is 1000 ms. Before, `Duration#toMillis` truncated them to 0 ms and 999 ms.
+
 ### Internal
 
 - **Integration DURATION cases now go through the public getter (qfg-2agi.4).** The generated
