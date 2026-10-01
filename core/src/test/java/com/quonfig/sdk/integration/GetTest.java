@@ -79,36 +79,31 @@ class GetTest {
   @Test
   @DisplayName("duration 200 ms")
   void duration200Ms() throws Exception {
-    Object actual = TestSetup.resolveCase("test.duration.PT0.2S", TestSetup.map());
-    TestSetup.assertDurationMillis(actual, 200);
+    TestSetup.assertPublicDurationMillis("test.duration.PT0.2S", TestSetup.map(), 200L);
   }
 
   @Test
   @DisplayName("duration 90S")
   void duration90s() throws Exception {
-    Object actual = TestSetup.resolveCase("test.duration.PT90S", TestSetup.map());
-    TestSetup.assertDurationMillis(actual, 90000);
+    TestSetup.assertPublicDurationMillis("test.duration.PT90S", TestSetup.map(), 90000L);
   }
 
   @Test
   @DisplayName("duration 1.5M")
   void duration15m() throws Exception {
-    Object actual = TestSetup.resolveCase("test.duration.PT1.5M", TestSetup.map());
-    TestSetup.assertDurationMillis(actual, 90000);
+    TestSetup.assertPublicDurationMillis("test.duration.PT1.5M", TestSetup.map(), 90000L);
   }
 
   @Test
   @DisplayName("duration 0.5H")
   void duration05h() throws Exception {
-    Object actual = TestSetup.resolveCase("test.duration.PT0.5H", TestSetup.map());
-    TestSetup.assertDurationMillis(actual, 1800000);
+    TestSetup.assertPublicDurationMillis("test.duration.PT0.5H", TestSetup.map(), 1800000L);
   }
 
   @Test
   @DisplayName("duration test.duration.P1DT6H2M1.5S")
   void durationTestDurationP1dt6h2m15s() throws Exception {
-    Object actual = TestSetup.resolveCase("test.duration.P1DT6H2M1.5S", TestSetup.map());
-    TestSetup.assertDurationMillis(actual, 108121500);
+    TestSetup.assertPublicDurationMillis("test.duration.P1DT6H2M1.5S", TestSetup.map(), 108121500L);
   }
 
   @Test

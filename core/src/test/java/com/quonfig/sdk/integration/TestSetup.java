@@ -285,41 +285,74 @@ final class TestSetup {
     }
   }
 
-  static void assertDurationMillis(Object actual, long millis) {
-    long got;
-    if (actual instanceof Duration) {
-      got = ((Duration) actual).toMillis();
-    } else if (actual instanceof String) {
-      got = parseFlexibleIsoDurationMillis((String) actual);
-    } else {
-      throw new AssertionError("expected Duration or ISO-8601 string, got " + actual);
+  /**
+   * Shared public {@link Quonfig} client over the fixture datadir, built lazily on first use. Used
+   * by DURATION cases so they are asserted through the customer-facing typed getter rather than the
+   * raw evaluator/resolver value (qfg-2agi.4).
+   */
+  private static volatile Quonfig publicClient;
+
+  static Quonfig publicClient() {
+    Quonfig c = publicClient;
+    if (c == null) {
+      synchronized (TestSetup.class) {
+        c = publicClient;
+        if (c == null) {
+          Options options =
+              Options.builder()
+                  .datadir(DATADIR)
+                  .environment(ENV_ID)
+                  .envLookup(TEST_ENV_LOOKUP)
+                  .disableTelemetry(true)
+                  .build();
+          c = new Quonfig(options);
+          publicClient = c;
+        }
+      }
     }
-    if (Math.abs(got - millis) > 1) {
-      throw new AssertionError("expected " + millis + " ms (±1ms), got " + got);
-    }
+    return c;
   }
 
   /**
-   * Parse an ISO-8601 duration that may include fractional hours/minutes (e.g. {@code PT0.5H},
-   * {@code PT1.5M}). Java's built-in {@link Duration#parse} only allows fractional seconds, so the
-   * cross-SDK test corpus tripped over those forms; this is the same flexibility python's {@code
-   * isodate} affords.
+   * Assert a DURATION case through the PUBLIC getters a customer calls: {@link
+   * Quonfig#getDuration(String, Duration, ContextSet)} and {@link
+   * Quonfig#getDurationDetails(String, Duration, ContextSet)}. Integer-exact millisecond
+   * comparison, no tolerance, no test-only parser.
    */
-  static long parseFlexibleIsoDurationMillis(String s) {
-    java.util.regex.Pattern p =
-        java.util.regex.Pattern.compile(
-            "^P(?:(\\d+(?:\\.\\d+)?)D)?(?:T(?:(\\d+(?:\\.\\d+)?)H)?(?:(\\d+(?:\\.\\d+)?)M)?(?:(\\d+(?:\\.\\d+)?)S)?)?$");
-    java.util.regex.Matcher m = p.matcher(s);
-    if (!m.matches()) {
-      // Fall back to Java's strict parser for forms we don't handle (e.g. negative durations).
-      return Duration.parse(s).toMillis();
+  static void assertPublicDurationMillis(String key, Map<String, Object> contextMap, long millis) {
+    Quonfig client = publicClient();
+    ContextSet ctx = toContextSet(contextMap);
+
+    Duration value = client.getDuration(key, null, ctx);
+    if (value == null) {
+      throw new AssertionError(
+          "getDuration(\"" + key + "\") returned null; expected " + millis + " ms");
     }
-    double days = m.group(1) != null ? Double.parseDouble(m.group(1)) : 0;
-    double hours = m.group(2) != null ? Double.parseDouble(m.group(2)) : 0;
-    double minutes = m.group(3) != null ? Double.parseDouble(m.group(3)) : 0;
-    double seconds = m.group(4) != null ? Double.parseDouble(m.group(4)) : 0;
-    double total = days * 86_400 + hours * 3_600 + minutes * 60 + seconds;
-    return Math.round(total * 1000.0);
+    if (value.toMillis() != millis) {
+      throw new AssertionError(
+          "getDuration(\""
+              + key
+              + "\"): expected "
+              + millis
+              + " ms, got "
+              + value.toMillis()
+              + " ms");
+    }
+
+    com.quonfig.sdk.EvaluationDetails<Duration> details = client.getDurationDetails(key, null, ctx);
+    Duration dv = details.value();
+    if (dv == null || dv.toMillis() != millis) {
+      throw new AssertionError(
+          "getDurationDetails(\""
+              + key
+              + "\"): expected "
+              + millis
+              + " ms, got "
+              + (dv == null ? "null" : dv.toMillis() + " ms")
+              + " (reason="
+              + details.reason()
+              + ")");
+    }
   }
 
   // ---------------------------------------------------------------------------
