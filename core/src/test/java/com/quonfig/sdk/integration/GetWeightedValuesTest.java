@@ -98,6 +98,43 @@ class GetWeightedValuesTest {
   }
 
   @Test
+  @DisplayName("non-ascii tracking_id emoji hashes utf-8 bytes")
+  void nonAsciiTrackingIdEmojiHashesUtf8Bytes() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        "a",
+        client.getString(
+            "feature-flag.weighted.even-split-ones",
+            null,
+            TestSetup.ctx(
+                TestSetup.map("user", TestSetup.map("tracking_id", "\ud83d\ude80-rocket")))));
+  }
+
+  @Test
+  @DisplayName("non-ascii tracking_id latin hashes utf-8 bytes")
+  void nonAsciiTrackingIdLatinHashesUtf8Bytes() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        "a",
+        client.getString(
+            "feature-flag.weighted.even-split-ones",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "münchen-7")))));
+  }
+
+  @Test
+  @DisplayName("non-ascii tracking_id cjk hashes utf-8 bytes")
+  void nonAsciiTrackingIdCjkHashesUtf8Bytes() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        "b",
+        client.getString(
+            "feature-flag.weighted.even-split-ones",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "ユーザー1")))));
+  }
+
+  @Test
   @DisplayName("non-standard sum still serves normalized true bucket")
   void nonStandardSumStillServesNormalizedTrueBucket() throws Exception {
     Quonfig client = TestSetup.client();
