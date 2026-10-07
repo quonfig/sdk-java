@@ -27,6 +27,13 @@ Internal do not change the published artifacts.
   completes, which both filters map to NEUTRAL: log calls in that window follow the logging
   library's own levels, and Quonfig's levels apply once init completes. `shouldLog` and the typed
   getters are unchanged.
+- **The SSE request times out waiting for response headers after 30s (qfg-goi1.2.16).** A server
+  or proxy that accepted the connection and never answered used to pin the SSE thread forever,
+  because the read watchdog only starts once headers arrive: the fallback poller took over after
+  120s, but SSE never came back until restart. The attempt is now abandoned and the loop
+  reconnects with backoff. The timeout covers the header phase only, so a healthy long-lived
+  stream is never cut (verified on JDK 17 and 22). `SseClient.Builder.headerTimeout(Duration)`
+  overrides it. Matches the sdk-go Wave 1 `ResponseHeaderTimeout`.
 - **A config missing a required field fails with a message naming the field and the key
   (qfg-goi1.2.16).** `DatadirLoader.parseConfigNode` throws `IllegalArgumentException`
   (`config "flag.b" is missing required field "type"`) instead of a bare `NullPointerException`
