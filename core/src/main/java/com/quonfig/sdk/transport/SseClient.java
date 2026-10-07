@@ -75,12 +75,22 @@ public final class SseClient {
 
   private static final String SSE_PATH = "/api/v2/sse/config";
 
+  /**
+   * How long one connect waits for the response headers. 90s because api-delivery flushes headers
+   * with the first event, which on a cold workspace is the 30s heartbeat. Deliberately not derived
+   * from the read watchdog: path latency adds to the time-to-headers but not to the gaps between
+   * stream bytes, so a header bound equal to a short watchdog stops a slow but live stream from
+   * ever connecting (qfg-rriw; sdk-go {@code HeaderTimeout}, qfg-d1o9).
+   */
+  static final Duration DEFAULT_HEADER_TIMEOUT = Duration.ofSeconds(90);
+
   private final List<URI> streamUrls;
   private final String authHeader;
   private final String userAgent;
   private final Duration initialDelay;
   private final Duration maxDelay;
   private final Duration readWatchdog;
+  private final Duration headerTimeout;
   private final HttpClient http;
   // Single-thread scheduler that fires the SSE stall watchdog. Daemon-threaded so it
   // never holds the JVM alive; shut down by stop().
@@ -118,6 +128,8 @@ public final class SseClient {
     this.maxDelay = b.maxDelay != null ? b.maxDelay : Duration.ofSeconds(30);
     // 90s = 3x the api-delivery 30s comment heartbeat (sse.go:67-88).
     this.readWatchdog = b.readWatchdog != null ? b.readWatchdog : Duration.ofSeconds(90);
+    // Independent of readWatchdog on purpose (qfg-rriw); see awaitHeaders.
+    this.headerTimeout = b.headerTimeout != null ? b.headerTimeout : DEFAULT_HEADER_TIMEOUT;
     this.watchdogExecutor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -326,11 +338,11 @@ public final class SseClient {
   }
 
   /**
-   * Sends {@code req} and waits for the response headers, bounded by the read watchdog's window
-   * (sdk-go {@code ResponseHeaderTimeout = ReadTimeout} parity, qfg-goi1.2.16). A server that
-   * accepts and never sends headers would otherwise pin this thread forever: the watchdog only
-   * starts once headers arrive. Not shorter: api-delivery flushes headers with the first event,
-   * which on a cold workspace is the 30s heartbeat. Only the header wait is bounded; with {@code
+   * Sends {@code req} and waits for the response headers, bounded by {@link #headerTimeout} (90s by
+   * default, sdk-go {@code ResponseHeaderTimeout = HeaderTimeout} parity, qfg-goi1.2.16 and
+   * qfg-rriw). A server that accepts and never sends headers would otherwise pin this thread
+   * forever: the watchdog only starts once headers arrive. The bound is independent of the read
+   * watchdog; see {@link #DEFAULT_HEADER_TIMEOUT}. Only the header wait is bounded; with {@code
    * ofInputStream} the future completes at headers, and the body is governed by the watchdog alone.
    * Returns null when the attempt failed, timed out or was interrupted.
    */
@@ -338,12 +350,12 @@ public final class SseClient {
     CompletableFuture<HttpResponse<InputStream>> pending =
         http.sendAsync(req, HttpResponse.BodyHandlers.ofInputStream());
     try {
-      return pending.get(readWatchdog.toNanos(), TimeUnit.NANOSECONDS);
+      return pending.get(headerTimeout.toNanos(), TimeUnit.NANOSECONDS);
     } catch (TimeoutException e) {
       log.warn(
           "SSE: no response headers from {} within {}ms; abandoning the attempt and reconnecting",
           target,
-          readWatchdog.toMillis());
+          headerTimeout.toMillis());
       abandon(pending);
       return null;
     } catch (InterruptedException e) {
@@ -526,6 +538,7 @@ public final class SseClient {
     private Duration initialDelay;
     private Duration maxDelay;
     private Duration readWatchdog;
+    private Duration headerTimeout;
     private HttpClient httpClient;
 
     /**
@@ -566,11 +579,20 @@ public final class SseClient {
      * arrive within the window the SDK closes the underlying stream and reconnects. Defaults to 90s
      * (3x the 30s server heartbeat). The default catches client-side wedges (corp proxy buffering,
      * dead NAT, half-open TCP) where the server thinks it delivered and the client knows it
-     * received nothing. The same window bounds the wait for the response headers on each connect,
-     * so a server that accepts and never answers is abandoned too.
+     * received nothing. It does not bound the wait for the response headers, which has its own 90s
+     * limit ({@link SseClient#DEFAULT_HEADER_TIMEOUT}).
      */
     public Builder readWatchdog(Duration readWatchdog) {
       this.readWatchdog = readWatchdog;
+      return this;
+    }
+
+    /**
+     * Overrides the response-header wait ({@link SseClient#DEFAULT_HEADER_TIMEOUT}).
+     * Package-private: tests only, like sdk-go's internal {@code HeaderTimeout}.
+     */
+    Builder headerTimeout(Duration headerTimeout) {
+      this.headerTimeout = headerTimeout;
       return this;
     }
 

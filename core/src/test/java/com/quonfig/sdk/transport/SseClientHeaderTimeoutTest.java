@@ -38,7 +38,8 @@ import org.junit.jupiter.api.Test;
  * TCP connection and never sends headers used to pin the SSE thread forever (the read watchdog only
  * starts after headers), so SSE never came back. With a header timeout the loop abandons the hung
  * attempt and reconnects. The timeout must NOT cut a healthy stream that lives longer than it: the
- * body is governed by the read watchdog.
+ * body is governed by the read watchdog. And it must not be the read watchdog's window (qfg-rriw):
+ * latency delays the headers without widening the gaps between stream bytes.
  */
 class SseClientHeaderTimeoutTest {
 
@@ -81,7 +82,7 @@ class SseClientHeaderTimeoutTest {
             .sdkKey("k")
             .initialDelay(Duration.ofMillis(50))
             .maxDelay(Duration.ofMillis(100))
-            .readWatchdog(Duration.ofMillis(300))
+            .headerTimeout(Duration.ofMillis(300))
             .build();
     client.start();
 
@@ -128,6 +129,7 @@ class SseClientHeaderTimeoutTest {
             .streamUrls(List.of(URI.create("http://127.0.0.1:" + server.getAddress().getPort())))
             .sdkKey("k")
             .readWatchdog(Duration.ofMillis(300))
+            .headerTimeout(Duration.ofMillis(300))
             .build();
     client.onConnectionStateChange(
         connected -> {
@@ -139,6 +141,64 @@ class SseClientHeaderTimeoutTest {
     assertEquals(1, connects.get(), "a healthy stream must not be reconnected");
     assertEquals(0, disconnects.get(), "a healthy stream must stay connected");
     assertFalse(droppedEarly.get(), "the client must not cut a healthy stream");
+  }
+
+  /**
+   * qfg-rriw: the header budget must not shrink with the read watchdog. Path latency adds to the
+   * time-to-headers but not to the gaps between stream bytes, so a slow-but-live stream that the
+   * watchdog tolerates must still connect. Before the fix the header wait was the watchdog window,
+   * so headers arriving later than it looped the client forever (chaos 03-latency: 5s latency vs
+   * the harness's 5s watchdog). Mirrors sdk-go
+   * TestSSEClientConnectsWhenHeadersArriveAfterReadTimeout.
+   */
+  @Test
+  void slowHeaders_beyondReadWatchdog_stillConnect() throws Exception {
+    AtomicInteger connects = new AtomicInteger();
+    server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.setExecutor(Executors.newCachedThreadPool());
+    server.createContext(
+        "/api/v2/sse/config",
+        (HttpExchange ex) -> {
+          connects.incrementAndGet();
+          try {
+            Thread.sleep(600); // the latency: headers come two watchdog windows after the request
+            ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+            ex.sendResponseHeaders(200, 0);
+            OutputStream out = ex.getResponseBody();
+            for (int i = 0; i < 40; i++) { // keepalives well inside the 300ms watchdog
+              out.write(":keepalive\n\n".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              Thread.sleep(75);
+            }
+          } catch (IOException ignored) {
+            // the client gave up on this attempt
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            ex.close();
+          }
+        });
+    server.start();
+
+    AtomicBoolean connected = new AtomicBoolean();
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(URI.create("http://127.0.0.1:" + server.getAddress().getPort())))
+            .sdkKey("k")
+            .initialDelay(Duration.ofMillis(10))
+            .maxDelay(Duration.ofMillis(20))
+            .readWatchdog(Duration.ofMillis(300))
+            .build();
+    client.onConnectionStateChange(connected::set);
+    client.start();
+
+    long deadline = System.currentTimeMillis() + 3000;
+    while (!connected.get() && System.currentTimeMillis() < deadline) Thread.sleep(20);
+    assertTrue(
+        connected.get(),
+        "headers 600ms after the request (> 300ms read watchdog) must not time out while the"
+            + " stream keepalives every 75ms; connects="
+            + connects.get());
   }
 
   /**

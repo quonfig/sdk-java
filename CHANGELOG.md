@@ -33,13 +33,16 @@ Internal do not change the published artifacts.
 - **The SSE request times out waiting for response headers (qfg-goi1.2.16).** A server or proxy
   that accepted the connection and never answered used to pin the SSE thread forever, because the
   read watchdog only starts once headers arrive: the fallback poller took over after 120s, but SSE
-  never came back until restart. The header wait is now bounded by the read-watchdog window
-  (`sseReadWatchdog`, 90s by default), after which the loop reconnects with backoff. It is not
-  shorter because api-delivery sends headers with the first event, which on a cold workspace is
-  the 30s heartbeat. Only the header wait is bounded (the SDK waits on the async send, and does
-  not use `HttpRequest.timeout`, which from JDK 26 also covers the response body), so a healthy
+  never came back until restart. The header wait is now bounded at 90s, after which the loop
+  reconnects with backoff. It is not shorter because api-delivery sends headers with the first
+  event, which on a cold workspace is the 30s heartbeat. It is a fixed internal value, not derived
+  from `sseReadWatchdog`: latency adds to the wait for headers but not to the gaps between stream
+  bytes, so a header bound equal to a short read watchdog stopped a slow but live stream from ever
+  connecting (every attempt timed out at the watchdog window and reconnected; qfg-rriw). Only the
+  header wait is bounded (the SDK waits on the async send, and does not use
+  `HttpRequest.timeout`, which from JDK 26 also covers the response body), so a healthy
   long-lived stream is not cut on any JDK; the read watchdog alone governs the body. Matches
-  sdk-go's `ResponseHeaderTimeout = ReadTimeout`.
+  sdk-go's separate `HeaderTimeout` (qfg-d1o9).
 - **`close()` during init no longer leaves the SSE loop or fallback poller running
   (qfg-goi1.2.16).** If `close()` ran just as init was starting SSE, it could miss the SSE client
   and supervisor that were being created, and both then ran forever against a closed client
