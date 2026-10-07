@@ -34,6 +34,11 @@ Internal do not change the published artifacts.
   reconnects with backoff. The timeout covers the header phase only, so a healthy long-lived
   stream is never cut (verified on JDK 17 and 22). `SseClient.Builder.headerTimeout(Duration)`
   overrides it. Matches the sdk-go Wave 1 `ResponseHeaderTimeout`.
+- **`close()` during init no longer leaves the SSE loop or fallback poller running
+  (qfg-goi1.2.16).** If `close()` ran just as init was starting SSE, it could miss the SSE client
+  and supervisor that were being created, and both then ran forever against a closed client
+  (seen with short-lived clients, tests and failed Spring context refreshes). `startSse()` now
+  re-checks `closed` after creating them and stops both.
 - **A config missing a required field fails with a message naming the field and the key
   (qfg-goi1.2.16).** `DatadirLoader.parseConfigNode` throws `IllegalArgumentException`
   (`config "flag.b" is missing required field "type"`) instead of a bare `NullPointerException`

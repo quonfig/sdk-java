@@ -780,8 +780,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
   }
 
+  /**
+   * Test seam (package-private): runs inside {@link #startSse()} just after its entry {@code
+   * closed} check, so a test can call {@link #close()} inside the close-vs-init window
+   * deterministically. Always null in production.
+   */
+  volatile Runnable startSseHookForTest;
+
   private void startSse() {
     if (closed) return;
+    Runnable hook = startSseHookForTest;
+    if (hook != null) hook.run();
 
     // Use a one-element array so the lambdas can read the final supervisor reference. We have
     // to build the FallbackPoller (whose callbacks reference the supervisor) before the
@@ -920,6 +929,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           }
         });
     this.sseClient = sse;
+    // close() reads sseClient and supervisor once. If it ran after the entry check above but
+    // before both fields were assigned, it saw null and stopped nothing; stop them here so the SSE
+    // loop and the fallback poller never run against a closed client (qfg-goi1.2.16). A close()
+    // after this point sees both fields; SseClient and Supervisor are safe to stop before start.
+    if (closed) {
+      sse.stop();
+      sup.stop();
+      return;
+    }
     logPollingMode();
     sse.start();
   }
