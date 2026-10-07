@@ -108,21 +108,21 @@ public final class DatadirLoader {
    * from an HTTP/SSE envelope into the in-memory store.
    */
   public static ConfigRow parseConfigNode(JsonNode root) {
-    String id = root.hasNonNull("id") ? root.get("id").asText() : root.get("key").asText();
-    String key = root.get("key").asText();
-    ConfigType type = parseConfigType(root.get("type").asText());
-    ValueType valueType = parseValueType(root.get("valueType").asText());
+    String key = requiredText(root, "key", null);
+    String id = root.hasNonNull("id") ? root.get("id").asText() : key;
+    ConfigType type = parseConfigType(requiredText(root, "type", key));
+    ValueType valueType = parseValueType(requiredText(root, "valueType", key));
     boolean sendToClientSdk =
         type == ConfigType.FEATURE_FLAG
             || (root.hasNonNull("sendToClientSdk") && root.get("sendToClientSdk").asBoolean());
 
-    RuleSet defaultRules = parseRuleSet(root.path("default"), valueType);
+    RuleSet defaultRules = parseRuleSet(root.path("default"), valueType, key);
     List<Environment> envs = new ArrayList<>();
     JsonNode envsNode = root.path("environments");
     if (envsNode.isArray()) {
       for (JsonNode env : envsNode) {
         if (!env.hasNonNull("id")) continue;
-        envs.add(parseEnvironment(env, valueType));
+        envs.add(parseEnvironment(env, valueType, key));
       }
     }
     // Delivery (HTTP /api/v2/configs + SSE) scopes each row to ONE environment and serializes it
@@ -133,49 +133,67 @@ public final class DatadirLoader {
     // `environment` wire field) and sdk-net's ConfigRowParser (commit 3d49607).
     JsonNode singleEnv = root.path("environment");
     if (singleEnv.isObject() && singleEnv.hasNonNull("id")) {
-      envs.add(parseEnvironment(singleEnv, valueType));
+      envs.add(parseEnvironment(singleEnv, valueType, key));
     }
     return new ConfigRow(id, key, type, valueType, sendToClientSdk, defaultRules, envs);
   }
 
-  private static Environment parseEnvironment(JsonNode env, ValueType valueType) {
+  /**
+   * Reads a required string field, failing with an error that names the field and the config key
+   * instead of a bare {@link NullPointerException}. Delivery installs skip such a row with a WARN
+   * that carries this message (qfg-goi1.2.16); a datadir load or reload reports it as-is.
+   */
+  private static String requiredText(JsonNode node, String field, String key) {
+    // Only an ABSENT field fails, exactly where the old unguarded get(...).asText() threw; an
+    // explicit JSON null still reads as "null", as before.
+    JsonNode v = node.get(field);
+    if (v == null) {
+      throw new IllegalArgumentException(
+          key == null
+              ? "config is missing required field \"" + field + "\""
+              : "config \"" + key + "\" is missing required field \"" + field + "\"");
+    }
+    return v.asText();
+  }
+
+  private static Environment parseEnvironment(JsonNode env, ValueType valueType, String key) {
     String id = env.get("id").asText();
     List<Rule> rules = new ArrayList<>();
     JsonNode rulesNode = env.path("rules");
     if (rulesNode.isArray()) {
       for (JsonNode r : rulesNode) {
-        rules.add(parseRule(r, valueType));
+        rules.add(parseRule(r, valueType, key));
       }
     }
     return new Environment(id, rules);
   }
 
-  private static RuleSet parseRuleSet(JsonNode node, ValueType valueType) {
+  private static RuleSet parseRuleSet(JsonNode node, ValueType valueType, String key) {
     List<Rule> rules = new ArrayList<>();
     JsonNode rulesNode = node.path("rules");
     if (rulesNode.isArray()) {
       for (JsonNode r : rulesNode) {
-        rules.add(parseRule(r, valueType));
+        rules.add(parseRule(r, valueType, key));
       }
     }
     return new RuleSet(rules);
   }
 
-  private static Rule parseRule(JsonNode r, ValueType valueType) {
+  private static Rule parseRule(JsonNode r, ValueType valueType, String key) {
     List<Criterion> criteria = new ArrayList<>();
     JsonNode crit = r.path("criteria");
     if (crit.isArray()) {
       for (JsonNode c : crit) {
-        criteria.add(parseCriterion(c));
+        criteria.add(parseCriterion(c, key));
       }
     }
     Value value = parseValue(r.path("value"), valueType);
     return new Rule(criteria, value);
   }
 
-  private static Criterion parseCriterion(JsonNode c) {
+  private static Criterion parseCriterion(JsonNode c, String key) {
     String prop = c.hasNonNull("propertyName") ? c.get("propertyName").asText() : null;
-    String op = c.get("operator").asText();
+    String op = requiredText(c, "operator", key);
     Value match = c.hasNonNull("valueToMatch") ? parseValue(c.get("valueToMatch"), null) : null;
     return new Criterion(prop, op, match);
   }

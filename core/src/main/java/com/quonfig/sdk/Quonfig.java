@@ -649,8 +649,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         }
         return false;
       }
+      // Parse row by row BEFORE touching any state: a bad row is skipped with a WARN, and an
+      // envelope whose every row is bad throws here, leaving the held envelope, environment and
+      // generation untouched (qfg-goi1.2.16; sdk-go qfg-9dxb.6 parity).
+      List<ConfigRow> rows = parseDeliveryRows(envelope);
       // Initial HTTP fetch and fallback poll are delivery mode: meta.environment is authoritative.
-      installEnvelopeRows(envelope, true);
+      applyMetaEnvironment(envelope, true);
+      installRows(rows);
       // An unversioned install (incoming <= 0) only reaches here on a first install or while held
       // is still 0 (qfg-9dxb.9); it never changes the held generation (qfg-9dxb.3). A positive
       // incoming is strictly greater here (or this is the first install), so this keeps the max.
@@ -666,6 +671,39 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       }
       return true;
     }
+  }
+
+  /**
+   * Parses a delivery envelope (HTTP or SSE) row by row. A row that fails to parse (for example one
+   * missing {@code type}) is skipped with a WARN naming its key, and the rest install: one bad row
+   * must not freeze every other config on its last envelope. If every row fails, the first error is
+   * rethrown so the envelope is rejected as before and can never install as an empty workspace
+   * (sdk-go 2f6b98b / qfg-9dxb.6 parity). An envelope with zero rows is a legitimately empty
+   * workspace and still installs. Datafile mode stays strict ({@link #installEnvelopeRows}).
+   */
+  private List<ConfigRow> parseDeliveryRows(ConfigEnvelope envelope) {
+    List<JsonNode> configs = envelope.configs();
+    List<ConfigRow> rows = new ArrayList<>(configs.size());
+    RuntimeException first = null;
+    for (JsonNode cfg : configs) {
+      try {
+        rows.add(DatadirLoader.parseConfigNode(cfg));
+      } catch (RuntimeException e) {
+        if (first == null) first = e;
+        options
+            .logger()
+            .warn(
+                "quonfig: skipping config that failed to parse; other configs are unaffected"
+                    + " (key={}, version={}): {}",
+                cfg != null ? cfg.path("key").asText("") : "",
+                envelope.meta() != null ? envelope.meta().version() : "",
+                e.toString());
+      }
+    }
+    if (rows.isEmpty() && first != null) {
+      throw first;
+    }
+    return rows;
   }
 
   private void installEnvelopeRows(ConfigEnvelope envelope, boolean metaAuthoritative) {
@@ -843,8 +881,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               sup.recordSuccessfulRefresh();
               fireConfigUpdate();
             }
-          } catch (RuntimeException ignored) {
-            // Bad envelope is non-fatal — keep the prior store in place.
+          } catch (RuntimeException e) {
+            // Bad envelope is non-fatal — keep the prior store in place. Per-row failures are
+            // skipped (and logged) inside installDelivery, so this only sees envelope-level
+            // failures (every row bad, meta errors); log them so the drop is not silent.
+            options.logger().warn("quonfig: SSE envelope rejected: {}", e.toString());
           }
         });
     sse.onConnectionStateChange(

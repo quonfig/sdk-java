@@ -2,8 +2,28 @@
 
 ## Unreleased
 
-Recommended semver: none. CI and chaos-harness changes only; the published artifacts do not
-change, so no release is needed.
+Recommended semver: **minor** (1.6.0). The qfg-goi1.2.16 entries below change error-path and
+pre-init behavior (Decision 1: rare-edge behavior change = minor); the common path (well-formed
+envelopes, getters after init) is unchanged. The qfg-goi1.1.6 CI and chaos-harness changes under
+Internal do not change the published artifacts.
+
+### Changed
+
+- **One malformed config row no longer drops the whole delivery envelope (qfg-goi1.2.16).** The
+  HTTP init fetch, `refresh()`, the fallback poller and SSE now parse the envelope row by row. A
+  row that fails to parse (for example one missing `type`) is skipped with a WARN naming its key
+  and the envelope version, and every other row installs. Before, one bad row aborted the install,
+  so every other config's update was lost (and on SSE, silently). If every row fails, the
+  envelope is still rejected, so it can never install as an empty workspace. Matches sdk-go
+  v1.4.0 (qfg-9dxb.6). Datadir and datafile loading are unchanged.
+- **A rejected SSE envelope is logged at WARN (qfg-goi1.2.16).** The SSE handler used to swallow
+  an install failure with no log line; it now logs `quonfig: SSE envelope rejected: ...` and keeps
+  the held envelope.
+- **A config missing a required field fails with a message naming the field and the key
+  (qfg-goi1.2.16).** `DatadirLoader.parseConfigNode` throws `IllegalArgumentException`
+  (`config "flag.b" is missing required field "type"`) instead of a bare `NullPointerException`
+  for an absent `key`, `type`, `valueType` or criterion `operator`. That message is what the skip
+  WARN and a datadir reload WARN print.
 
 ### Internal
 
