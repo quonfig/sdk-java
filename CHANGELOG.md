@@ -33,8 +33,10 @@ Internal do not change the published artifacts.
   never came back until restart. The header wait is now bounded by the read-watchdog window
   (`sseReadWatchdog`, 90s by default), after which the loop reconnects with backoff. It is not
   shorter because api-delivery sends headers with the first event, which on a cold workspace is
-  the 30s heartbeat. The timeout covers the header phase only, so a healthy long-lived stream is
-  never cut (verified on JDK 17 and 22). Matches sdk-go's `ResponseHeaderTimeout = ReadTimeout`.
+  the 30s heartbeat. Only the header wait is bounded (the SDK waits on the async send, and does
+  not use `HttpRequest.timeout`, which from JDK 26 also covers the response body), so a healthy
+  long-lived stream is not cut on any JDK; the read watchdog alone governs the body. Matches
+  sdk-go's `ResponseHeaderTimeout = ReadTimeout`.
 - **`close()` during init no longer leaves the SSE loop or fallback poller running
   (qfg-goi1.2.16).** If `close()` ran just as init was starting SSE, it could miss the SSE client
   and supervisor that were being created, and both then ran forever against a closed client

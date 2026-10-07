@@ -8,17 +8,28 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.Authenticator;
+import java.net.CookieHandler;
 import java.net.InetSocketAddress;
+import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -128,5 +139,123 @@ class SseClientHeaderTimeoutTest {
     assertEquals(1, connects.get(), "a healthy stream must not be reconnected");
     assertEquals(0, disconnects.get(), "a healthy stream must stay connected");
     assertFalse(droppedEarly.get(), "the client must not cut a healthy stream");
+  }
+
+  /**
+   * The header bound must not be {@link HttpRequest.Builder#timeout}: from JDK 26 (JDK-8208693)
+   * that timeout also covers reading the response body, so a healthy SSE stream would be cut and
+   * reconnected every window. The healthy-stream test above cannot see that on the JDK 17
+   * toolchain, so pin the mechanism here: the SSE request carries no request timeout.
+   */
+  @Test
+  void sseRequest_carriesNoRequestTimeout_soNewerJdksNeverCutTheBody() throws Exception {
+    server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.setExecutor(Executors.newCachedThreadPool());
+    server.createContext(
+        "/api/v2/sse/config",
+        (HttpExchange ex) -> {
+          ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+          ex.sendResponseHeaders(200, 0);
+          ex.close();
+        });
+    server.start();
+
+    RecordingHttpClient recording =
+        new RecordingHttpClient(
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(URI.create("http://127.0.0.1:" + server.getAddress().getPort())))
+            .sdkKey("k")
+            .readWatchdog(Duration.ofMillis(300))
+            .httpClient(recording)
+            .build();
+    client.start();
+
+    long deadline = System.currentTimeMillis() + 3000;
+    while (recording.requests.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(20);
+    assertFalse(recording.requests.isEmpty(), "the SSE client never sent a request");
+    for (HttpRequest r : recording.requests) {
+      assertEquals(
+          Optional.empty(),
+          r.timeout(),
+          "SSE request must not set HttpRequest.timeout (JDK 26+ applies it to the body)");
+    }
+  }
+
+  /** Delegating HttpClient that records every request the SSE client sends. */
+  private static final class RecordingHttpClient extends HttpClient {
+    final List<HttpRequest> requests = new CopyOnWriteArrayList<>();
+    private final HttpClient d;
+
+    RecordingHttpClient(HttpClient d) {
+      this.d = d;
+    }
+
+    @Override
+    public Optional<CookieHandler> cookieHandler() {
+      return d.cookieHandler();
+    }
+
+    @Override
+    public Optional<Duration> connectTimeout() {
+      return d.connectTimeout();
+    }
+
+    @Override
+    public Redirect followRedirects() {
+      return d.followRedirects();
+    }
+
+    @Override
+    public Optional<ProxySelector> proxy() {
+      return d.proxy();
+    }
+
+    @Override
+    public SSLContext sslContext() {
+      return d.sslContext();
+    }
+
+    @Override
+    public SSLParameters sslParameters() {
+      return d.sslParameters();
+    }
+
+    @Override
+    public Optional<Authenticator> authenticator() {
+      return d.authenticator();
+    }
+
+    @Override
+    public Version version() {
+      return d.version();
+    }
+
+    @Override
+    public Optional<Executor> executor() {
+      return d.executor();
+    }
+
+    @Override
+    public <T> HttpResponse<T> send(HttpRequest req, HttpResponse.BodyHandler<T> h)
+        throws IOException, InterruptedException {
+      requests.add(req);
+      return d.send(req, h);
+    }
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest req, HttpResponse.BodyHandler<T> h) {
+      requests.add(req);
+      return d.sendAsync(req, h);
+    }
+
+    @Override
+    public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+        HttpRequest req, HttpResponse.BodyHandler<T> h, HttpResponse.PushPromiseHandler<T> p) {
+      requests.add(req);
+      return d.sendAsync(req, h, p);
+    }
   }
 }

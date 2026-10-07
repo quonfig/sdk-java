@@ -17,11 +17,14 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -263,14 +266,9 @@ public final class SseClient {
           HttpRequest.newBuilder()
               .uri(target)
               .GET()
-              // Bound the response-header phase with the read watchdog's window (sdk-go
-              // ResponseHeaderTimeout = ReadTimeout parity). A server that accepts and never sends
-              // headers would otherwise pin this thread forever: the watchdog only starts once
-              // headers arrive (qfg-goi1.2.16). Not shorter: api-delivery flushes headers with the
-              // first event, which on a cold workspace is the 30s heartbeat. With
-              // BodyHandlers.ofInputStream, send() returns at headers, so this never cuts the
-              // long-lived body; the watchdog owns that.
-              .timeout(readWatchdog)
+              // No HttpRequest.timeout: from JDK 26 (JDK-8208693) it also covers the response
+              // body and would cut a healthy long-lived stream. The header wait is bounded in
+              // awaitHeaders instead.
               .header("Authorization", authHeader)
               .header("Accept", "text/event-stream")
               .header("Cache-Control", "no-cache");
@@ -283,13 +281,8 @@ public final class SseClient {
       return false;
     }
 
-    HttpResponse<InputStream> resp;
-    try {
-      resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-    } catch (IOException | InterruptedException e) {
-      if (e instanceof InterruptedException) {
-        Thread.currentThread().interrupt();
-      }
+    HttpResponse<InputStream> resp = awaitHeaders(target, req);
+    if (resp == null) {
       return false;
     }
 
@@ -330,6 +323,56 @@ public final class SseClient {
         // ignored
       }
     }
+  }
+
+  /**
+   * Sends {@code req} and waits for the response headers, bounded by the read watchdog's window
+   * (sdk-go {@code ResponseHeaderTimeout = ReadTimeout} parity, qfg-goi1.2.16). A server that
+   * accepts and never sends headers would otherwise pin this thread forever: the watchdog only
+   * starts once headers arrive. Not shorter: api-delivery flushes headers with the first event,
+   * which on a cold workspace is the 30s heartbeat. Only the header wait is bounded; with {@code
+   * ofInputStream} the future completes at headers, and the body is governed by the watchdog alone.
+   * Returns null when the attempt failed, timed out or was interrupted.
+   */
+  private HttpResponse<InputStream> awaitHeaders(URI target, HttpRequest req) {
+    CompletableFuture<HttpResponse<InputStream>> pending =
+        http.sendAsync(req, HttpResponse.BodyHandlers.ofInputStream());
+    try {
+      return pending.get(readWatchdog.toNanos(), TimeUnit.NANOSECONDS);
+    } catch (TimeoutException e) {
+      log.warn(
+          "SSE: no response headers from {} within {}ms; abandoning the attempt and reconnecting",
+          target,
+          readWatchdog.toMillis());
+      abandon(pending);
+      return null;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      abandon(pending);
+      return null;
+    } catch (ExecutionException e) {
+      // Transport failure (refused, DNS, TLS, reset): backoff and retry, as before.
+      if (!(e.getCause() instanceof IOException)) {
+        log.warn("SSE: connect to {} failed: {}", target, String.valueOf(e.getCause()));
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Cancels a header wait we gave up on. If the headers land anyway, close that body so the
+   * connection is not leaked.
+   */
+  private static void abandon(CompletableFuture<HttpResponse<InputStream>> pending) {
+    pending.cancel(true);
+    pending.thenAccept(
+        r -> {
+          try {
+            r.body().close();
+          } catch (IOException ignored) {
+            // Best-effort cleanup of a response nobody reads.
+          }
+        });
   }
 
   /**
