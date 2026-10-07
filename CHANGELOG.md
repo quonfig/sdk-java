@@ -38,7 +38,7 @@ Internal do not change the published artifacts.
 - **`close()` during init no longer leaves the SSE loop or fallback poller running
   (qfg-goi1.2.16).** If `close()` ran just as init was starting SSE, it could miss the SSE client
   and supervisor that were being created, and both then ran forever against a closed client
-  (seen with short-lived clients, tests and failed Spring context refreshes). `startSse()` now
+  (most likely with short-lived clients, tests and failed Spring context refreshes). `startSse()` now
   re-checks `closed` after creating them and stops both.
 - **A config missing a required field fails with a message naming the field and the key
   (qfg-goi1.2.16).** `DatadirLoader.parseConfigNode` throws `IllegalArgumentException`
