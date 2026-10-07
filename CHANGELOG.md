@@ -19,6 +19,14 @@ Internal do not change the published artifacts.
 - **A rejected SSE envelope is logged at WARN (qfg-goi1.2.16).** The SSE handler used to swallow
   an install failure with no log line; it now logs `quonfig: SSE envelope rejected: ...` and keeps
   the held envelope.
+- **`getLogLevel` returns empty while init is in flight, so the logging filters no longer block
+  at startup (qfg-goi1.2.16).** In HTTP mode the constructor returns before the first config fetch
+  completes. `getLogLevel` used to wait on that fetch like the typed getters (up to `initTimeout`,
+  10s by default), and the Logback and Log4j2 filters call it on every log statement, so every
+  thread that logged during startup stalled. It now returns `Optional.empty()` until init
+  completes, which both filters map to NEUTRAL: log calls in that window follow the logging
+  library's own levels, and Quonfig's levels apply once init completes. `shouldLog` and the typed
+  getters are unchanged.
 - **A config missing a required field fails with a message naming the field and the key
   (qfg-goi1.2.16).** `DatadirLoader.parseConfigNode` throws `IllegalArgumentException`
   (`config "flag.b" is missing required field "type"`) instead of a bare `NullPointerException`

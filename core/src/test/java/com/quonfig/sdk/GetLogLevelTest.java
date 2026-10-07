@@ -5,9 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quonfig.sdk.eval.ContextSet;
+import com.sun.net.httpserver.HttpServer;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -92,6 +100,64 @@ class GetLogLevelTest {
       assertEquals(LogLevel.WARN, q.getLogLevel("d", null).orElseThrow());
       assertEquals(LogLevel.ERROR, q.getLogLevel("e", null).orElseThrow());
       assertEquals(LogLevel.FATAL, q.getLogLevel("f", null).orElseThrow());
+    }
+  }
+
+  /**
+   * qfg-goi1.2.16 item 3: before init completes, {@code getLogLevel} returns empty immediately
+   * instead of blocking on the init future (up to {@code initTimeout}). The logging filters call it
+   * on every log statement, so blocking here stalls every thread that logs during startup. Once
+   * init completes, the configured level resolves as usual.
+   */
+  @Test
+  void getLogLevel_returnsEmptyImmediately_beforeInitCompletes() throws Exception {
+    String envelope =
+        "{\"configs\":[{\"id\":\"ll\",\"key\":\"a.b\",\"type\":\"log_level\","
+            + "\"valueType\":\"log_level\",\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"log_level\",\"value\":\"WARN\"}}]}}],"
+            + "\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":1}}";
+    HttpServer api = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    api.setExecutor(Executors.newCachedThreadPool());
+    api.createContext(
+        "/api/v2/configs",
+        ex -> {
+          try {
+            Thread.sleep(3000); // slow delivery: init is in flight for ~3s
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+          byte[] b = envelope.getBytes(StandardCharsets.UTF_8);
+          ex.sendResponseHeaders(200, b.length);
+          try (OutputStream out = ex.getResponseBody()) {
+            out.write(b);
+          }
+        });
+    api.start();
+    String base = "http://127.0.0.1:" + api.getAddress().getPort();
+    Options o =
+        Options.builder()
+            .sdkKey("test-sdk")
+            .envLookup(k -> Optional.empty())
+            .enableQuonfigUserContext(false)
+            .apiUrls(List.of(base))
+            .streamUrls(List.of(base))
+            .disableTelemetry(true)
+            .fallbackPollEnabled(false)
+            .configFetchTimeout(Duration.ofSeconds(8))
+            .configFetchHedgeAbort(Duration.ofSeconds(8))
+            .initTimeout(Duration.ofSeconds(10))
+            .build();
+    try (Quonfig q = new Quonfig(o)) {
+      long start = System.nanoTime();
+      Optional<LogLevel> early = q.getLogLevel("a.b", null);
+      long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+      assertTrue(elapsedMs < 500, "getLogLevel must not block on init; took " + elapsedMs + "ms");
+      assertFalse(early.isPresent(), "no opinion before init completes");
+
+      q.initFuture().get(10, TimeUnit.SECONDS);
+      assertEquals(LogLevel.WARN, q.getLogLevel("a.b", null).orElseThrow());
+    } finally {
+      api.stop(0);
     }
   }
 }

@@ -1033,10 +1033,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * walking up dotted parents per {@link #shouldLog} semantics. Returns {@link Optional#empty()}
    * when no log-level config exists or the resolved value is unparseable — filters use that signal
    * as "no opinion" and defer to whatever the underlying logging library would do.
+   *
+   * <p>Returns {@link Optional#empty()} immediately while initialization is still in flight,
+   * instead of blocking on {@link #initFuture()} like the typed getters do. The logging filters
+   * call this on every log statement, so blocking here would stall every thread that logs during
+   * startup for up to {@link Options#initTimeout()} (qfg-goi1.2.16).
    */
   @Override
   public Optional<LogLevel> getLogLevel(String loggerPath, ContextSet ctx) {
     Objects.requireNonNull(loggerPath, "loggerPath");
+    if (!initFuture.isDone()) {
+      return Optional.empty();
+    }
     return resolveLogLevelString(loggerPath, ctx).flatMap(LogLevel::fromString);
   }
 
