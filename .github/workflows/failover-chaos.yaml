@@ -61,11 +61,12 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          # Pinned to v2026.06.19.1: the parallel-failover hedge corpus tag with the
-          # reframed o01 (fast primary wins; secondary never contacted) + new o05
-          # (slow older primary loses to fast newer secondary) + o03 (heal forward).
-          # Mirrors sdk-go's failover-chaos.yaml pinning rationale (qfg-7h5d.1.14).
-          ref: v2026.06.19.1
+          # Kept equal to the unit pin in test.yaml and to chaos.yaml (one ITD tag
+          # per repo, qfg-goi1.1.6). Includes the parallel-failover hedge corpus
+          # (v2026.06.19.1): reframed o01 (fast primary wins; secondary never
+          # contacted), o05 (slow older primary loses to fast newer secondary) and
+          # o03 (heal forward). No failover/ordering scenario changed since then.
+          ref: v2026.10.03
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT
@@ -81,6 +82,17 @@ jobs:
           path: api-delivery
           ref: main
           token: ${{ secrets.QUONFIG_REPO_TOKEN }}
+
+      - name: Record resolved api-delivery SHA
+        # api-delivery tracks main on purpose (the nightly/push runs exist to
+        # catch api-delivery drift; Decision 8 in
+        # project/sdk-quality-check/META-ANALYSIS.md). Print the exact commit
+        # so a red run can be tied to the api-delivery change that caused it.
+        if: env.HAS_REPO_TOKEN == 'true'
+        run: |
+          sha="$(git -C api-delivery rev-parse HEAD)"
+          echo "api-delivery main resolved to ${sha}"
+          echo "api-delivery: \`main\` @ \`${sha}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Java
         if: env.HAS_REPO_TOKEN == 'true'

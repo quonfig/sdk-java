@@ -18,6 +18,11 @@ change, so no release is needed.
 - **Chaos: an unknown `client.sdkMetric(...)` name fails loudly (qfg-goi1.1.6).** `ChaosProbe`
   returned 0 for any metric it does not observe; it now throws `IllegalArgumentException` naming
   the metric.
+- **Chaos and failover-chaos run at integration-test-data `v2026.10.03` (qfg-goi1.1.6).** Both
+  were pinned behind the unit pin (`v2026.05.13` and `v2026.06.19.1`); all three now use the same
+  tag. The new tag adds a 60s freshness hold to `05-sse-down` (qfg-e3ja). api-delivery still
+  tracks `main` on purpose, and both workflows now print the resolved api-delivery commit in the
+  log and the run summary.
 ## 1.5.0 - 2026-10-02
 
 ### Added
