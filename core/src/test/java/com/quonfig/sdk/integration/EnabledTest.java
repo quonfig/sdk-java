@@ -29,6 +29,26 @@ class EnabledTest {
   }
 
   @Test
+  @DisplayName("returns false for a flag key that does not exist")
+  void returnsFalseForAFlagKeyThatDoesNotExist() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("my-missing-key", null));
+  }
+
+  @Test
+  @DisplayName("returns false for a flag key that does not exist with a context")
+  void returnsFalseForAFlagKeyThatDoesNotExistWithAContext() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        false,
+        client.featureIsOn(
+            "my-missing-key",
+            TestSetup.ctx(
+                TestSetup.map(
+                    "user", TestSetup.map("key", "michael", "email", "michael@example.com")))));
+  }
+
+  @Test
   @DisplayName("returns true for a PROP_IS_ONE_OF rule when any prop matches")
   void returnsTrueForAPropIsOneOfRuleWhenAnyPropMatches() throws Exception {
     Quonfig client = TestSetup.client();

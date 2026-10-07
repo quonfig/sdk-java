@@ -29,7 +29,7 @@ jobs:
           # Pinned to a tag (not main) so a typo in shared YAML can't
           # break every SDK's CI at once. Bump to a newer tag when
           # adopting new test cases. See integration-test-data/RELEASING.md.
-          ref: v2026.10.03
+          ref: v2026.10.07
 
       - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12  # v4
         with:
