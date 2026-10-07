@@ -27,6 +27,7 @@ change, so no release is needed.
   the tagged commit (`workflow_call`) and the Maven Central publish job `needs: test`, matching
   sdk-ruby and sdk-net. Before, a tag published even if Test was red on that commit. Chaos still
   runs on the tag but does not gate publish.
+
 ## 1.5.0 - 2026-10-02
 
 ### Added
