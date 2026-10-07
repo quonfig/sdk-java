@@ -27,13 +27,14 @@ Internal do not change the published artifacts.
   completes, which both filters map to NEUTRAL: log calls in that window follow the logging
   library's own levels, and Quonfig's levels apply once init completes. `shouldLog` and the typed
   getters are unchanged.
-- **The SSE request times out waiting for response headers after 30s (qfg-goi1.2.16).** A server
-  or proxy that accepted the connection and never answered used to pin the SSE thread forever,
-  because the read watchdog only starts once headers arrive: the fallback poller took over after
-  120s, but SSE never came back until restart. The attempt is now abandoned and the loop
-  reconnects with backoff. The timeout covers the header phase only, so a healthy long-lived
-  stream is never cut (verified on JDK 17 and 22). `SseClient.Builder.headerTimeout(Duration)`
-  overrides it. Matches the sdk-go Wave 1 `ResponseHeaderTimeout`.
+- **The SSE request times out waiting for response headers (qfg-goi1.2.16).** A server or proxy
+  that accepted the connection and never answered used to pin the SSE thread forever, because the
+  read watchdog only starts once headers arrive: the fallback poller took over after 120s, but SSE
+  never came back until restart. The header wait is now bounded by the read-watchdog window
+  (`sseReadWatchdog`, 90s by default), after which the loop reconnects with backoff. It is not
+  shorter because api-delivery sends headers with the first event, which on a cold workspace is
+  the 30s heartbeat. The timeout covers the header phase only, so a healthy long-lived stream is
+  never cut (verified on JDK 17 and 22). Matches sdk-go's `ResponseHeaderTimeout = ReadTimeout`.
 - **`close()` during init no longer leaves the SSE loop or fallback poller running
   (qfg-goi1.2.16).** If `close()` ran just as init was starting SSE, it could miss the SSE client
   and supervisor that were being created, and both then ran forever against a closed client

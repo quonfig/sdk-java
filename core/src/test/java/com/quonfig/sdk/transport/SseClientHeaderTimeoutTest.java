@@ -70,7 +70,7 @@ class SseClientHeaderTimeoutTest {
             .sdkKey("k")
             .initialDelay(Duration.ofMillis(50))
             .maxDelay(Duration.ofMillis(100))
-            .headerTimeout(Duration.ofMillis(300))
+            .readWatchdog(Duration.ofMillis(300))
             .build();
     client.start();
 
@@ -95,7 +95,7 @@ class SseClientHeaderTimeoutTest {
           ex.sendResponseHeaders(200, 0);
           OutputStream out = ex.getResponseBody();
           try {
-            // Keepalive every 100ms for 1.5s: five times the 300ms header timeout.
+            // Keepalive every 100ms for 1.5s: five times the 300ms window.
             for (int i = 0; i < 15; i++) {
               out.write(":keepalive\n\n".getBytes(StandardCharsets.UTF_8));
               out.flush();
@@ -116,7 +116,7 @@ class SseClientHeaderTimeoutTest {
         SseClient.builder()
             .streamUrls(List.of(URI.create("http://127.0.0.1:" + server.getAddress().getPort())))
             .sdkKey("k")
-            .headerTimeout(Duration.ofMillis(300))
+            .readWatchdog(Duration.ofMillis(300))
             .build();
     client.onConnectionStateChange(
         connected -> {

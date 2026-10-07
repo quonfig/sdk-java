@@ -78,7 +78,6 @@ public final class SseClient {
   private final Duration initialDelay;
   private final Duration maxDelay;
   private final Duration readWatchdog;
-  private final Duration headerTimeout;
   private final HttpClient http;
   // Single-thread scheduler that fires the SSE stall watchdog. Daemon-threaded so it
   // never holds the JVM alive; shut down by stop().
@@ -116,10 +115,6 @@ public final class SseClient {
     this.maxDelay = b.maxDelay != null ? b.maxDelay : Duration.ofSeconds(30);
     // 90s = 3x the api-delivery 30s comment heartbeat (sse.go:67-88).
     this.readWatchdog = b.readWatchdog != null ? b.readWatchdog : Duration.ofSeconds(90);
-    // Bounds the response-header phase only (sdk-go ResponseHeaderTimeout parity). With
-    // BodyHandlers.ofInputStream, send() returns at headers, so HttpRequest.timeout never touches
-    // the long-lived body; the read watchdog owns that.
-    this.headerTimeout = b.headerTimeout != null ? b.headerTimeout : Duration.ofSeconds(30);
     this.watchdogExecutor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -268,9 +263,14 @@ public final class SseClient {
           HttpRequest.newBuilder()
               .uri(target)
               .GET()
-              // A server that accepts and never sends headers would otherwise pin this thread
-              // forever: the read watchdog only starts once headers arrive (qfg-goi1.2.16).
-              .timeout(headerTimeout)
+              // Bound the response-header phase with the read watchdog's window (sdk-go
+              // ResponseHeaderTimeout = ReadTimeout parity). A server that accepts and never sends
+              // headers would otherwise pin this thread forever: the watchdog only starts once
+              // headers arrive (qfg-goi1.2.16). Not shorter: api-delivery flushes headers with the
+              // first event, which on a cold workspace is the 30s heartbeat. With
+              // BodyHandlers.ofInputStream, send() returns at headers, so this never cuts the
+              // long-lived body; the watchdog owns that.
+              .timeout(readWatchdog)
               .header("Authorization", authHeader)
               .header("Accept", "text/event-stream")
               .header("Cache-Control", "no-cache");
@@ -483,7 +483,6 @@ public final class SseClient {
     private Duration initialDelay;
     private Duration maxDelay;
     private Duration readWatchdog;
-    private Duration headerTimeout;
     private HttpClient httpClient;
 
     /**
@@ -524,21 +523,11 @@ public final class SseClient {
      * arrive within the window the SDK closes the underlying stream and reconnects. Defaults to 90s
      * (3x the 30s server heartbeat). The default catches client-side wedges (corp proxy buffering,
      * dead NAT, half-open TCP) where the server thinks it delivered and the client knows it
-     * received nothing.
+     * received nothing. The same window bounds the wait for the response headers on each connect,
+     * so a server that accepts and never answers is abandoned too.
      */
     public Builder readWatchdog(Duration readWatchdog) {
       this.readWatchdog = readWatchdog;
-      return this;
-    }
-
-    /**
-     * How long to wait for the SSE response headers on each connect. A server or proxy that accepts
-     * the connection and never answers is abandoned after this and the loop reconnects with
-     * backoff. It bounds only the header phase: the stream body is governed by {@link
-     * #readWatchdog(Duration)}, so a healthy long-lived stream is never cut. Defaults to 30s.
-     */
-    public Builder headerTimeout(Duration headerTimeout) {
-      this.headerTimeout = headerTimeout;
       return this;
     }
 
