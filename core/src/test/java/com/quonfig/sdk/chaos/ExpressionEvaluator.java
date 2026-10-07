@@ -1,6 +1,7 @@
 package com.quonfig.sdk.chaos;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -17,11 +18,40 @@ final class ExpressionEvaluator {
     final boolean passed;
     final String reason;
 
+    /**
+     * True when the whole expression could not be observed by this rig and was skipped. A skipped
+     * result is neither a pass nor a fail: the runner reports it as SKIPPED with {@link #reason}.
+     */
+    final boolean skipped;
+
+    /** Leaves skipped while evaluating this expression (including inside AND/OR compounds). */
+    final List<String> skippedLeaves;
+
     Result(boolean passed, String reason) {
+      this(passed, reason, false, Collections.emptyList());
+    }
+
+    private Result(boolean passed, String reason, boolean skipped, List<String> skippedLeaves) {
       this.passed = passed;
       this.reason = reason;
+      this.skipped = skipped;
+      this.skippedLeaves = skippedLeaves;
+    }
+
+    static Result skip(String leaf, String reason) {
+      return new Result(true, reason, true, Collections.singletonList(leaf));
     }
   }
+
+  /**
+   * Why {@code server_metric(...)} is skipped rather than evaluated (qfg-goi1.1.6, Decision 6 in
+   * project/sdk-quality-check/META-ANALYSIS.md). It is never stubbed to 0: a stub made {@code == 0}
+   * expectations pass without observing anything.
+   */
+  static final String SERVER_METRIC_SKIP_REASON =
+      "SKIPPED: server-side metric; api-delivery exports metrics via OTLP push only, with no"
+          + " scrape endpoint in the chaos rig; server lag is covered by the staging drill"
+          + " qfg-47c2.19 and the QuonfigSubscriberLagHigh alert";
 
   private static final Pattern RE_CONN_STATE =
       Pattern.compile("^client\\.connectionState\\(\\)\\s*(==|!=)\\s*'([^']+)'$");
@@ -50,24 +80,58 @@ final class ExpressionEvaluator {
   Result evaluate(String expr) {
     String e = expr == null ? "" : expr.trim();
     if (e.isEmpty()) return new Result(true, "");
+    // Compounds: a skipped leaf is neutral. It never decides the outcome; the observable leaves
+    // are still enforced. Only when every leaf is skipped is the whole expression skipped.
     if (e.contains(" OR ")) {
-      List<String> parts = splitOutsideQuotesAndRegex(e, " OR ");
       List<String> reasons = new ArrayList<>();
-      for (String p : parts) {
+      List<String> skippedLeaves = new ArrayList<>();
+      boolean anyPassed = false;
+      boolean anyObserved = false;
+      for (String p : splitOutsideQuotesAndRegex(e, " OR ")) {
         Result r = evaluate(p);
-        if (r.passed) return new Result(true, "");
-        reasons.add(r.reason);
+        skippedLeaves.addAll(r.skippedLeaves);
+        if (r.skipped) continue;
+        anyObserved = true;
+        if (r.passed) anyPassed = true;
+        else reasons.add(r.reason);
       }
-      return new Result(false, "OR: " + String.join(" | ", reasons));
+      if (!anyObserved) return new Result(true, SERVER_METRIC_SKIP_REASON, true, skippedLeaves);
+      if (anyPassed) return new Result(true, skipNote(skippedLeaves), false, skippedLeaves);
+      return new Result(
+          false,
+          "OR: " + String.join(" | ", reasons) + skipNote(skippedLeaves),
+          false,
+          skippedLeaves);
     }
     if (e.contains(" AND ")) {
+      List<String> skippedLeaves = new ArrayList<>();
+      String firstFailure = null;
+      boolean anyObserved = false;
+      // Evaluate every leaf (no short-circuit) so the skipped-leaf tally is complete.
       for (String p : splitOutsideQuotesAndRegex(e, " AND ")) {
         Result r = evaluate(p);
-        if (!r.passed) return new Result(false, "AND: " + r.reason);
+        skippedLeaves.addAll(r.skippedLeaves);
+        if (r.skipped) continue;
+        anyObserved = true;
+        if (!r.passed && firstFailure == null) firstFailure = r.reason;
       }
-      return new Result(true, "");
+      if (!anyObserved) return new Result(true, SERVER_METRIC_SKIP_REASON, true, skippedLeaves);
+      if (firstFailure != null) {
+        return new Result(
+            false, "AND: " + firstFailure + skipNote(skippedLeaves), false, skippedLeaves);
+      }
+      return new Result(true, skipNote(skippedLeaves), false, skippedLeaves);
     }
     return leaf(e);
+  }
+
+  private static String skipNote(List<String> skippedLeaves) {
+    if (skippedLeaves.isEmpty()) return "";
+    return " [skipped leaf "
+        + String.join(", ", skippedLeaves)
+        + " — "
+        + SERVER_METRIC_SKIP_REASON
+        + "]";
   }
 
   private Result leaf(String expr) {
@@ -105,12 +169,9 @@ final class ExpressionEvaluator {
           ok,
           "sdkMetric(" + metric + ",layer=" + layer + ")=" + got + " " + m.group(3) + " " + want);
     }
-    if ((m = RE_SERVER_METRIC.matcher(expr)).matches()) {
-      // Server-side metrics aren't exposed to the SDK; stub to 0.
-      double got = 0;
-      double want = Double.parseDouble(m.group(3));
-      boolean ok = compareDouble(m.group(2), got, want);
-      return new Result(ok, "server_metric(" + m.group(1) + ")=0 " + m.group(2) + " " + want);
+    if (RE_SERVER_METRIC.matcher(expr).matches()) {
+      // Not observable from the SDK rig: skip explicitly, never evaluate against a stubbed value.
+      return Result.skip(expr, SERVER_METRIC_SKIP_REASON);
     }
     if ((m = RE_SDK_LOG.matcher(expr)).matches()) {
       String level = m.group(1);

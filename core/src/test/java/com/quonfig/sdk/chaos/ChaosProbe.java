@@ -86,7 +86,13 @@ final class ChaosProbe {
         case "quonfig_sse_connect_attempts_total":
           return connectAttempts;
         default:
-          return 0;
+          // Fail loudly (qfg-goi1.1.6): a silent 0 would make `== 0` / `< N` expectations on a
+          // metric this probe does not observe pass vacuously.
+          throw new IllegalArgumentException(
+              "unknown sdkMetric name '"
+                  + name
+                  + "': ChaosProbe observes only quonfig_sdk_worker_restart_total and"
+                  + " quonfig_sse_connect_attempts_total");
       }
     }
   }

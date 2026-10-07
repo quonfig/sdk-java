@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+Recommended semver: none. CI and chaos-harness changes only; the published artifacts do not
+change, so no release is needed.
+
+### Internal
+
+- **Chaos: `server_metric(...)` is SKIPPED with a reason instead of stubbed to 0
+  (qfg-goi1.1.6).** api-delivery exports metrics via OTLP push only and the chaos rig has no
+  scrape endpoint, so the harness cannot observe `quonfig_subscriber_lag_seconds`. It used to
+  compare against a hardcoded 0, so `== 0` expectations passed without observing anything. Now
+  each such expectation prints `SKIP` with the reason (server lag is covered by the staging drill
+  qfg-47c2.19 and the `QuonfigSubscriberLagHigh` alert), a skipped leaf inside an `AND`/`OR` is
+  neutral while the other leaves are still enforced, and the run ends with a "chaos skipped
+  expressions" tally.
+- **Chaos: an unknown `client.sdkMetric(...)` name fails loudly (qfg-goi1.1.6).** `ChaosProbe`
+  returned 0 for any metric it does not observe; it now throws `IllegalArgumentException` naming
+  the metric.
 ## 1.5.0 - 2026-10-02
 
 ### Added

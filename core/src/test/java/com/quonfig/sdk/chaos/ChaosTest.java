@@ -13,12 +13,14 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -57,6 +59,24 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
  */
 @EnabledIfEnvironmentVariable(named = "CHAOS_RUN", matches = "1")
 final class ChaosTest {
+
+  /**
+   * Every expression leaf the rig skipped this run (e.g. {@code server_metric(...)}), as "scenario
+   * exp[i]: leaf". Printed as a run-end tally by {@link #printSkippedTally()} so a skip is never
+   * silent (qfg-goi1.1.6).
+   */
+  private static final List<String> SKIPPED_LEAVES =
+      Collections.synchronizedList(new ArrayList<>());
+
+  @AfterAll
+  static void printSkippedTally() {
+    synchronized (SKIPPED_LEAVES) {
+      System.err.printf("chaos skipped expressions: %d%n", SKIPPED_LEAVES.size());
+      if (SKIPPED_LEAVES.isEmpty()) return;
+      System.err.println("  reason: " + ExpressionEvaluator.SERVER_METRIC_SKIP_REASON);
+      for (String leaf : SKIPPED_LEAVES) System.err.println("  " + leaf);
+    }
+  }
 
   @TestFactory
   Collection<DynamicTest> chaosScenarios() throws Exception {
@@ -254,9 +274,15 @@ final class ChaosTest {
         long elapsed = now - baselineMs;
         boolean allTerminal = true;
         for (ExpState s : states) {
-          if (s.passed || s.failed) continue;
+          if (s.passed || s.failed || s.skipped) continue;
           ExpressionEvaluator.Result r = eval.evaluate(s.exp.assertExpr);
           s.lastReason = r.reason;
+          s.skippedLeaves.addAll(r.skippedLeaves);
+          if (r.skipped) {
+            // Not observable from this rig: terminal, reported as SKIPPED (never a silent pass).
+            s.skipped = true;
+            continue;
+          }
           if (r.passed) {
             if (s.heldSinceMs == 0) {
               s.heldSinceMs = now;
@@ -281,7 +307,7 @@ final class ChaosTest {
       }
       // Anything still indeterminate is a fail.
       for (ExpState s : states) {
-        if (!s.passed) s.failed = true;
+        if (!s.passed && !s.skipped) s.failed = true;
       }
     } finally {
       // Wait for any in-flight chaos threads to finish (so subsequent scenarios start clean).
@@ -298,13 +324,27 @@ final class ChaosTest {
 
     int pass = 0;
     int fail = 0;
+    int skipped = 0;
     List<String> failures = new ArrayList<>();
     for (ExpState s : states) {
-      if (s.passed) {
+      for (String leaf : s.skippedLeaves) {
+        SKIPPED_LEAVES.add(String.format("%s exp[%d]: %s", run.name, s.idx, leaf));
+      }
+      if (s.skipped) {
+        skipped++;
+        System.err.printf(
+            "SKIP  exp[%d] within=%dms hold=%dms: %s — %s%n",
+            s.idx, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr, s.lastReason);
+      } else if (s.passed) {
         pass++;
         System.err.printf(
-            "PASS  exp[%d] within=%dms hold=%dms: %s  (hit at %dms)%n",
-            s.idx, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr, s.hitAtMs);
+            "PASS  exp[%d] within=%dms hold=%dms: %s  (hit at %dms)%s%n",
+            s.idx,
+            s.exp.withinMs,
+            s.exp.mustHoldForMs,
+            s.exp.assertExpr,
+            s.hitAtMs,
+            s.skippedLeaves.isEmpty() ? "" : " " + s.lastReason.trim());
       } else {
         fail++;
         String msg =
@@ -316,9 +356,10 @@ final class ChaosTest {
       }
     }
     System.err.printf(
-        "scenario summary: %d passed, %d failed (state=%s, restartL1=%.0f, fallback=%b, lastRefreshMs=%d)%n",
+        "scenario summary: %d passed, %d failed, %d skipped (state=%s, restartL1=%.0f, fallback=%b, lastRefreshMs=%d)%n",
         pass,
         fail,
+        skipped,
         probe.connectionState(),
         probe.sdkMetric("quonfig_sdk_worker_restart_total", "1"),
         probe.fallbackPollerActive(),
@@ -523,6 +564,8 @@ final class ChaosTest {
     long heldSinceMs;
     boolean passed;
     boolean failed;
+    boolean skipped;
+    final Set<String> skippedLeaves = new LinkedHashSet<>();
     String lastReason = "";
 
     ExpState(int idx, ChaosScenario.Expectation exp) {
