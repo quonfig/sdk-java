@@ -23,6 +23,10 @@ change, so no release is needed.
   tag. The new tag adds a 60s freshness hold to `05-sse-down` (qfg-e3ja). api-delivery still
   tracks `main` on purpose, and both workflows now print the resolved api-delivery commit in the
   log and the run summary.
+- **Publish is gated on the unit tests (qfg-goi1.1.6).** `publish.yaml` now calls `test.yaml` on
+  the tagged commit (`workflow_call`) and the Maven Central publish job `needs: test`, matching
+  sdk-ruby and sdk-net. Before, a tag published even if Test was red on that commit. Chaos still
+  runs on the tag but does not gate publish.
 ## 1.5.0 - 2026-10-02
 
 ### Added

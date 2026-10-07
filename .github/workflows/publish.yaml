@@ -12,6 +12,11 @@ name: Publish
 #   com.quonfig:sdk-java-logback
 #   com.quonfig:sdk-java-log4j2
 #   com.quonfig:sdk-java-micronaut
+#
+# Publish is gated on the unit suite (test.yaml, called on the tagged commit
+# via workflow_call): a red Test means nothing ships. This matches sdk-ruby
+# and sdk-net (`needs: test`). The chaos suite also runs on the tag
+# (chaos.yaml, full mode) but does not gate publish (qfg-goi1.1.6).
 
 on:
   push:
@@ -19,8 +24,13 @@ on:
       - 'v*'
 
 jobs:
+  test:
+    name: Test on tagged commit
+    uses: ./.github/workflows/test.yaml
+
   publish:
     runs-on: ubuntu-latest
+    needs: test
     environment: release
 
     permissions:

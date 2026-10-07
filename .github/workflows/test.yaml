@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # publish.yaml calls this on the tagged commit and gates the Maven Central
+  # publish on it (`needs: test`, qfg-goi1.1.6).
+  workflow_call:
 
 jobs:
   test:
