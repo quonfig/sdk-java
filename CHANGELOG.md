@@ -12,10 +12,13 @@ Internal do not change the published artifacts.
 - **One malformed config row no longer drops the whole delivery envelope (qfg-goi1.2.16).** The
   HTTP init fetch, `refresh()`, the fallback poller and SSE now parse the envelope row by row. A
   row that fails to parse (for example one missing `type`) is skipped with a WARN naming its key
-  and the envelope version, and every other row installs. Before, one bad row aborted the install,
-  so every other config's update was lost (and on SSE, silently). If every row fails, the
+  and the envelope version, and every other row installs. The skipped key is not kept at its last
+  good value: it is absent from the installed set, so lookups of it return the caller's default
+  (`FLAG_NOT_FOUND`) until a later envelope carries a good row. Before, one bad row aborted the
+  install, so every other config's update was lost (and on SSE, silently). If every row fails, the
   envelope is still rejected, so it can never install as an empty workspace. Matches sdk-go
-  v1.4.0 (qfg-9dxb.6). Datadir and datafile loading are unchanged.
+  v1.4.0 (qfg-9dxb.6). Datadir and datafile loading do not skip rows: one bad row still fails the
+  load, as before (only the exception changes, see below).
 - **A rejected SSE envelope is logged at WARN (qfg-goi1.2.16).** The SSE handler used to swallow
   an install failure with no log line; it now logs `quonfig: SSE envelope rejected: ...` and keeps
   the held envelope.
