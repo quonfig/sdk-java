@@ -1,11 +1,6 @@
 # Changelog
 
-## Unreleased
-
-Recommended semver: **minor** (1.6.0). The qfg-goi1.2.16 entries below change error-path and
-pre-init behavior (Decision 1: rare-edge behavior change = minor); the common path (well-formed
-envelopes, getters after init) is unchanged. The qfg-goi1.1.6 CI and chaos-harness changes under
-Internal do not change the published artifacts.
+## 1.6.0 - 2026-10-09
 
 ### Changed
 
@@ -68,10 +63,11 @@ Internal do not change the published artifacts.
   returned 0 for any metric it does not observe; it now throws `IllegalArgumentException` naming
   the metric.
 - **Chaos and failover-chaos run at integration-test-data `v2026.10.03` (qfg-goi1.1.6).** Both
-  were pinned behind the unit pin (`v2026.05.13` and `v2026.06.19.1`); all three now use the same
-  tag. The new tag adds a 60s freshness hold to `05-sse-down` (qfg-e3ja). api-delivery still
-  tracks `main` on purpose, and both workflows now print the resolved api-delivery commit in the
-  log and the run summary.
+  were pinned behind the unit pin (`v2026.05.13` and `v2026.06.19.1`). The unit suite has since
+  moved to `v2026.10.07` (qfg-goi1.3: `featureIsOn` on a missing flag returns false; sdk-java
+  already complied, so only the generated `EnabledTest` changed). The `v2026.10.03` tag adds a
+  60s freshness hold to `05-sse-down` (qfg-e3ja). api-delivery still tracks `main` on purpose, and
+  both workflows now print the resolved api-delivery commit in the log and the run summary.
 - **Publish is gated on the unit tests (qfg-goi1.1.6).** `publish.yaml` now calls `test.yaml` on
   the tagged commit (`workflow_call`) and the Maven Central publish job `needs: test`, matching
   sdk-ruby and sdk-net. Before, a tag published even if Test was red on that commit. Chaos still
