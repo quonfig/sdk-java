@@ -7,7 +7,7 @@ dependencies {
     // a transitive Logback pulled in.
     compileOnly("ch.qos.logback:logback-classic:1.5.18")
 
-    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("ch.qos.logback:logback-classic:1.5.18")
