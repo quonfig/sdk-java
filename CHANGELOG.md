@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **The SSE thread no longer dies for good on an `Error` (qfg-goi1.10.7, patch).** The SSE loop
+  only handled exceptions, so an `Error` on the SSE thread (for example an `OutOfMemoryError` from
+  an unterminated event, or one thrown by the envelope handler) ended the loop and the thread, and
+  config updates fell back to the polling interval for the life of the process. The loop now
+  catches it per connection, logs it at ERROR, backs off and reconnects.
+
 - **An `ENV_VAR` coercion error no longer contains the environment variable's value
   (qfg-goi1.2.32, patch).** When a provided `ENV_VAR` value could not be converted to the config's
   type, the `ResolverException` message (and so the `get*OrThrow` exception and the
