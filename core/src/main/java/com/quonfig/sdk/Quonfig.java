@@ -1924,10 +1924,33 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (payload instanceof Double) return payload;
       if (payload instanceof Number) return ((Number) payload).doubleValue();
     }
-    if (vt == ValueType.JSON) return payload;
-    if (vt == ValueType.STRING_LIST) return payload;
+    // Copy-on-return (qfg-goi1.10.8, sdk-go 543ee9c parity): the payload is the cache's own
+    // object, so hand back a deep copy a caller can mutate without changing what later reads see.
+    if (vt == ValueType.JSON) return deepCopyJson(payload);
+    if (vt == ValueType.STRING_LIST) return deepCopyJson(payload);
     if (javaType.isInstance(payload)) return payload;
     throw new ClassCastException(payload.getClass() + " is not " + javaType);
+  }
+
+  /**
+   * Deep copy of a decoded JSON value: maps become {@link LinkedHashMap} and lists {@link
+   * ArrayList} (mutable, insertion order kept, the types callers already get); scalars are
+   * immutable and returned as is.
+   */
+  static Object deepCopyJson(Object v) {
+    if (v instanceof Map) {
+      Map<?, ?> src = (Map<?, ?>) v;
+      Map<Object, Object> out = new LinkedHashMap<>(Math.max(16, src.size() * 2));
+      for (Map.Entry<?, ?> e : src.entrySet()) out.put(e.getKey(), deepCopyJson(e.getValue()));
+      return out;
+    }
+    if (v instanceof List) {
+      List<?> src = (List<?>) v;
+      List<Object> out = new ArrayList<>(src.size());
+      for (Object e : src) out.add(deepCopyJson(e));
+      return out;
+    }
+    return v;
   }
 
   /**

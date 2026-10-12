@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+
+> **UPGRADE: may change returned values (qfg-goi1.10.8, minor).** Ships in a minor release of its
+> own, not bundled with the patch fixes above.
+
+- **`getStringList` and `getJson` return a deep copy, not the cache's own object (qfg-goi1.10.8,
+  minor).** The plain, `*Details` and `*OrThrow` forms (and `BoundQuonfig`) used to return the
+  list or map held in the config cache, so a caller that mutated the result changed what every
+  later read returned until the next config update. Each call now returns its own deep copy: maps
+  are `LinkedHashMap` and lists `ArrayList` (mutable, as before for JSON; a `STRING_LIST` from a
+  provided `ENV_VAR` value used to be unmodifiable and is now mutable too), so existing mutating
+  callers keep working. Two calls no longer return the same instance (`==` is false); compare with
+  `equals`. Matches sdk-go (543ee9c) and sdk-net (90483e3).
+
 ### Fixed
 
 - **An `ENV_VAR` coercion error no longer contains the environment variable's value

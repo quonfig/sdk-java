@@ -348,6 +348,44 @@ class QuonfigDatadirTest {
     }
   }
 
+  // qfg-goi1.10.8: getStringList/getJson return a deep copy; mutating it never reaches the cache.
+  @Test
+  @SuppressWarnings("unchecked")
+  void getStringListAndGetJson_returnDefensiveCopies() throws Exception {
+    writeConfig(
+        "configs",
+        "tags",
+        "{\"id\":\"t1\",\"key\":\"tags\",\"type\":\"config\",\"valueType\":\"stringList\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"stringList\",\"value\":[\"a\",\"b\"]}}]}}");
+    writeConfig(
+        "configs",
+        "obj",
+        "{\"id\":\"o1\",\"key\":\"obj\",\"type\":\"config\",\"valueType\":\"json\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"json\",\"value\":{\"a\":1,\"nested\":{\"list\":[1,2]}}}}]}}");
+    try (Quonfig q = newClient("production")) {
+      List<String> tags = q.getStringList("tags", List.of());
+      assertTrue(tags instanceof java.util.ArrayList, tags.getClass().toString());
+      tags.add("mutated");
+      tags.set(0, "z");
+      assertEquals(List.of("a", "b"), q.getStringList("tags", List.of()));
+      assertEquals(List.of("a", "b"), q.getStringListDetails("tags", List.of()).value());
+
+      Map<String, Object> json = (Map<String, Object>) q.getJson("obj", null);
+      assertTrue(json instanceof java.util.LinkedHashMap, json.getClass().toString());
+      json.put("a", 99);
+      Map<String, Object> nested = (Map<String, Object>) json.get("nested");
+      ((List<Object>) nested.get("list")).add(3);
+      nested.put("extra", true);
+
+      Map<String, Object> again = (Map<String, Object>) q.getJsonOrThrow("obj");
+      assertEquals(1L, ((Number) again.get("a")).longValue());
+      assertEquals("{list=[1, 2]}", String.valueOf(again.get("nested")));
+      assertTrue(again != q.getJson("obj", null), "each call returns its own copy");
+    }
+  }
+
   @Test
   void keys_returnsAllConfigKeys() throws Exception {
     writeConfig(
