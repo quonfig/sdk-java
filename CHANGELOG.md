@@ -5,7 +5,7 @@
 ### Changed
 
 > **UPGRADE: may change returned values (qfg-goi1.10.8, minor).** Ships in a minor release of its
-> own, not bundled with the patch fixes above.
+> own, not bundled with the patch fixes listed under Fixed.
 
 - **`getStringList` and `getJson` return a deep copy, not the cache's own object (qfg-goi1.10.8,
   minor).** The plain, `*Details` and `*OrThrow` forms (and `BoundQuonfig`) used to return the
