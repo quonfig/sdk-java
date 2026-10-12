@@ -10,6 +10,16 @@
   config updates fell back to the polling interval for the life of the process. The loop now
   catches it per connection, logs it at ERROR, backs off and reconnects.
 
+- **An `ENV_VAR` coercion error no longer contains the environment variable's value
+  (qfg-goi1.2.32, patch).** When a provided `ENV_VAR` value could not be converted to the config's
+  type, the `ResolverException` message (and so the `get*OrThrow` exception and the
+  `EvaluationDetails` error message) quoted the raw value and the parser's message, which quotes
+  it too, so a secret such as a database URL could reach logs. The message is now
+  `environment variable "<NAME>" cannot be converted to <type> for config "<key>"`, with `<type>`
+  the lowercase config-file type name (`int`, `double`, `bool`, `json`, `duration`), matching
+  sdk-go and sdk-net. The parser exception is no longer chained as the cause, because its message
+  quotes the value.
+
 ## 1.6.0 - 2026-10-09
 
 ### Changed
