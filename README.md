@@ -178,6 +178,15 @@ envelope (any source). `Quonfig.connectionState()` returns one of `CONNECTED`, `
 
 > Do not wire `lastSuccessfulRefresh()` or `connectionState()` directly into a Kubernetes liveness probe. These signals are diagnostic, not pass/fail. A liveness probe based on SDK freshness will amplify transient network blips into restart cascades.
 
+## Dev context from `qfg login` (on by default)
+
+On a machine where someone ran `qfg login`, the SDK reads the signed-in email from
+`~/.quonfig/tokens.json` (`tokens-<domain>.json` for a non-production `QUONFIG_DOMAIN`) and adds it
+to every evaluation as the `quonfig-user.email` context, so rules can target it and it reaches
+telemetry example contexts. Customer contexts with the same name win. Turn it off with the
+`enableQuonfigUserContext(false)` builder option or `QUONFIG_DEV_CONTEXT=false` (the option wins
+over the env var). Production servers normally have no tokens file, so nothing is added there.
+
 ## Telemetry
 
 The SDK sends usage telemetry to `telemetryUrl` so the Quonfig dashboard can show which flags and

@@ -232,7 +232,17 @@ public final class SseClient {
     URI primary = streamUrls.get(0);
     try {
       while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
-        boolean connectedOK = connectOnce(primary);
+        boolean connectedOK;
+        try {
+          connectedOK = connectOnce(primary);
+        } catch (Throwable t) {
+          // Catch Throwable, not just RuntimeException: an Error (for example an
+          // OutOfMemoryError from an unterminated event, or one thrown by a handler) used to end
+          // this loop and the SSE thread for good, leaving freshness to the fallback poller
+          // forever. Log it, back off as for a failed connection, and reconnect (qfg-goi1.10.7).
+          log.error("SSE: connection failed with an unexpected error; reconnecting", t);
+          connectedOK = false;
+        }
         if (stopped.get() || Thread.currentThread().isInterrupted()) {
           return;
         }

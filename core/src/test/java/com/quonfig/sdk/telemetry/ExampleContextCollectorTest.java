@@ -1,13 +1,20 @@
 package com.quonfig.sdk.telemetry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.eval.ContextSet;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class ExampleContextCollectorTest {
@@ -165,5 +172,98 @@ class ExampleContextCollectorTest {
     Thread.sleep(120);
     c.push(new ContextSet().withNamedContext("user", Map.of("key", "abc")));
     assertNotNull(c.drain());
+  }
+
+  // ----- qfg-goi1.2.38: the recorded example is a JSON-safe copy taken at push time -----
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> onlyValues(Map<String, Object> event) {
+    List<Map<String, Object>> examples =
+        (List<Map<String, Object>>)
+            ((Map<String, Object>) event.get("exampleContexts")).get("examples");
+    assertEquals(1, examples.size());
+    List<Map<String, Object>> contexts =
+        (List<Map<String, Object>>)
+            ((Map<String, Object>) examples.get(0).get("contextSet")).get("contexts");
+    return (Map<String, Object>) contexts.get(0).get("values");
+  }
+
+  @Test
+  void nestedValuesAreCopiedAtPushTime() throws Exception {
+    ExampleContextCollector c = new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
+    Map<String, Object> nested = new HashMap<>();
+    nested.put("tier", "gold");
+    List<Object> tags = new ArrayList<>(List.of("a"));
+    nested.put("tags", tags);
+    Map<String, Object> user = new HashMap<>();
+    user.put("key", "u-1");
+    user.put("meta", nested);
+    c.push(new ContextSet().withNamedContext("user", user));
+
+    // The caller keeps mutating its own objects after the evaluation.
+    nested.put("tier", "changed");
+    nested.put("added", 1);
+    tags.add("b");
+
+    Map<String, Object> event = c.drain();
+    @SuppressWarnings("unchecked")
+    Map<String, Object> meta = (Map<String, Object>) onlyValues(event).get("meta");
+    assertEquals("gold", meta.get("tier"));
+    assertFalse(meta.containsKey("added"));
+    assertEquals(List.of("a"), meta.get("tags"));
+    new ObjectMapper().writeValueAsString(event);
+  }
+
+  @Test
+  void valueTypesRenderToStringsAndTheExampleIsKept() throws Exception {
+    ExampleContextCollector c = new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
+    UUID id = UUID.fromString("0b7e1c38-3f0a-4c3e-9a51-6d1b8a7f2c11");
+    Instant at = Instant.parse("2026-10-12T10:00:00Z");
+    Map<String, Object> user = new LinkedHashMap<>();
+    user.put("key", id);
+    user.put("signedUpAt", at);
+    user.put("tags", List.of("x", "y"));
+    user.put("scores", new int[] {1, 2});
+    user.put("handle", new Object()); // an arbitrary object: dropped, the example stays
+    c.push(new ContextSet().withNamedContext("user", user));
+
+    Map<String, Object> event = c.drain();
+    assertNotNull(event);
+    Map<String, Object> values = onlyValues(event);
+    assertEquals(id.toString(), values.get("key"));
+    assertEquals("2026-10-12T10:00:00Z", values.get("signedUpAt"));
+    assertEquals(List.of("x", "y"), values.get("tags"));
+    assertEquals(List.of(1, 2), values.get("scores"));
+    assertFalse(values.containsKey("handle"));
+    // A plain ObjectMapper (no JSR-310 module) must serialize the window.
+    String json = new ObjectMapper().writeValueAsString(event);
+    assertTrue(json.contains("2026-10-12T10:00:00Z"), json);
+  }
+
+  @Test
+  void cyclicAndOverDeepValuesAreCutNotOverflowed() throws Exception {
+    ExampleContextCollector c = new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
+    Map<String, Object> loop = new HashMap<>();
+    loop.put("name", "self");
+    loop.put("self", loop);
+    List<Object> deep = new ArrayList<>();
+    List<Object> cur = deep;
+    for (int i = 0; i < 10_000; i++) {
+      List<Object> next = new ArrayList<>();
+      cur.add(next);
+      cur = next;
+    }
+    Map<String, Object> user = new HashMap<>();
+    user.put("key", "u-1");
+    user.put("loop", loop);
+    user.put("deep", deep);
+    c.push(new ContextSet().withNamedContext("user", user));
+
+    Map<String, Object> event = c.drain();
+    @SuppressWarnings("unchecked")
+    Map<String, Object> copied = (Map<String, Object>) onlyValues(event).get("loop");
+    assertEquals("self", copied.get("name"));
+    assertFalse(copied.containsKey("self"));
+    new ObjectMapper().writeValueAsString(event);
   }
 }

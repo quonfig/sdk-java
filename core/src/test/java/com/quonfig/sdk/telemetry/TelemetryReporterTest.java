@@ -316,4 +316,62 @@ class TelemetryReporterTest {
       }
     }
   }
+
+  /**
+   * qfg-goi1.2.38 (absorbs re-audit #22): one context attribute Jackson cannot serialize by default
+   * (an Instant) used to drop the whole telemetry window.
+   */
+  @Test
+  void instantContextAttributeDoesNotDropTheWindow() throws IOException {
+    EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(true);
+    ExampleContextCollector examples =
+        new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE);
+    summaries.push(stat("greeting", "hello"));
+    examples.push(
+        new ContextSet()
+            .withNamedContext("user", Map.of("key", "u-1", "signedUpAt", java.time.Instant.EPOCH)));
+
+    CapturingSender sender = new CapturingSender();
+    TelemetryReporter reporter =
+        new TelemetryReporter(
+            sender,
+            "h",
+            summaries,
+            new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE),
+            examples,
+            null,
+            com.quonfig.sdk.Options.builder().build());
+    reporter.flush();
+
+    assertEquals(1, sender.sent.size());
+    assertTrue(sender.sent.get(0).toString().contains("1970-01-01T00:00:00Z"));
+  }
+
+  /** A window that cannot be serialized is dropped with one WARN, not silently at DEBUG. */
+  @Test
+  void unserializableWindowIsLoggedAtWarnOnce() throws IOException {
+    EvaluationSummaryCollector summaries = new EvaluationSummaryCollector(true);
+    CaptureLogger log = new CaptureLogger();
+    CapturingSender sender = new CapturingSender();
+    TelemetryReporter reporter =
+        new TelemetryReporter(
+            sender,
+            "h",
+            summaries,
+            new ContextShapeCollector(ContextUploadMode.PERIODIC_EXAMPLE),
+            new ExampleContextCollector(ContextUploadMode.PERIODIC_EXAMPLE),
+            null,
+            com.quonfig.sdk.Options.builder().logger(log).build());
+
+    summaries.push(stat("a", new Object())); // Jackson fails on an empty bean
+    reporter.flush();
+    summaries.push(stat("b", new Object()));
+    reporter.flush();
+
+    assertTrue(sender.sent.isEmpty());
+    assertEquals(
+        1,
+        log.count(org.slf4j.event.Level.WARN, "could not be serialized"),
+        log.lines().toString());
+  }
 }

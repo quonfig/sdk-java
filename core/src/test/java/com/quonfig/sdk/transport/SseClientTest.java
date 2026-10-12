@@ -568,4 +568,56 @@ class SseClientTest {
     long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - t0);
     assertTrue(elapsedMs < 3000, "stop() blocked for " + elapsedMs + "ms");
   }
+
+  /**
+   * qfg-goi1.10.7: an Error thrown on the SSE thread (here an OutOfMemoryError from the envelope
+   * handler, standing in for one from an unterminated event) must not end the SSE thread for good.
+   * The loop logs it, backs off and reconnects, and later envelopes still arrive.
+   */
+  @Test
+  void survivesErrorOnSseThreadAndReconnects() throws Exception {
+    AtomicInteger attempts = new AtomicInteger(0);
+    HttpHandler handler =
+        (HttpExchange ex) -> {
+          int n = attempts.incrementAndGet();
+          ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+          ex.sendResponseHeaders(200, 0);
+          OutputStream out = ex.getResponseBody();
+          try {
+            String v = "v" + n;
+            writeFrame(
+                out,
+                v,
+                "{\"meta\":{\"version\":\"" + v + "\",\"environment\":\"prod\"},\"configs\":[]}");
+            Thread.sleep(2000);
+          } catch (IOException | InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+          } finally {
+            ex.close();
+          }
+        };
+    HttpServer s = start(handler);
+
+    BlockingQueue<String> received = new LinkedBlockingQueue<>();
+    AtomicInteger calls = new AtomicInteger(0);
+    client =
+        SseClient.builder()
+            .streamUrls(List.of(baseUri(s)))
+            .sdkKey("test-key")
+            .initialDelay(Duration.ofMillis(5))
+            .maxDelay(Duration.ofMillis(50))
+            .build();
+    client.onEnvelope(
+        env -> {
+          if (calls.incrementAndGet() == 1) {
+            throw new OutOfMemoryError("simulated");
+          }
+          received.add(env.meta().version());
+        });
+    client.start();
+
+    String next = received.poll(5, TimeUnit.SECONDS);
+    assertNotNull(next, "SSE thread died on the Error and never reconnected");
+    assertTrue(attempts.get() >= 2, "expected a reconnect, attempts=" + attempts.get());
+  }
 }
