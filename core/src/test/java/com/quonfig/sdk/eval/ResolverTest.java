@@ -1,6 +1,7 @@
 package com.quonfig.sdk.eval;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -227,6 +228,49 @@ class ResolverTest {
     ResolverException ex =
         assertThrows(ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
     assertEquals(ResolverException.Kind.UNABLE_TO_COERCE, ex.kind());
+  }
+
+  // qfg-goi1.2.32: the coercion error names the env var, type and key, never the value.
+  @Test
+  void resolve_providedEnvVar_coerceErrorDoesNotLeakEnvValue() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "DATABASE_URL"));
+    ConfigRow cfg = rowNoRules("db.pool.size", ValueType.INT);
+    Resolver r =
+        new Resolver(new MapStore(), null, key -> Optional.of("postgres://admin:hunter2@db"));
+    ResolverException ex =
+        assertThrows(ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_COERCE, ex.kind());
+    assertEquals(
+        "environment variable \"DATABASE_URL\" cannot be converted to int for config"
+            + " \"db.pool.size\"",
+        ex.getMessage());
+    for (Throwable t = ex; t != null; t = t.getCause()) {
+      assertFalse(String.valueOf(t.getMessage()).contains("hunter2"), "leaked in " + t);
+    }
+  }
+
+  @Test
+  void resolve_providedEnvVar_coerceErrorUsesConfigFileTypeNames() {
+    Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "V"));
+    Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("s3cret{"));
+    for (Object[] c :
+        new Object[][] {
+          {ValueType.DOUBLE, "double"},
+          {ValueType.BOOL, "bool"},
+          {ValueType.JSON, "json"},
+          {ValueType.DURATION, "duration"}
+        }) {
+      ConfigRow cfg = rowNoRules("k", (ValueType) c[0]);
+      ResolverException ex =
+          assertThrows(
+              ResolverException.class, () -> r.resolve(provided, cfg, "", new ContextSet()));
+      assertEquals(
+          "environment variable \"V\" cannot be converted to " + c[1] + " for config \"k\"",
+          ex.getMessage());
+      for (Throwable t = ex; t != null; t = t.getCause()) {
+        assertFalse(String.valueOf(t.getMessage()).contains("s3cret"), "leaked in " + t);
+      }
+    }
   }
 
   // ----- AES-GCM decryption -----

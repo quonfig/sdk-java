@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -116,7 +117,8 @@ public final class Resolver {
           "environment variable \"" + pv.lookup() + "\" not set for config \"" + cfg.key() + "\"");
     }
 
-    return new Value(cfg.valueType(), coerce(envValue.get(), cfg.valueType(), cfg.key()));
+    return new Value(
+        cfg.valueType(), coerce(envValue.get(), pv.lookup(), cfg.valueType(), cfg.key()));
   }
 
   private Value resolveDecryption(
@@ -181,7 +183,8 @@ public final class Resolver {
     return new Value(ValueType.STRING, decrypted, true, null);
   }
 
-  private static Object coerce(String envValue, ValueType valueType, String configKey) {
+  private static Object coerce(
+      String envValue, String envVarName, ValueType valueType, String configKey) {
     try {
       switch (valueType) {
         case INT:
@@ -204,17 +207,17 @@ public final class Resolver {
           return envValue;
       }
     } catch (IllegalArgumentException | DateTimeParseException | JsonProcessingException e) {
+      // Never include the env value, or the parser's message (which quotes it), and do not chain
+      // the parser exception as the cause: the value may be a secret (qfg-goi1.2.32).
       throw new ResolverException(
           ResolverException.Kind.UNABLE_TO_COERCE,
-          "cannot convert \""
-              + envValue
-              + "\" to "
-              + valueType
+          "environment variable \""
+              + envVarName
+              + "\" cannot be converted to "
+              + valueType.name().toLowerCase(Locale.ROOT)
               + " for config \""
               + configKey
-              + "\": "
-              + e.getMessage(),
-          e);
+              + "\"");
     }
   }
 
