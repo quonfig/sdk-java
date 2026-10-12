@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -69,6 +70,7 @@ public final class TelemetryReporter implements AutoCloseable {
   private final boolean ownsScheduler;
   private final TelemetryTransportQueue queue;
   private final ObjectMapper mapper = new ObjectMapper();
+  private final AtomicBoolean warnedUnserializableWindow = new AtomicBoolean(false);
 
   private volatile boolean closed;
   private ScheduledFuture<?> timer;
@@ -479,8 +481,16 @@ public final class TelemetryReporter implements AutoCloseable {
     envelope.put("events", events);
     try {
       return mapper.writeValueAsBytes(envelope);
-    } catch (JsonProcessingException e) {
-      logger.debug("Telemetry window could not be serialized and was dropped: {}", e.toString());
+    } catch (JsonProcessingException | RuntimeException e) {
+      // WARN once per reporter, DEBUG after: a value that cannot be serialized usually recurs in
+      // every window (qfg-goi1.2.38).
+      if (warnedUnserializableWindow.compareAndSet(false, true)) {
+        logger.warn(
+            "quonfig: telemetry window could not be serialized and was dropped (logged once): {}",
+            e.toString());
+      } else {
+        logger.debug("Telemetry window could not be serialized and was dropped: {}", e.toString());
+      }
       return null;
     }
   }

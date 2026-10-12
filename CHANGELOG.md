@@ -4,6 +4,28 @@
 
 ### Fixed
 
+- **Telemetry example contexts are copied when recorded, and one odd value no longer drops the
+  window (qfg-goi1.2.38, patch).** With `contextUploadMode` `PERIODIC_EXAMPLE`, the example
+  collector kept the caller's own context values and serialized them later on the telemetry
+  thread, so a caller that mutated a nested map or list after the evaluation changed the recorded
+  example or failed the flush, and one value a plain Jackson `ObjectMapper` cannot write (an
+  `Instant`, say) dropped the whole telemetry window, at DEBUG. The collector now takes a
+  JSON-safe deep copy at record time:
+  - kept as is: `null`, `String`, `Boolean`, boxed integer and floating types, `BigInteger`,
+    `BigDecimal`;
+  - rendered to a string: `UUID`, `URI`, `Character` and other `CharSequence`s, enums (by name),
+    `java.time` values (`Instant`, `LocalDate`, `OffsetDateTime`, `Duration`, `ZoneId`, ...;
+    ISO-8601) and `java.util.Date` (as its `Instant`);
+  - copied: maps (keys by `String.valueOf`), collections, object and primitive arrays (as lists);
+  - dropped (the entry is left out, the rest of the example is kept): every other type
+    (application objects, `Optional`, atomics), a container that contains itself (cut at the edge
+    that closes the cycle) and containers nested more than 32 deep. A `key` or `trackingId` of a
+    dropped type is rendered with `String.valueOf`, as grouping already did, so the example is
+    never lost to its key.
+
+  A telemetry window that still cannot be serialized is now logged once at WARN (DEBUG after).
+  Matches sdk-go 1.6.0 (qfg-goi1.2.4, qfg-goi1.2.44, qfg-goi1.2.46).
+
 - **The SSE thread no longer dies for good on an `Error` (qfg-goi1.10.7, patch).** The SSE loop
   only handled exceptions, so an `Error` on the SSE thread (for example an `OutOfMemoryError` from
   an unterminated event, or one thrown by the envelope handler) ended the loop and the thread, and
