@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Upgrade notes
+
+> **UPGRADE: SSE reports `connected` at the first frame, not at the 200 response (qfg-goi1.10.9).**
+> A stream connection now counts as connected, for `connectionState()`, the
+> `onSseConnectionStateChange` listeners, the reconnect backoff and the fallback poller, only after
+> it delivers its first valid frame: a config envelope or a keepalive. Before, it counted as soon as
+> the 200 response headers arrived.
+>
+> - Against Quonfig's servers the headers and the first frame arrive together, so you should see
+>   no difference.
+> - Behind a proxy or server that sends 200 headers early, `connected` is reported when the first
+>   frame arrives: at most one keepalive interval (30 s) later.
+> - A connection that closes before any frame is now a failed attempt. The reconnect delay grows,
+>   the client reports disconnected, and the fallback poller takes over after its usual threshold.
+>
+> Before this change, a server that answered 200 and closed at once made the SDK reconnect in a
+> tight loop and keep stale config indefinitely.
+
+### Changed
+
+- **SSE is connected at its first valid frame (qfg-goi1.10.42, minor).** The connected edge, the
+  backoff reset and the fallback poller's engage-timer cancel now happen at the first complete
+  `: keepalive` block or validated envelope on a connection, before that envelope is installed,
+  instead of at the 200 headers. A 200 that ends (EOF, IO error or read watchdog) before any frame
+  is a failed attempt and doubles the reconnect delay; an IO error after a frame still resets it.
+  Headers alone, a block cut off by EOF, malformed or non-envelope data and an `id:`-only block are
+  not frames. In HTTP+SSE mode `connectionState()` also stays `INITIALIZING` in the short window
+  between the init fetch and the start of the stream, where it briefly reported `CONNECTED`.
+
+### Tests
+
+- integration-test-data pin bumped to v2026.10.16.4 (supervisor contract Test 9 and the Test 2
+  reset amendment; `get_or_raise` init-timeout cases now dial `http://192.0.2.1:1`).
+
 ## 1.7.0 - 2026-10-16
 
 ### Upgrade notes

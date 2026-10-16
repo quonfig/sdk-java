@@ -41,7 +41,7 @@ class GetOrRaiseTest {
       "unsupported by sdk-java: sdk-java has no on_init_failure option: a client that misses initTimeout always throws QuonfigInitTimeoutException from get*OrThrow, never the :return-mode missing_default error")
   @DisplayName("get_or_raise raises the correct error if it doesn't raise on init timeout")
   void getOrRaiseRaisesTheCorrectErrorIfItDoesnTRaiseOnInitTimeout() throws Exception {
-    try (Quonfig client = TestSetup.httpClient("https://app.staging-prefab.cloud", 0.01d)) {
+    try (Quonfig client = TestSetup.httpClient("http://192.0.2.1:1", 0.01d)) {
       assertThrows(QuonfigKeyNotFoundException.class, () -> client.getStringOrThrow("any-key"));
     }
   }
@@ -49,7 +49,7 @@ class GetOrRaiseTest {
   @Test
   @DisplayName("get_or_raise can raise an error if the client does not initialize in time")
   void getOrRaiseCanRaiseAnErrorIfTheClientDoesNotInitializeInTime() throws Exception {
-    try (Quonfig client = TestSetup.httpClient("https://app.staging-prefab.cloud", 0.01d)) {
+    try (Quonfig client = TestSetup.httpClient("http://192.0.2.1:1", 0.01d)) {
       assertThrows(QuonfigInitTimeoutException.class, () -> client.getStringOrThrow("any-key"));
     }
   }

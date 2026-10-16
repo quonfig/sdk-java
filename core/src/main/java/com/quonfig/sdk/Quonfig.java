@@ -1265,13 +1265,23 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * <p>Diagnostic surface only — do not wire into a Kubernetes liveness probe. See {@link
    * ConnectionState} for the rationale.
    */
+  /** HTTP+SSE (SDK-key delivery) mode: neither a datadir nor a datafile is configured. */
+  private boolean deliveryMode() {
+    return (options.datadir() == null || options.datadir().isEmpty())
+        && (options.datafile() == null || options.datafile().isEmpty())
+        && options.datafileEnvelope() == null;
+  }
+
   public ConnectionState connectionState() {
     Supervisor sup = this.supervisor;
     if (sup != null) {
       return sup.connectionState();
     }
-    // No supervisor — either HTTP mode before startSse() runs, or datadir/datafile mode (where
-    // a supervisor is never built). The install timestamp tells the two apart.
+    // No supervisor — either HTTP mode before startSse() builds it, or datadir/datafile mode
+    // (where a supervisor is never built). HTTP mode stays INITIALIZING until the stream reports:
+    // the init fetch stamps lastRefreshAt just before startSse() runs, and reporting CONNECTED in
+    // that window would claim a stream that has not delivered a frame (qfg-goi1.10.42).
+    if (deliveryMode()) return ConnectionState.INITIALIZING;
     return lastRefreshAt != null ? ConnectionState.CONNECTED : ConnectionState.INITIALIZING;
   }
 
