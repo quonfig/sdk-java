@@ -103,7 +103,7 @@ jobs:
 
       - name: Setup Gradle
         if: env.HAS_REPO_TOKEN == 'true'
-        uses: gradle/actions/setup-gradle@94baf225fe0a508e581a564467443d0e2379123b  # v4
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v4
 
       - name: Set up Go (to build api-delivery)
         if: env.HAS_REPO_TOKEN == 'true'
