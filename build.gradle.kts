@@ -5,7 +5,7 @@ import com.vanniktech.maven.publish.MavenPublishBaseExtension
 import com.vanniktech.maven.publish.SonatypeHost
 
 plugins {
-    id("com.diffplug.spotless") version "6.25.0" apply false
+    id("com.diffplug.spotless") version "8.10.3" apply false
     id("com.vanniktech.maven.publish") version "0.30.0" apply false
 }
 
