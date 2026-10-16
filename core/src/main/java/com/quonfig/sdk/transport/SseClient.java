@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,6 +93,7 @@ public final class SseClient {
   private final Duration readWatchdog;
   private final Duration headerTimeout;
   private final HttpClient http;
+  private final BiFunction<String, Duration, Duration> waitHook;
   // Single-thread scheduler that fires the SSE stall watchdog. Daemon-threaded so it
   // never holds the JVM alive; shut down by stop().
   private final ScheduledExecutorService watchdogExecutor;
@@ -130,6 +132,7 @@ public final class SseClient {
     this.readWatchdog = b.readWatchdog != null ? b.readWatchdog : Duration.ofSeconds(90);
     // Independent of readWatchdog on purpose (qfg-rriw); see awaitHeaders.
     this.headerTimeout = b.headerTimeout != null ? b.headerTimeout : DEFAULT_HEADER_TIMEOUT;
+    this.waitHook = b.waitHook;
     this.watchdogExecutor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -257,6 +260,11 @@ public final class SseClient {
         long delayNanos = delay.toNanos();
         long jitterNanos = ThreadLocalRandom.current().nextLong(delayNanos + 1);
         long sleepNanos = delayNanos / 2 + jitterNanos / 2;
+        BiFunction<String, Duration, Duration> hook = waitHook;
+        if (hook != null) {
+          Duration d = hook.apply("sse", Duration.ofNanos(sleepNanos));
+          if (d != null) sleepNanos = d.toNanos();
+        }
         try {
           Thread.sleep(sleepNanos / 1_000_000L, (int) (sleepNanos % 1_000_000L));
         } catch (InterruptedException e) {
@@ -550,6 +558,7 @@ public final class SseClient {
     private Duration readWatchdog;
     private Duration headerTimeout;
     private HttpClient httpClient;
+    private BiFunction<String, Duration, Duration> waitHook;
 
     /**
      * Primary stream URL first. Only the first entry is ever dialed — the stream is pinned to the
@@ -609,6 +618,16 @@ public final class SseClient {
     /** Optional override; useful for tests. */
     public Builder httpClient(HttpClient httpClient) {
       this.httpClient = httpClient;
+      return this;
+    }
+
+    /**
+     * Internal test seam, not a customer option: sees each reconnect sleep the loop requests (kind
+     * {@code "sse"}) and returns the duration to actually sleep. Supervisor contract Test 8 uses it
+     * to record the requested backoff and compress it. Null (the default) sleeps as requested.
+     */
+    public Builder waitHook(BiFunction<String, Duration, Duration> waitHook) {
+      this.waitHook = waitHook;
       return this;
     }
 
