@@ -172,10 +172,13 @@ final class ChaosTest {
             .streamUrls(List.of(sseBase))
             .disableTelemetry(true)
             .initTimeout(Duration.ofSeconds(15))
-            // Scenario 07's within_ms=15000 expects the SSE deadline-trip to fire well before
-            // the 30s server heartbeat, so chaos uses a short watchdog. Production default
-            // (90s) is unchanged. Mirrors sdk-go's withTestSSEReadTimeout pattern.
-            .sseReadWatchdog(Duration.ofSeconds(5));
+            // Compressed Layer 1 read watchdog so 02's silent stall trips well inside its window
+            // (production default 90s is unchanged). It must stay above scenario 03's injected
+            // 5000ms latency plus the rig's 1s heartbeat: at 5s the latency itself tripped the
+            // watchdog (~9s, first SSE conn 9.0s), which 03's restart==0 / stays-connected holds
+            // catch now that they are anchored (qfg-goi1.10.36). 07 and 09 drop the proxy, so
+            // they detect on the closed connection, not the watchdog.
+            .sseReadWatchdog(Duration.ofSeconds(10));
 
     Quonfig client = null;
     try {
