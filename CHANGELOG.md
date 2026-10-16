@@ -33,6 +33,13 @@
 
 ### Fixed
 
+- **Weighted rollout variants keep their type (qfg-lrlh, patch).** A variant inside a
+  `weighted_values` rollout is now parsed with the same typed decoder as a top-level value. Before,
+  only int, double, bool and string_list variants were typed; a json variant came back from
+  `getJson` as its `toString()` text (`"{a=1, b=c}"`), a provided (`ENV_VAR`) variant never read its
+  environment variable (`getInt` returned the default with `TYPE_MISMATCH`), and log_level variants
+  were typed as plain strings. Duration variants already worked through the config-type coercion.
+  Matches sdk-go, which decodes each variant as a full `Value`.
 - **A `getDuration` evaluation no longer drops the telemetry window (qfg-a996, patch).** The
   evaluation summary held the `java.time.Duration`, which the telemetry serializer cannot write, so
   the whole window (summaries, context shapes, examples, failover) was dropped with a WARN. The
