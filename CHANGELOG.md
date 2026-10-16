@@ -31,6 +31,13 @@
   not frames. In HTTP+SSE mode `connectionState()` also stays `INITIALIZING` in the short window
   between the init fetch and the start of the stream, where it briefly reported `CONNECTED`.
 
+### Fixed
+
+- **A `getDuration` evaluation no longer drops the telemetry window (qfg-a996, patch).** The
+  evaluation summary held the `java.time.Duration`, which the telemetry serializer cannot write, so
+  the whole window (summaries, context shapes, examples, failover) was dropped with a WARN. The
+  summary now reports the stored ISO-8601 string as `{"string": "PT90S"}`, as sdk-go does.
+
 ### Tests
 
 - integration-test-data pin bumped to v2026.10.16.4 (supervisor contract Test 9 and the Test 2

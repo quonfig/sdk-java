@@ -1914,6 +1914,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
     if (summaryCollector != null) {
       String reportable = Resolver.reportableValueFor(match.value()).orElse(null);
+      // A java.time.Duration is not JSON-serializable and would drop the whole telemetry window
+      // (qfg-a996). Report the stored ISO-8601 string, as sdk-go does ({"string": "PT90S"}).
+      Object wireValue = typed;
+      if (typed instanceof Duration) {
+        wireValue = resolvedVal.value() instanceof String ? resolvedVal.value() : typed.toString();
+      }
       summaryCollector.push(
           new EvaluationStat(
               cfg.id(),
@@ -1921,7 +1927,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               cfg.type().name(),
               match.ruleIndex(),
               match.weightedValueIndex(),
-              typed,
+              wireValue,
               reportable,
               reasonNumber(r)));
     }

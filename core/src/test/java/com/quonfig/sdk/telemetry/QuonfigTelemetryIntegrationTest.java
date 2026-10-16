@@ -95,6 +95,29 @@ class QuonfigTelemetryIntegrationTest {
     assertEquals(100L, ((Number) counters.get(0).get("count")).longValue());
   }
 
+  /**
+   * A duration evaluation must not drop the window: the summary carries the stored ISO-8601 string
+   * as {@code {"string": "PT90S"}}, as sdk-go reports it (qfg-a996).
+   */
+  @Test
+  void durationEvaluationIsSentAsItsStoredIsoString() throws Exception {
+    writeConfig(
+        "configs",
+        "timeout",
+        "{\"id\":\"cfg-d\",\"key\":\"timeout\",\"type\":\"config\",\"valueType\":\"duration\","
+            + "\"default\":{\"rules\":[{\"criteria\":[],\"value\":{\"type\":\"duration\",\"value\":\"PT90S\"}}]}}");
+
+    CapturingSender sender = new CapturingSender();
+    try (Quonfig q = newClient(sender)) {
+      assertEquals(Duration.ofSeconds(90), q.getDuration("timeout", Duration.ZERO));
+      q.flush();
+    }
+
+    assertEquals(1, sender.sent.size(), "payloads sent: " + sender.sent);
+    String json = sender.sent.get(0).toString();
+    assertTrue(json.contains("selectedValue={string=PT90S}"), json);
+  }
+
   @Test
   void closeFlushesPendingTelemetryBeforeStopping() throws Exception {
     writeConfig(
