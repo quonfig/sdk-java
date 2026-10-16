@@ -5,8 +5,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.yaml.snakeyaml.Yaml;
 
 /**
@@ -16,6 +18,10 @@ import org.yaml.snakeyaml.Yaml;
  * {@link ChaosScenario}. Kept dependency-light: SnakeYAML is the only test-only dep used here.
  */
 final class ChaosYamlLoader {
+
+  /** Every key {@code scenario.schema.json} allows on an expectation. */
+  private static final Set<String> EXPECTATION_KEYS =
+      new LinkedHashSet<>(List.of("within_ms", "assert", "must_hold_for_ms", "after_ms"));
 
   private ChaosYamlLoader() {}
 
@@ -127,9 +133,22 @@ final class ChaosYamlLoader {
     for (Object el : (List<?>) raw) {
       if (!(el instanceof Map)) continue;
       Map<String, Object> em = (Map<String, Object>) el;
+      for (Object key : em.keySet()) {
+        if (!EXPECTATION_KEYS.contains(String.valueOf(key))) {
+          // Timeline rule 4 (qfg-goi1.7): mirror the schema's additionalProperties:false. A harness
+          // pinned to a newer ITD than it implements must fail loudly, not drop a timing field.
+          throw new IllegalArgumentException(
+              "unknown chaos expectation key '"
+                  + key
+                  + "' (allowed: "
+                  + String.join(", ", EXPECTATION_KEYS)
+                  + ")");
+        }
+      }
       ChaosScenario.Expectation e = new ChaosScenario.Expectation();
       e.withinMs = asInt(em.get("within_ms"), 0);
       e.mustHoldForMs = asInt(em.get("must_hold_for_ms"), 0);
+      e.afterMs = asInt(em.get("after_ms"), 0);
       e.assertExpr = asString(em.get("assert"));
       out.add(e);
     }

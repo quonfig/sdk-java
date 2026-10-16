@@ -175,31 +175,13 @@ final class ChaosTest {
             // Scenario 07's within_ms=15000 expects the SSE deadline-trip to fire well before
             // the 30s server heartbeat, so chaos uses a short watchdog. Production default
             // (90s) is unchanged. Mirrors sdk-go's withTestSSEReadTimeout pattern.
-            .sseReadWatchdog(Duration.ofSeconds(5))
-            // Route SDK SLF4J output into the probe so log-matching expectations
-            // (e.g. scenario 10's exp[3] looking for /callback|onConfigUpdate/i) can fire.
-            .logger(new ProbeBridgeLogger(probe))
-            .onSseConnectionStateChange(probe::onSseState)
-            .onFallbackPollerStateChange(probe::onFallbackState);
+            .sseReadWatchdog(Duration.ofSeconds(5));
 
-    if ("throw".equals(run.setup != null ? run.setup.userCallback : null)) {
-      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches
-      // RuntimeException so the SDK keeps running; processCrashed stays false. The asserted
-      // `worker_restart_total` increment relies on supervisor visibility we don't have today.
-      ob =
-          ob.onConfigUpdate(
-              () -> {
-                probe.onConfigUpdate();
-                throw new RuntimeException("simulated user-callback panic for chaos scenario 10");
-              });
-    } else {
-      ob = ob.onConfigUpdate(probe::onConfigUpdate);
-    }
-
-    Options options = ob.build();
     Quonfig client = null;
     try {
-      client = new Quonfig(options);
+      client =
+          newProbedClient(
+              ob, probe, "throw".equals(run.setup != null ? run.setup.userCallback : null));
     } catch (RuntimeException e) {
       System.err.println("client construction failed: " + e.getMessage());
       probe.log("error", e.getMessage());
@@ -270,44 +252,33 @@ final class ChaosTest {
 
     try {
       while (System.currentTimeMillis() < deadline) {
-        long now = System.currentTimeMillis();
-        long elapsed = now - baselineMs;
+        long elapsed = System.currentTimeMillis() - baselineMs;
         boolean allTerminal = true;
         for (ExpState s : states) {
-          if (s.passed || s.failed || s.skipped) continue;
-          ExpressionEvaluator.Result r = eval.evaluate(s.exp.assertExpr);
-          s.lastReason = r.reason;
-          s.skippedLeaves.addAll(r.skippedLeaves);
-          if (r.skipped) {
-            // Not observable from this rig: terminal, reported as SKIPPED (never a silent pass).
-            s.skipped = true;
-            continue;
-          }
-          if (r.passed) {
-            if (s.heldSinceMs == 0) {
-              s.heldSinceMs = now;
-              s.hitAtMs = elapsed;
-            }
-            long holdFor = s.exp.mustHoldForMs;
-            if (holdFor <= 0 || (now - s.heldSinceMs) >= holdFor) {
-              s.passed = true;
-            } else {
-              allTerminal = false;
-            }
-          } else {
-            s.heldSinceMs = 0;
-            allTerminal = false;
-          }
-          if (!s.passed && elapsed > s.exp.withinMs) {
-            s.failed = true;
-          }
+          ExpectationTimeline.step(
+              s.tl,
+              elapsed,
+              () -> {
+                ExpressionEvaluator.Result r = eval.evaluate(s.exp.assertExpr);
+                s.lastReason = r.reason;
+                s.skippedLeaves.addAll(r.skippedLeaves);
+                // Not observable from this rig: SKIPPED (never a silent pass).
+                if (r.skipped) return ExpectationTimeline.Sample.SKIPPED;
+                return r.passed
+                    ? ExpectationTimeline.Sample.TRUE
+                    : ExpectationTimeline.Sample.FALSE;
+              });
+          if (!s.tl.terminal()) allTerminal = false;
         }
         if (allTerminal) break;
         Thread.sleep(poll.toMillis());
       }
       // Anything still indeterminate is a fail.
       for (ExpState s : states) {
-        if (!s.passed && !s.skipped) s.failed = true;
+        if (!s.tl.passed && !s.tl.skipped) {
+          s.tl.failed = true;
+          if (!s.tl.evaluated) s.lastReason = "never evaluated: wall clock ended before after_ms";
+        }
       }
     } finally {
       // Wait for any in-flight chaos threads to finish (so subsequent scenarios start clean).
@@ -330,27 +301,34 @@ final class ChaosTest {
       for (String leaf : s.skippedLeaves) {
         SKIPPED_LEAVES.add(String.format("%s exp[%d]: %s", run.name, s.idx, leaf));
       }
-      if (s.skipped) {
+      if (s.tl.skipped) {
         skipped++;
         System.err.printf(
             "SKIP  exp[%d] within=%dms hold=%dms: %s — %s%n",
             s.idx, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr, s.lastReason);
-      } else if (s.passed) {
+      } else if (s.tl.passed) {
         pass++;
         System.err.printf(
-            "PASS  exp[%d] within=%dms hold=%dms: %s  (hit at %dms)%s%n",
+            "PASS  exp[%d] after=%dms within=%dms hold=%dms: %s  (hit at %dms, passed at %dms)%s%n",
             s.idx,
+            s.exp.afterMs,
             s.exp.withinMs,
             s.exp.mustHoldForMs,
             s.exp.assertExpr,
-            s.hitAtMs,
+            s.tl.hitAtMs,
+            s.tl.passedAtMs,
             s.skippedLeaves.isEmpty() ? "" : " " + s.lastReason.trim());
       } else {
         fail++;
         String msg =
             String.format(
-                "FAIL  exp[%d] within=%dms hold=%dms: %s — last reason: %s",
-                s.idx, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr, s.lastReason);
+                "FAIL  exp[%d] after=%dms within=%dms hold=%dms: %s — last reason: %s",
+                s.idx,
+                s.exp.afterMs,
+                s.exp.withinMs,
+                s.exp.mustHoldForMs,
+                s.exp.assertExpr,
+                s.lastReason);
         System.err.println(msg);
         failures.add(msg);
       }
@@ -371,6 +349,36 @@ final class ChaosTest {
               "scenario \"%s\" — %d/%d expectations failed:%n%s",
               run.name, fail, states.size(), String.join("\n", failures)));
     }
+  }
+
+  /**
+   * Wires {@code probe} into the client options (logger, SSE / fallback-poller state callbacks,
+   * user callback), constructs the client and binds the probe's freshness to it. {@code
+   * throwingCallback} installs scenario 10's user callback that throws on every config update.
+   */
+  static Quonfig newProbedClient(Options.Builder ob, ChaosProbe probe, boolean throwingCallback) {
+    ob =
+        ob
+            // Route SDK SLF4J output into the probe so log-matching expectations
+            // (e.g. scenario 10's exp[3] looking for /callback|onConfigUpdate/i) can fire.
+            .logger(new ProbeBridgeLogger(probe))
+            .onSseConnectionStateChange(probe::onSseState)
+            .onFallbackPollerStateChange(probe::onFallbackState);
+    if (throwingCallback) {
+      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches
+      // RuntimeException so the SDK keeps running; processCrashed stays false. The asserted
+      // `worker_restart_total` increment relies on supervisor visibility we don't have today.
+      ob =
+          ob.onConfigUpdate(
+              () -> {
+                throw new RuntimeException("simulated user-callback panic for chaos scenario 10");
+              });
+    }
+    Quonfig client = new Quonfig(ob.build());
+    // Freshness comes from the client's own stamp, not an install callback: a 304 or
+    // same-generation poll never fires onConfigUpdate (qfg-goi1.7 plan sec 2).
+    probe.bindClient(client);
+    return client;
   }
 
   // ---- chaos injection translation ----
@@ -560,17 +568,14 @@ final class ChaosTest {
   private static final class ExpState {
     final int idx;
     final ChaosScenario.Expectation exp;
-    long hitAtMs;
-    long heldSinceMs;
-    boolean passed;
-    boolean failed;
-    boolean skipped;
+    final ExpectationTimeline.State tl;
     final Set<String> skippedLeaves = new LinkedHashSet<>();
     String lastReason = "";
 
     ExpState(int idx, ChaosScenario.Expectation exp) {
       this.idx = idx;
       this.exp = exp;
+      this.tl = new ExpectationTimeline.State(exp);
     }
   }
 
