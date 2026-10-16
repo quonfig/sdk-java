@@ -40,6 +40,10 @@
   environment variable (`getInt` returned the default with `TYPE_MISMATCH`), and log_level variants
   were typed as plain strings. Duration variants already worked through the config-type coercion.
   Matches sdk-go, which decodes each variant as a full `Value`.
+- **A `getDuration` evaluation no longer drops the telemetry window (qfg-a996, patch).** The
+  evaluation summary held the `java.time.Duration`, which the telemetry serializer cannot write, so
+  the whole window (summaries, context shapes, examples, failover) was dropped with a WARN. The
+  summary now reports the stored ISO-8601 string as `{"string": "PT90S"}`, as sdk-go does.
 
 ### Tests
 
