@@ -18,6 +18,14 @@
 
 ### Fixed
 
+- **A confidential or `decryptWith` weighted rollout variant is redacted in telemetry and decrypted
+  for the caller (qfg-goi1.10.19, patch).** The weighted resolver dropped the selected variant's
+  `confidential`/`decryptWith` flags, so a confidential variant was sent to telemetry as
+  `selectedValue` in plaintext, and a `decryptWith` variant returned its raw ciphertext to the
+  caller (and sent that ciphertext to telemetry). The selected variant now carries its flags, so it
+  is decrypted and telemetry reports `*****<hash>`. Matches sdk-go (`reportableValueFor` on the
+  selected variant) and sdk-ruby (db98dd9).
+
 - **Telemetry example contexts are copied when recorded, and one odd value no longer drops the
   window (qfg-goi1.2.38, patch).** With `contextUploadMode` `PERIODIC_EXAMPLE`, the example
   collector kept the caller's own context values and serialized them later on the telemetry

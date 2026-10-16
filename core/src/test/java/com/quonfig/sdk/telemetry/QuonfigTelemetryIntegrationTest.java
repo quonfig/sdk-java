@@ -135,6 +135,90 @@ class QuonfigTelemetryIntegrationTest {
     assertTrue(wire.contains("*****"), "expected redacted prefix in payload: " + wire);
   }
 
+  private static String weightedConfig(String key, String variantJson) {
+    return "{\"id\":\"cfg-"
+        + key
+        + "\",\"key\":\""
+        + key
+        + "\",\"type\":\"config\",\"valueType\":\"string\","
+        + "\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],"
+        + "\"value\":{\"type\":\"weighted_values\",\"value\":{\"weightedValues\":["
+        + "{\"weight\":100000,\"value\":"
+        + variantJson
+        + "}],\"hashByPropertyName\":\"user.tracking_id\"}}}]}}";
+  }
+
+  @Test
+  void confidentialWeightedVariantIsRedactedInTelemetry() throws Exception {
+    // qfg-goi1.10.19: the outer weighted_values wrapper is never flagged; the selected variant
+    // carries confidential=true and must decide the redaction (sdk-go reportableValueFor).
+    writeConfig(
+        "configs",
+        "weighted-secret",
+        weightedConfig(
+            "weighted-secret",
+            "{\"type\":\"string\",\"value\":\"weighted-plaintext\",\"confidential\":true}"));
+
+    CapturingSender sender = new CapturingSender();
+    try (Quonfig q = newClient(sender)) {
+      assertEquals("weighted-plaintext", q.getString("weighted-secret", "fallback"));
+      q.flush();
+    }
+
+    String wire = sender.sent.toString();
+    assertFalse(wire.contains("weighted-plaintext"), "plaintext leaked: " + wire);
+    assertTrue(wire.contains("*****"), "expected redacted prefix in payload: " + wire);
+  }
+
+  @Test
+  void decryptWithWeightedVariantDecryptsAndIsRedactedInTelemetry() throws Exception {
+    String keyHex = "e657e0406fc22e17d3145966396b2130d33dcb30ac0edd62a77235cdd01fc49d";
+    byte[] iv = new byte[12];
+    for (int i = 0; i < iv.length; i++) iv[i] = (byte) (i + 1);
+    javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+    cipher.init(
+        javax.crypto.Cipher.ENCRYPT_MODE,
+        new javax.crypto.spec.SecretKeySpec(java.util.HexFormat.of().parseHex(keyHex), "AES"),
+        new javax.crypto.spec.GCMParameterSpec(128, iv));
+    byte[] out =
+        cipher.doFinal("decrypted-variant".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    java.util.HexFormat hex = java.util.HexFormat.of();
+    String ciphertext =
+        hex.formatHex(java.util.Arrays.copyOfRange(out, 0, out.length - 16))
+            + "--"
+            + hex.formatHex(iv)
+            + "--"
+            + hex.formatHex(java.util.Arrays.copyOfRange(out, out.length - 16, out.length));
+
+    writeConfig(
+        "configs",
+        "variant.key",
+        "{\"id\":\"cfg-variant-key\",\"key\":\"variant.key\",\"type\":\"config\","
+            + "\"valueType\":\"string\",\"default\":{\"rules\":[{\"criteria\":[],"
+            + "\"value\":{\"type\":\"string\",\"value\":\""
+            + keyHex
+            + "\"}}]}}");
+    writeConfig(
+        "configs",
+        "weighted-encrypted",
+        weightedConfig(
+            "weighted-encrypted",
+            "{\"type\":\"string\",\"value\":\""
+                + ciphertext
+                + "\",\"confidential\":true,\"decryptWith\":\"variant.key\"}"));
+
+    CapturingSender sender = new CapturingSender();
+    try (Quonfig q = newClient(sender)) {
+      assertEquals("decrypted-variant", q.getString("weighted-encrypted", "fallback"));
+      q.flush();
+    }
+
+    String wire = sender.sent.toString();
+    assertFalse(wire.contains("decrypted-variant"), "decrypted plaintext leaked: " + wire);
+    assertFalse(wire.contains(ciphertext), "ciphertext sent unredacted: " + wire);
+    assertTrue(wire.contains("*****"), "expected redacted prefix in payload: " + wire);
+  }
+
   @Test
   void contextShapeAndExampleAreCollectedFromCallContext() throws Exception {
     writeConfig(
