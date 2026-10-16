@@ -80,8 +80,9 @@ jobs:
           # Pinned to a tag so the chaos gate moves only when the scenarios
           # are deliberately rev'd. Kept equal to the unit pin in test.yaml
           # and to failover-chaos.yaml (one ITD tag per repo, qfg-goi1.1.6).
-          # v2026.10.03 adds must_hold_for_ms to 05-sse-down (qfg-e3ja).
-          ref: v2026.10.03
+          # v2026.10.16.2 adds after_ms + the timeline rules (qfg-goi1.7);
+          # the harness implements them (qfg-goi1.10.36).
+          ref: v2026.10.16.2
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it.

@@ -270,25 +270,18 @@ final class FailoverChaosTest {
     }
 
     while (System.currentTimeMillis() < deadline) {
-      long now = System.currentTimeMillis();
-      long elapsed = now - baselineMs;
+      long elapsed = System.currentTimeMillis() - baselineMs;
       boolean allTerminal = true;
       for (ExpState s : states) {
-        if (s.passed || s.failed) continue;
-        Result r = evalExpr(s.exp.assertExpr, client);
-        s.lastReason = r.reason;
-        if (r.ok) {
-          if (s.heldSinceMs == 0) s.heldSinceMs = now;
-          if (s.exp.mustHoldForMs <= 0 || (now - s.heldSinceMs) >= s.exp.mustHoldForMs) {
-            s.passed = true;
-          } else {
-            allTerminal = false;
-          }
-        } else {
-          s.heldSinceMs = 0;
-          allTerminal = false;
-        }
-        if (!s.passed && elapsed > s.exp.withinMs) s.failed = true;
+        ExpectationTimeline.step(
+            s.tl,
+            elapsed,
+            () -> {
+              Result r = evalExpr(s.exp.assertExpr, client);
+              s.lastReason = r.reason;
+              return r.ok ? ExpectationTimeline.Sample.TRUE : ExpectationTimeline.Sample.FALSE;
+            });
+        if (!s.tl.terminal()) allTerminal = false;
       }
       if (allTerminal) break;
       try {
@@ -302,16 +295,30 @@ final class FailoverChaosTest {
     List<String> failures = new ArrayList<>();
     for (int i = 0; i < states.size(); i++) {
       ExpState s = states.get(i);
-      if (!s.passed) s.failed = true;
-      if (s.passed) {
+      if (!s.tl.passed) {
+        s.tl.failed = true;
+        if (!s.tl.evaluated) s.lastReason = "never evaluated: wall clock ended before after_ms";
+      }
+      if (s.tl.passed) {
         System.err.printf(
-            "PASS  exp[%d] within=%dms hold=%dms: %s%n",
-            i, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr);
+            "PASS  exp[%d] after=%dms within=%dms hold=%dms: %s  (hit at %dms, passed at %dms)%n",
+            i,
+            s.exp.afterMs,
+            s.exp.withinMs,
+            s.exp.mustHoldForMs,
+            s.exp.assertExpr,
+            s.tl.hitAtMs,
+            s.tl.passedAtMs);
       } else {
         String msg =
             String.format(
-                "FAIL  exp[%d] within=%dms hold=%dms: %s — last reason: %s",
-                i, s.exp.withinMs, s.exp.mustHoldForMs, s.exp.assertExpr, s.lastReason);
+                "FAIL  exp[%d] after=%dms within=%dms hold=%dms: %s — last reason: %s",
+                i,
+                s.exp.afterMs,
+                s.exp.withinMs,
+                s.exp.mustHoldForMs,
+                s.exp.assertExpr,
+                s.lastReason);
         System.err.println(msg);
         failures.add(msg);
       }
@@ -695,13 +702,12 @@ final class FailoverChaosTest {
 
   private static final class ExpState {
     final ChaosScenario.Expectation exp;
-    long heldSinceMs;
-    boolean passed;
-    boolean failed;
+    final ExpectationTimeline.State tl;
     String lastReason = "";
 
     ExpState(ChaosScenario.Expectation exp) {
       this.exp = exp;
+      this.tl = new ExpectationTimeline.State(exp);
     }
   }
 }

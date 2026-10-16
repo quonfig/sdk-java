@@ -77,6 +77,13 @@ final class ChaosScenario {
   static final class Expectation {
     int withinMs;
     int mustHoldForMs;
+
+    /**
+     * Ms from t=0 before which the expectation is not evaluated at all (qfg-goi1.7 timeline rule
+     * 1). 0 = from t=0.
+     */
+    int afterMs;
+
     String assertExpr;
   }
 }

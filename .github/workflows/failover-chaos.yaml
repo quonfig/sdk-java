@@ -65,8 +65,9 @@ jobs:
           # per repo, qfg-goi1.1.6). Includes the parallel-failover hedge corpus
           # (v2026.06.19.1): reframed o01 (fast primary wins; secondary never
           # contacted), o05 (slow older primary loses to fast newer secondary) and
-          # o03 (heal forward). No failover/ordering scenario changed since then.
-          ref: v2026.10.03
+          # o03 (heal forward). v2026.10.16.2 adds after_ms + the timeline rules
+          # (qfg-goi1.7, harness: qfg-goi1.10.36).
+          ref: v2026.10.16.2
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT

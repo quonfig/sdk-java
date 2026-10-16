@@ -1,8 +1,11 @@
 package com.quonfig.sdk.chaos;
 
+import com.quonfig.sdk.Quonfig;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
@@ -42,7 +45,9 @@ final class ChaosProbe {
 
   private final Object lock = new Object();
   private State state = State.INITIALIZING;
-  private long lastRefreshMs; // wall-clock millis; 0 == never
+  // The client's own liveness stamp (qfg-goi1.7 plan sec 2): it advances on every ANSWERED fetch,
+  // 304s and same-generation answers included. null until bindClient.
+  private volatile Supplier<Instant> refreshSource;
   private long connectAttempts;
   private long restartLayer1;
   private long restartLayer2;
@@ -62,10 +67,16 @@ final class ChaosProbe {
     }
   }
 
+  /** Reads {@code lastSuccessfulRefresh} from {@code client} from now on. */
+  void bindClient(Quonfig client) {
+    refreshSource = client::lastSuccessfulRefresh;
+  }
+
+  /** Wall-clock millis of the client's last successful refresh; 0 == never (or no client). */
   long lastSuccessfulRefreshMs() {
-    synchronized (lock) {
-      return lastRefreshMs;
-    }
+    Supplier<Instant> src = refreshSource;
+    Instant at = src == null ? null : src.get();
+    return at == null ? 0 : at.toEpochMilli();
   }
 
   boolean processStillAlive() {
@@ -136,13 +147,6 @@ final class ChaosProbe {
         // the next SSE event lands.
         state = State.RECONNECTING;
       }
-    }
-  }
-
-  /** Hook for the SDK's onConfigUpdate callback. */
-  void onConfigUpdate() {
-    synchronized (lock) {
-      lastRefreshMs = System.currentTimeMillis();
     }
   }
 
