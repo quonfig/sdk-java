@@ -86,47 +86,12 @@ public final class Murmur3WeightedValueResolver implements WeightedValueResolver
   }
 
   /**
-   * Parse a {@code {type: <vt>, value: <raw>, confidential?, decryptWith?}} blob into a typed
-   * {@link Value}. The variant's own {@code confidential} and {@code decryptWith} are carried over
-   * so the selected variant decides decryption and telemetry redaction, as in sdk-go
-   * (qfg-goi1.10.19).
+   * Parse a {@code {type: <vt>, value: <raw>, confidential?, decryptWith?}} variant with the same
+   * typed decoder a top-level value uses ({@link ValueDecoder}), so json, duration, log_level and
+   * provided variants keep their type (qfg-lrlh) and the variant's own {@code confidential} and
+   * {@code decryptWith} decide decryption and telemetry redaction, as in sdk-go (qfg-goi1.10.19).
    */
   private static Value parseSubValue(Object raw) {
-    if (!(raw instanceof Map)) return null;
-    Map<?, ?> m = (Map<?, ?>) raw;
-    Value typed = parseTypedSubValue(m);
-    boolean confidential = Boolean.TRUE.equals(m.get("confidential"));
-    String decryptWith =
-        m.get("decryptWith") instanceof String ? (String) m.get("decryptWith") : null;
-    if (!confidential && (decryptWith == null || decryptWith.isEmpty())) return typed;
-    return new Value(typed.type(), typed.value(), confidential, decryptWith);
-  }
-
-  private static Value parseTypedSubValue(Map<?, ?> m) {
-    String typeStr = m.get("type") instanceof String ? (String) m.get("type") : "string";
-    Object payload = m.get("value");
-    switch (typeStr) {
-      case "int":
-        return new Value(
-            ValueType.INT,
-            payload instanceof Number
-                ? ((Number) payload).longValue()
-                : payload instanceof String ? Long.parseLong((String) payload) : 0L);
-      case "double":
-        return new Value(
-            ValueType.DOUBLE,
-            payload instanceof Number
-                ? ((Number) payload).doubleValue()
-                : payload instanceof String ? Double.parseDouble((String) payload) : 0.0d);
-      case "bool":
-        if (payload instanceof Boolean) return new Value(ValueType.BOOL, payload);
-        return new Value(ValueType.BOOL, Boolean.parseBoolean(String.valueOf(payload)));
-      case "string_list":
-      case "stringList":
-        if (payload instanceof List) return new Value(ValueType.STRING_LIST, payload);
-        return new Value(ValueType.STRING_LIST, List.of());
-      default:
-        return new Value(ValueType.STRING, payload == null ? "" : String.valueOf(payload));
-    }
+    return ValueDecoder.decode(raw);
   }
 }

@@ -6,19 +6,17 @@ import com.quonfig.sdk.eval.ConfigRow;
 import com.quonfig.sdk.eval.ConfigType;
 import com.quonfig.sdk.eval.Criterion;
 import com.quonfig.sdk.eval.Environment;
-import com.quonfig.sdk.eval.ProvidedValue;
 import com.quonfig.sdk.eval.Rule;
 import com.quonfig.sdk.eval.RuleSet;
 import com.quonfig.sdk.eval.Value;
+import com.quonfig.sdk.eval.ValueDecoder;
 import com.quonfig.sdk.eval.ValueType;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -111,7 +109,7 @@ public final class DatadirLoader {
     String key = requiredText(root, "key", null);
     String id = root.hasNonNull("id") ? root.get("id").asText() : key;
     ConfigType type = parseConfigType(requiredText(root, "type", key));
-    ValueType valueType = parseValueType(requiredText(root, "valueType", key));
+    ValueType valueType = ValueDecoder.parseValueType(requiredText(root, "valueType", key));
     boolean sendToClientSdk =
         type == ConfigType.FEATURE_FLAG
             || (root.hasNonNull("sendToClientSdk") && root.get("sendToClientSdk").asBoolean());
@@ -187,98 +185,16 @@ public final class DatadirLoader {
         criteria.add(parseCriterion(c, key));
       }
     }
-    Value value = parseValue(r.path("value"), valueType);
+    Value value = ValueDecoder.decode(r.path("value"), valueType);
     return new Rule(criteria, value);
   }
 
   private static Criterion parseCriterion(JsonNode c, String key) {
     String prop = c.hasNonNull("propertyName") ? c.get("propertyName").asText() : null;
     String op = requiredText(c, "operator", key);
-    Value match = c.hasNonNull("valueToMatch") ? parseValue(c.get("valueToMatch"), null) : null;
+    Value match =
+        c.hasNonNull("valueToMatch") ? ValueDecoder.decode(c.get("valueToMatch"), null) : null;
     return new Criterion(prop, op, match);
-  }
-
-  private static Value parseValue(JsonNode v, ValueType configValueType) {
-    if (v == null || v.isMissingNode() || v.isNull()) {
-      return new Value(configValueType != null ? configValueType : ValueType.STRING, null);
-    }
-    String typeStr = v.hasNonNull("type") ? v.get("type").asText() : null;
-    ValueType vt = typeStr != null ? parseValueType(typeStr) : configValueType;
-    if (vt == null) vt = ValueType.STRING;
-
-    JsonNode raw = v.path("value");
-    Object payload;
-    switch (vt) {
-      case BOOL:
-        payload = raw.asBoolean();
-        break;
-      case INT:
-        payload = raw.asLong();
-        break;
-      case DOUBLE:
-        payload = raw.asDouble();
-        break;
-      case STRING:
-      case LOG_LEVEL:
-      case DURATION:
-        payload = raw.asText();
-        break;
-      case STRING_LIST:
-        payload = jsonToStringList(raw);
-        break;
-      case JSON:
-        payload = jsonToObject(raw);
-        break;
-      case PROVIDED:
-        payload = parseProvided(raw);
-        break;
-      case WEIGHTED_VALUES:
-      case SCHEMA:
-      default:
-        payload = jsonToObject(raw);
-        break;
-    }
-
-    boolean confidential = v.hasNonNull("confidential") && v.get("confidential").asBoolean();
-    String decryptWith = v.hasNonNull("decryptWith") ? v.get("decryptWith").asText() : null;
-    return new Value(vt, payload, confidential, decryptWith);
-  }
-
-  private static ProvidedValue parseProvided(JsonNode raw) {
-    String source = raw.hasNonNull("source") ? raw.get("source").asText() : null;
-    String lookup = raw.hasNonNull("lookup") ? raw.get("lookup").asText() : null;
-    return new ProvidedValue(source, lookup);
-  }
-
-  private static List<String> jsonToStringList(JsonNode raw) {
-    List<String> out = new ArrayList<>();
-    if (raw.isArray()) {
-      for (JsonNode item : raw) out.add(item.asText());
-    }
-    return out;
-  }
-
-  private static Object jsonToObject(JsonNode raw) {
-    if (raw.isNull() || raw.isMissingNode()) return null;
-    if (raw.isBoolean()) return raw.asBoolean();
-    if (raw.isInt() || raw.isLong()) return raw.asLong();
-    if (raw.isFloatingPointNumber()) return raw.asDouble();
-    if (raw.isTextual()) return raw.asText();
-    if (raw.isArray()) {
-      List<Object> list = new ArrayList<>();
-      for (JsonNode item : raw) list.add(jsonToObject(item));
-      return list;
-    }
-    if (raw.isObject()) {
-      java.util.LinkedHashMap<String, Object> map = new java.util.LinkedHashMap<>();
-      Iterator<Map.Entry<String, JsonNode>> it = raw.fields();
-      while (it.hasNext()) {
-        Map.Entry<String, JsonNode> e = it.next();
-        map.put(e.getKey(), jsonToObject(e.getValue()));
-      }
-      return map;
-    }
-    return null;
   }
 
   private static ConfigType parseConfigType(String s) {
@@ -295,46 +211,6 @@ public final class DatadirLoader {
       case "config":
       default:
         return ConfigType.CONFIG;
-    }
-  }
-
-  private static ValueType parseValueType(String s) {
-    if (s == null) return ValueType.STRING;
-    // Workspace JSON uses snake_case (`string_list`, `weighted_values`); legacy Prefab payloads
-    // and a handful of round-tripped configs use camelCase. Accept both so the same SDK code
-    // serves the integration-test-data corpus and customer-authored datadirs alike.
-    switch (s) {
-      case "bool":
-        return ValueType.BOOL;
-      case "int":
-        return ValueType.INT;
-      case "double":
-        return ValueType.DOUBLE;
-      case "string":
-        return ValueType.STRING;
-      case "stringList":
-      case "string_list":
-        return ValueType.STRING_LIST;
-      case "logLevel":
-      case "log_level":
-        return ValueType.LOG_LEVEL;
-      case "duration":
-        return ValueType.DURATION;
-      case "json":
-      // IN_INT_RANGE criteria carry {"type": "int_range", "value": {"start", "end"}}; keep the
-      // object as a native Map so Operators.extractIntRange can read its bounds.
-      case "int_range":
-      case "intRange":
-        return ValueType.JSON;
-      case "weightedValues":
-      case "weighted_values":
-        return ValueType.WEIGHTED_VALUES;
-      case "schema":
-        return ValueType.SCHEMA;
-      case "provided":
-        return ValueType.PROVIDED;
-      default:
-        return ValueType.STRING;
     }
   }
 }

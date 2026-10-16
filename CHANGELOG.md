@@ -31,6 +31,16 @@
   not frames. In HTTP+SSE mode `connectionState()` also stays `INITIALIZING` in the short window
   between the init fetch and the start of the stream, where it briefly reported `CONNECTED`.
 
+### Fixed
+
+- **Weighted rollout variants keep their type (qfg-lrlh, patch).** A variant inside a
+  `weighted_values` rollout is now parsed with the same typed decoder as a top-level value. Before,
+  only int, double, bool and string_list variants were typed; a json variant came back from
+  `getJson` as its `toString()` text (`"{a=1, b=c}"`), a provided (`ENV_VAR`) variant never read its
+  environment variable (`getInt` returned the default with `TYPE_MISMATCH`), and log_level variants
+  were typed as plain strings. Duration variants already worked through the config-type coercion.
+  Matches sdk-go, which decodes each variant as a full `Value`.
+
 ### Tests
 
 - integration-test-data pin bumped to v2026.10.16.4 (supervisor contract Test 9 and the Test 2
