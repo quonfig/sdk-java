@@ -4,6 +4,30 @@
 
 ### Changed
 
+> **UPGRADE: rule operator semantics (qfg-goi1.5.8, minor).** Aligns sdk-java with the canonical
+> cross-SDK operator rules pinned in integration-test-data v2026.10.16.1. Two rules change who
+> matches; check targeting that relies on them:
+>
+> - **Abbreviated semver now matches.** `PROP_SEMVER_*` read `"2"` as `2.0.0` and `"2.0"` as
+>   `2.0.0` (context value and criterion). Before, an abbreviated version was invalid and the rule
+>   never matched, so a user on app version `"4.1"` now matches `PROP_SEMVER_GREATER_THAN 4.0.18`.
+> - **Whole-number floats stringify as plain digits.** A `Double`/`Float`/`BigDecimal` context value
+>   with an integral value is compared as `"1"`, `"1234567"`, `"5000000000"` by `*_ONE_OF`,
+>   starts/ends/contains and `HIERARCHICAL_MATCH`, so `PROP_IS_ONE_OF ["1234567"]` now matches
+>   `1234567.0`, and lists holding `"1.0"` or exponent strings (`"5.0E9"`) stop matching.
+>   Booleans stay `"true"`/`"false"`.
+>
+> Dates are unchanged in sdk-java but are now strict in every SDK: pass dates to `PROP_BEFORE` /
+> `PROP_AFTER` as epoch milliseconds or as ISO 8601 / RFC 3339 strings with `Z` or a numeric offset
+> (date-only and offset-less strings never match).
+
+- **Integral floats as plain digits; abbreviated semver (qfg-goi1.5.8, minor).** See the UPGRADE
+  note above. Also fixes `IN_INT_RANGE` criteria stored as `{"type": "int_range", ...}`: the
+  loader did not know the `int_range` value type, dropped the bounds and matched every value; the
+  range is now `[start, end)` as specified.
+
+### Changed (getStringList / getJson copies)
+
 > **UPGRADE: may change returned values (qfg-goi1.10.8, minor).** Ships in a minor release of its
 > own, not bundled with the patch fixes listed under Fixed.
 

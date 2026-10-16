@@ -1,5 +1,6 @@
 package com.quonfig.sdk.eval;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -309,8 +310,33 @@ public final class Operators {
     return null;
   }
 
-  private static String toStringOrEmpty(Object v) {
+  /** 2^53: the largest magnitude below which every integral double is exact. */
+  private static final double MAX_SAFE_INTEGRAL = 9007199254740992d;
+
+  /**
+   * Canonical string form for the string operators (qfg-goi1.5 R1): strings as-is, booleans as
+   * {@code "true"}/{@code "false"}, and a number whose value is integral with {@code |n| < 2^53} as
+   * plain base-10 digits (no {@code .0}, no exponent) whatever its runtime type. Other numbers keep
+   * their default decimal form.
+   */
+  static String toStringOrEmpty(Object v) {
     if (v == null) return "";
+    if (v instanceof Double || v instanceof Float) {
+      double d = ((Number) v).doubleValue();
+      if (Double.isFinite(d) && d == Math.rint(d) && Math.abs(d) < MAX_SAFE_INTEGRAL) {
+        return Long.toString((long) d);
+      }
+      return v.toString();
+    }
+    if (v instanceof BigDecimal) {
+      BigDecimal bd = (BigDecimal) v;
+      if (bd.signum() == 0) return "0";
+      BigDecimal stripped = bd.stripTrailingZeros();
+      if (stripped.scale() <= 0 && stripped.abs().doubleValue() < MAX_SAFE_INTEGRAL) {
+        return stripped.toBigInteger().toString();
+      }
+      return bd.toString();
+    }
     return v.toString();
   }
 

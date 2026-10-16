@@ -73,6 +73,59 @@ class OperatorsTest {
         Operators.evaluateCriterion(Arrays.asList("user", "guest"), true, c, null), "no overlap");
   }
 
+  // ----- R1 canonical string form (qfg-goi1.5) -----
+  // Integral floats/doubles stringify as plain digits, whatever the runtime type, so a
+  // numeric attribute that arrives as a Double (e.g. decoded from JSON) still matches ["1"].
+
+  @Test
+  void propIsOneOf_integralDoubleMatchesPlainDigits() {
+    Criterion c = crit(Operators.PROP_IS_ONE_OF, "user.n", strList("1", "1234567", "5000000000"));
+    assertTrue(Operators.evaluateCriterion(1.0d, true, c, null), "1.0 -> \"1\"");
+    assertTrue(Operators.evaluateCriterion(1234567.0d, true, c, null), "1234567.0 -> \"1234567\"");
+    assertTrue(Operators.evaluateCriterion(5e9d, true, c, null), "5e9 -> \"5000000000\"");
+    assertTrue(Operators.evaluateCriterion(1.0f, true, c, null), "float 1.0 -> \"1\"");
+    assertTrue(
+        Operators.evaluateCriterion(new java.math.BigDecimal("1234567.000"), true, c, null),
+        "BigDecimal 1234567.000 -> \"1234567\"");
+  }
+
+  @Test
+  void propIsOneOf_integralDoubleNoLongerMatchesDotZeroOrExponentStrings() {
+    Criterion c = crit(Operators.PROP_IS_ONE_OF, "user.n", strList("1.0", "5.0E9", "1.234567E6"));
+    assertFalse(Operators.evaluateCriterion(1.0d, true, c, null));
+    assertFalse(Operators.evaluateCriterion(5e9d, true, c, null));
+    assertFalse(Operators.evaluateCriterion(1234567.0d, true, c, null));
+  }
+
+  @Test
+  void propIsOneOf_nonIntegralDoubleKeepsDecimal() {
+    Criterion c = crit(Operators.PROP_IS_ONE_OF, "user.n", strList("1.5"));
+    assertTrue(Operators.evaluateCriterion(1.5d, true, c, null));
+    assertFalse(Operators.evaluateCriterion(1.0d, true, c, null));
+  }
+
+  @Test
+  void stringOps_integralDoubleUsesPlainDigits() {
+    assertTrue(
+        Operators.evaluateCriterion(
+            1234567.0d,
+            true,
+            crit(Operators.PROP_ENDS_WITH_ONE_OF, "user.n", strList("567")),
+            null));
+    assertTrue(
+        Operators.evaluateCriterion(
+            5e9d, true, crit(Operators.PROP_STARTS_WITH_ONE_OF, "user.n", strList("50000")), null));
+    assertFalse(
+        Operators.evaluateCriterion(
+            1.0d, true, crit(Operators.PROP_CONTAINS_ONE_OF, "user.n", strList(".")), null));
+  }
+
+  @Test
+  void propIsOneOf_listOfIntegralDoublesUsesPlainDigits() {
+    Criterion c = crit(Operators.PROP_IS_ONE_OF, "user.ids", strList("42"));
+    assertTrue(Operators.evaluateCriterion(Arrays.asList(7.0d, 42.0d), true, c, null));
+  }
+
   // ----- STARTS / ENDS / CONTAINS -----
 
   @Test

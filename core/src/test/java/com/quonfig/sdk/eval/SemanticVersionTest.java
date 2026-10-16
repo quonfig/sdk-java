@@ -27,9 +27,28 @@ class SemanticVersionTest {
   }
 
   @Test
+  void parses_abbreviatedVersionsAsZeroFilled() {
+    // Q5 (qfg-goi1.5): "2" = 2.0.0 and "2.0" = 2.0.0, matching LaunchDarkly and Statsig.
+    assertEquals(SemanticVersion.parse("2.0.0"), SemanticVersion.parse("2"));
+    assertEquals(SemanticVersion.parse("2.0.0"), SemanticVersion.parse("2.0"));
+    assertEquals(SemanticVersion.parse("4.1.0"), SemanticVersion.parse("4.1"));
+    assertTrue(SemanticVersion.parse("4.1").compareTo(SemanticVersion.parse("4.0.18")) > 0);
+  }
+
+  @Test
+  void parseQuiet_rejectsPrereleaseOrBuildOnAbbreviatedVersions() {
+    // Prerelease and build metadata are only valid on a full x.y.z.
+    assertNull(SemanticVersion.parseQuietly("2-beta"));
+    assertNull(SemanticVersion.parseQuietly("2.0-beta"));
+    assertNull(SemanticVersion.parseQuietly("2.0+build"));
+    assertNull(SemanticVersion.parseQuietly("v2.0.0"), "v prefix is not a version");
+    assertNull(SemanticVersion.parseQuietly("2."));
+    assertNull(SemanticVersion.parseQuietly("02"));
+  }
+
+  @Test
   void parseQuiet_returnsNullForInvalid() {
     assertNull(SemanticVersion.parseQuietly("not a version"));
-    assertNull(SemanticVersion.parseQuietly("1.2"));
     assertNull(SemanticVersion.parseQuietly("01.2.3"), "leading zero not allowed");
   }
 

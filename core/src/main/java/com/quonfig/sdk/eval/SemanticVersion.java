@@ -4,15 +4,21 @@ import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Strict semver 2.0.0 parser and comparator. Mirrors {@code sdk-go/evalcore/semver.go}. */
+/**
+ * Semver 2.0.0 parser and comparator. Mirrors {@code sdk-go/evalcore/semver.go}.
+ *
+ * <p>Also accepts the abbreviated forms {@code "x"} and {@code "x.y"}, read as {@code x.0.0} and
+ * {@code x.y.0} (qfg-goi1.5 Q5, matching LaunchDarkly and Statsig). Prerelease and build metadata
+ * are only valid on a full {@code x.y.z}. A {@code v} prefix is not a version.
+ */
 public final class SemanticVersion implements Comparable<SemanticVersion> {
 
   private static final Pattern SEMVER =
       Pattern.compile(
-          "^(?<major>0|[1-9]\\d*)\\.(?<minor>0|[1-9]\\d*)\\.(?<patch>0|[1-9]\\d*)"
+          "^(?<major>0|[1-9]\\d*)(?:\\.(?<minor>0|[1-9]\\d*)(?:\\.(?<patch>0|[1-9]\\d*)"
               + "(?:-(?<prerelease>(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)"
               + "(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?"
-              + "(?:\\+(?<buildmetadata>[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$");
+              + "(?:\\+(?<buildmetadata>[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?)?)?$");
 
   private final int major;
   private final int minor;
@@ -40,8 +46,8 @@ public final class SemanticVersion implements Comparable<SemanticVersion> {
     }
     return new SemanticVersion(
         Integer.parseInt(m.group("major")),
-        Integer.parseInt(m.group("minor")),
-        Integer.parseInt(m.group("patch")),
+        m.group("minor") == null ? 0 : Integer.parseInt(m.group("minor")),
+        m.group("patch") == null ? 0 : Integer.parseInt(m.group("patch")),
         m.group("prerelease"),
         m.group("buildmetadata"));
   }
