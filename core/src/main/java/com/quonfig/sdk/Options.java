@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,6 +115,7 @@ public final class Options {
   private final String instanceHash;
   private final String loggerKey;
   private final Duration sseReadWatchdog;
+  private final BiFunction<String, Duration, Duration> waitHookForTest;
   private final boolean dataDirAutoReload;
   private final long dataDirAutoReloadDebounceMs;
   private final Boolean enableQuonfigUserContext;
@@ -245,6 +247,7 @@ public final class Options {
         b.instanceHash != null ? b.instanceHash : java.util.UUID.randomUUID().toString();
     this.loggerKey = b.loggerKey;
     this.sseReadWatchdog = b.sseReadWatchdog;
+    this.waitHookForTest = b.waitHookForTest;
     this.dataDirAutoReload = b.dataDirAutoReload;
     this.dataDirAutoReloadDebounceMs =
         b.dataDirAutoReloadDebounceMs > 0
@@ -576,6 +579,15 @@ public final class Options {
   }
 
   /**
+   * Test seam (package-private): sees every background wait the client requests ({@code "sse"},
+   * {@code "engage"}, {@code "poll"}, {@code "probe"}) and returns the duration to actually wait.
+   * Null in production.
+   */
+  BiFunction<String, Duration, Duration> waitHookForTest() {
+    return waitHookForTest;
+  }
+
+  /**
    * Whether the datadir-mode client should watch the workspace for filesystem changes and
    * atomically reload the envelope on every debounced burst. Default {@code false} — adding a
    * background watcher thread to a previously-quiet datadir client is a behavior change, so it is
@@ -664,6 +676,7 @@ public final class Options {
     private String instanceHash;
     private String loggerKey;
     private Duration sseReadWatchdog;
+    private BiFunction<String, Duration, Duration> waitHookForTest;
     private boolean dataDirAutoReload;
     private long dataDirAutoReloadDebounceMs;
     private Boolean enableQuonfigUserContext;
@@ -786,6 +799,15 @@ public final class Options {
 
     public Builder globalContext(ContextSet v) {
       this.globalContext = v;
+      return this;
+    }
+
+    /**
+     * Test seam (package-private, no public accessor): records and compresses the background waits.
+     * See {@link Options#waitHookForTest()}.
+     */
+    Builder waitHookForTest(BiFunction<String, Duration, Duration> v) {
+      this.waitHookForTest = v;
       return this;
     }
 

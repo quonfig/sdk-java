@@ -29,6 +29,7 @@ import com.quonfig.sdk.telemetry.HttpTelemetrySender;
 import com.quonfig.sdk.telemetry.TelemetryReporter;
 import com.quonfig.sdk.telemetry.TelemetrySender;
 import com.quonfig.sdk.transport.HttpTransport;
+import com.quonfig.sdk.transport.HttpTransportException;
 import com.quonfig.sdk.transport.SseClient;
 import com.quonfig.sdk.wire.ConfigEnvelope;
 import java.io.IOException;
@@ -810,7 +811,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           FallbackPoller.builder()
               .interval(interval)
               .threshold(threshold)
-              .fetch(this::fallbackPollFetchOnce)
+              .cycle(this::fallbackPollCycle)
+              .logger(options.logger())
+              .onAuthFailed(entered -> handleAuthFailed(supBox[0], entered))
+              .waitHook(options.waitHookForTest())
               .onEngage(
                   () -> {
                     Supervisor s = supBox[0];
@@ -870,12 +874,34 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       fpRef.setSseConnected(false);
     }
 
+    SseClient sse = newSseClient(sup, fpRef);
+    this.sseClient = sse;
+    // close() reads sseClient and supervisor once. If it ran after the entry check above but
+    // before both fields were assigned, it saw null and stopped nothing; stop them here so the SSE
+    // loop and the fallback poller never run against a closed client (qfg-goi1.2.16). A close()
+    // after this point sees both fields; SseClient and Supervisor are safe to stop before start.
+    if (closed) {
+      sse.stop();
+      sup.stop();
+      return;
+    }
+    logPollingMode();
+    sse.start();
+  }
+
+  /**
+   * Builds (does not start) the SSE client and wires its envelope and connection-state callbacks
+   * into the supervisor and the fallback poller. Used at startup and when the client leaves
+   * auth-failed, where a brand-new client restarts the stream from its base backoff.
+   */
+  private SseClient newSseClient(Supervisor sup, FallbackPoller fpRef) {
     List<URI> streams = new ArrayList<>(options.streamUrls().size());
     for (String u : options.streamUrls()) streams.add(URI.create(u));
     SseClient.Builder sseBuilder = SseClient.builder().streamUrls(streams).sdkKey(options.sdkKey());
     if (options.sseReadWatchdog() != null) {
       sseBuilder.readWatchdog(options.sseReadWatchdog());
     }
+    sseBuilder.waitHook(options.waitHookForTest());
     SseClient sse = sseBuilder.build();
     sse.onEnvelope(
         env -> {
@@ -928,29 +954,49 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             }
           }
         });
-    this.sseClient = sse;
-    // close() reads sseClient and supervisor once. If it ran after the entry check above but
-    // before both fields were assigned, it saw null and stopped nothing; stop them here so the SSE
-    // loop and the fallback poller never run against a closed client (qfg-goi1.2.16). A close()
-    // after this point sees both fields; SseClient and Supervisor are safe to stop before start.
-    if (closed) {
-      sse.stop();
-      sup.stop();
+    return sse;
+  }
+
+  /**
+   * Applies the auth-failure rule's transport side (R3, R4, R6; qfg-goi1.10.27). On entry SSE is
+   * stopped (not attempted while auth-failed) and the state is {@code disconnected}, never {@code
+   * falling_back}. On exit SSE restarts as a new client, so it begins from its base backoff, and
+   * the state stays {@code disconnected} until it connects. Runs on the fallback-poller thread.
+   */
+  private void handleAuthFailed(Supervisor sup, boolean entered) {
+    if (sup == null) return;
+    if (entered) {
+      SseClient sse = this.sseClient;
+      if (sse != null) sse.stop();
+      sup.setConnectionState(ConnectionState.DISCONNECTED);
       return;
     }
-    logPollingMode();
+    sup.setConnectionState(ConnectionState.DISCONNECTED);
+    if (closed) return;
+    SseClient sse = newSseClient(sup, this.fallbackPoller);
+    this.sseClient = sse;
+    // close() reads sseClient once; a close() that ran before the assignment stopped the old
+    // client only, so stop this one here (same guard as startSse).
+    if (closed) {
+      sse.stop();
+      return;
+    }
     sse.start();
   }
 
   /**
-   * Performs one Layer 2 fallback fetch: GET {@code /api/v2/configs}, install rows, mark refresh.
-   * Errors are swallowed — the poller's outer loop keeps ticking; a transient HTTP failure during a
-   * partition is expected and not actionable. Called only when the {@link FallbackPoller} has
-   * engaged.
+   * Performs one Layer 2 fallback fetch cycle: GET {@code /api/v2/configs} across the legs, install
+   * rows, mark refresh. Called only when the {@link FallbackPoller} has engaged, or for an
+   * auth-failed probe. A transient HTTP failure during a partition is expected and not actionable:
+   * it logs at DEBUG and reports {@link FallbackPoller.CycleResult#failed()}. A cycle in which no
+   * leg answered 200/304 and the primary leg answered 401/403/404/410 reports {@link
+   * FallbackPoller.CycleResult#authRejected} instead (rule R2, qfg-goi1.10.27); the poller logs the
+   * entering cycle's ERROR in place of the DEBUG line. A primary 503 with a secondary 401 is not
+   * this (a new key can lag the secondary's manifest).
    */
-  private void fallbackPollFetchOnce() {
+  private FallbackPoller.CycleResult fallbackPollCycle() {
     HttpTransport http = this.httpTransport;
-    if (http == null) return;
+    if (http == null) return FallbackPoller.CycleResult.failed();
     try {
       // Reject-older guard: a fallback poll that fails over to an older secondary must not regress
       // the held generation (qfg-7h5d.1.10). Only fire the update callbacks on an actual install —
@@ -961,11 +1007,47 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (installed) {
         fireConfigUpdate();
       }
+      return FallbackPoller.CycleResult.answered();
     } catch (Exception e) {
+      Throwable cause = e;
+      while ((cause instanceof java.util.concurrent.ExecutionException
+              || cause instanceof java.util.concurrent.CompletionException)
+          && cause.getCause() != null) {
+        cause = cause.getCause();
+      }
+      if (cause instanceof HttpTransportException) {
+        int primary = ((HttpTransportException) cause).primaryStatus();
+        if (isAuthClassStatus(primary)) {
+          return FallbackPoller.CycleResult.authRejected(primary, primaryHost());
+        }
+      }
       // Best-effort: HTTP errors during a partition are exactly what fallback polling
       // exists to weather. The next interval tick will try again.
       options.logger().debug("quonfig: fallback poll fetch failed: {}", e.getMessage());
+      return FallbackPoller.CycleResult.failed();
     }
+  }
+
+  /**
+   * Whether a config-fetch status is in the auth class of the cross-SDK auth-failure rule (R1):
+   * 401, 403, 404, 410.
+   */
+  static boolean isAuthClassStatus(int status) {
+    return status == 401 || status == 403 || status == 404 || status == 410;
+  }
+
+  /** The primary leg's host[:port] for the auth-failed ERROR line. Never carries the key. */
+  private String primaryHost() {
+    String raw = options.apiUrls().isEmpty() ? "" : options.apiUrls().get(0);
+    try {
+      URI u = URI.create(raw);
+      if (u.getHost() != null) {
+        return u.getPort() >= 0 ? u.getHost() + ":" + u.getPort() : u.getHost();
+      }
+    } catch (IllegalArgumentException ignored) {
+      // fall through to the raw string
+    }
+    return raw;
   }
 
   /**
@@ -1126,6 +1208,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * <p>Diagnostic surface only — do not wire into a Kubernetes liveness probe. See {@link
    * ConnectionState} for the rationale.
    */
+  /** Test seam (package-private): whether the Layer 2 fallback poller is engaged right now. */
+  boolean fallbackPollerActiveForTest() {
+    FallbackPoller fp = this.fallbackPoller;
+    return fp != null && fp.active();
+  }
+
   public Instant lastSuccessfulRefresh() {
     return lastRefreshAt;
   }

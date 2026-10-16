@@ -35,6 +35,10 @@ import org.junit.jupiter.api.Test;
  * <p>These tests inject sub-millisecond backoff bounds so the suite completes in well under a
  * second; the actual 500ms→30s exponential formula is verified by {@link
  * #exponentialBackoffFormula()}.
+ *
+ * <p>Contract Test 8 (auth-class response, qfg-goi1.10.27) drives the whole client and lives in
+ * {@code com.quonfig.sdk.SupervisorAuthFailureTest}, next to the package-private wait-hook seam it
+ * needs. Test 7 (fork transparency) is N/A for Java.
  */
 class SupervisorTest {
 

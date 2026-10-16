@@ -109,7 +109,7 @@ public final class HttpTransport {
   public CompletableFuture<HttpResponse<String>> get(
       URI url, String etag, Predicate<String> acceptBody) {
     Objects.requireNonNull(url, "url");
-    return tryFrom(url, etag, "GET", null, 0, acceptBody)
+    return tryFrom(url, etag, "GET", null, 0, acceptBody, new int[baseUrls.size()])
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
@@ -161,12 +161,23 @@ public final class HttpTransport {
   public CompletableFuture<HttpResponse<String>> post(URI url, String body) {
     Objects.requireNonNull(url, "url");
     Objects.requireNonNull(body, "body");
-    return tryFrom(url, null, "POST", body, 0, null)
+    return tryFrom(url, null, "POST", body, 0, null, new int[baseUrls.size()])
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
+  /**
+   * One step of the failover walk. {@code legStatuses} records each leg's answer (0 = no response)
+   * and rides on the exception raised when every leg failed, so a caller can see the primary's
+   * status rather than only the last leg's (qfg-goi1.10.27).
+   */
   private CompletableFuture<HttpResponse<String>> tryFrom(
-      URI input, String etag, String method, String body, int idx, Predicate<String> acceptBody) {
+      URI input,
+      String etag,
+      String method,
+      String body,
+      int idx,
+      Predicate<String> acceptBody,
+      int[] legStatuses) {
     URI target = rebase(baseUrls.get(idx), input);
     HttpRequest req = buildRequest(target, method, body, etag);
     return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
@@ -178,12 +189,17 @@ public final class HttpTransport {
                   Throwable cause = t.getCause() != null ? t.getCause() : t;
                   HttpTransportException ex =
                       new HttpTransportException(
-                          0, "", "transport error contacting " + target + ": " + cause, cause);
+                          0,
+                          "",
+                          "transport error contacting " + target + ": " + cause,
+                          cause,
+                          legStatuses);
                   return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
                 }
-                return tryFrom(input, etag, method, body, idx + 1, acceptBody);
+                return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
               }
               int sc = resp.statusCode();
+              legStatuses[idx] = sc;
               if (sc >= 200 && sc < 300) {
                 if (acceptBody != null && !accepts(acceptBody, resp.body())) {
                   // A 2xx the caller can't use (e.g. not a config envelope) is a leg error, so the
@@ -192,10 +208,14 @@ public final class HttpTransport {
                     String excerpt = excerpt(resp.body());
                     HttpTransportException ex =
                         new HttpTransportException(
-                            sc, excerpt, "HTTP " + sc + " from " + target + ": rejected body");
+                            sc,
+                            excerpt,
+                            "HTTP " + sc + " from " + target + ": rejected body",
+                            null,
+                            legStatuses);
                     return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
                   }
-                  return tryFrom(input, etag, method, body, idx + 1, acceptBody);
+                  return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
                 }
                 lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
@@ -207,10 +227,11 @@ public final class HttpTransport {
               if (isLast) {
                 String excerpt = excerpt(resp.body());
                 HttpTransportException ex =
-                    new HttpTransportException(sc, excerpt, "HTTP " + sc + " from " + target);
+                    new HttpTransportException(
+                        sc, excerpt, "HTTP " + sc + " from " + target, null, legStatuses);
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
               }
-              return tryFrom(input, etag, method, body, idx + 1, acceptBody);
+              return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
             })
         .thenCompose(f -> f);
   }
