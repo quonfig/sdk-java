@@ -81,6 +81,13 @@ class GetTest {
   }
 
   @Test
+  @DisplayName("decrypts a secret whose key config has an environment rule")
+  void decryptsASecretWhoseKeyConfigHasAnEnvironmentRule() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("hello.world", client.getString("env.scoped.secret", null));
+  }
+
+  @Test
   @DisplayName("duration 200 ms")
   void duration200Ms() throws Exception {
     Quonfig client = TestSetup.client();
