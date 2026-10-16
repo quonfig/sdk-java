@@ -4,7 +4,7 @@ dependencies {
     compileOnly("org.apache.logging.log4j:log4j-api:2.24.3")
     compileOnly("org.apache.logging.log4j:log4j-core:2.24.3")
 
-    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.apache.logging.log4j:log4j-api:2.24.3")

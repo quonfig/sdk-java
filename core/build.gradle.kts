@@ -3,7 +3,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.16")
     implementation("com.google.guava:guava:33.4.0-jre")
 
-    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     // Chaos test runner (com.quonfig.sdk.chaos) — reads scenario YAML files
