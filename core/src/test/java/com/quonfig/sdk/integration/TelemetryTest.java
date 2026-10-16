@@ -6,7 +6,9 @@
 package com.quonfig.sdk.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quonfig.sdk.BoundQuonfig;
 import com.quonfig.sdk.Quonfig;
@@ -679,6 +681,121 @@ class TelemetryTest {
                   1L,
                   "selected_value",
                   TestSetup.map("string", "*****936c9"),
+                  "summary",
+                  TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
+          t.evaluationSummaries());
+    }
+  }
+
+  @Test
+  @DisplayName("confidential weighted variant is redacted in selectedValue")
+  void confidentialWeightedVariantIsRedactedInSelectedvalue() throws Exception {
+    try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
+      Quonfig client = t.client();
+      BoundQuonfig scoped =
+          client.withContext(
+              TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2"))));
+      t.saw(
+          "confidential.weighted.variant", scoped.getString("confidential.weighted.variant", null));
+      assertEquals(
+          TestSetup.list(
+              TestSetup.map(
+                  "key",
+                  "confidential.weighted.variant",
+                  "type",
+                  "CONFIG",
+                  "value",
+                  "weighted-secret-variant",
+                  "value_type",
+                  "string",
+                  "count",
+                  1L,
+                  "reason",
+                  3L,
+                  "selected_value",
+                  TestSetup.map("string", "*****364b0"),
+                  "summary",
+                  TestSetup.map(
+                      "config_row_index",
+                      0L,
+                      "conditional_value_index",
+                      0L,
+                      "weighted_value_index",
+                      0L))),
+          t.evaluationSummaries());
+    }
+  }
+
+  @Test
+  @DisplayName("confidential ENV_VAR-provided value is redacted in selectedValue")
+  void confidentialEnvVarProvidedValueIsRedactedInSelectedvalue() throws Exception {
+    try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
+      Quonfig client = t.client();
+      t.saw(
+          "confidential.provided.a.number",
+          client.getString("confidential.provided.a.number", null));
+      Object projected = t.evaluationSummaries();
+      assertNotNull(projected, "no evaluation summaries were sent");
+      for (Object o : (java.util.List<?>) projected) {
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> row = (java.util.Map<String, Object>) o;
+        if (!java.util.Set.of("confidential.provided.a.number").contains(row.get("key"))) continue;
+        Object sv = row.get("selected_value");
+        assertTrue(
+            sv instanceof java.util.Map
+                && ((java.util.Map<?, ?>) sv).size() == 1
+                && ((java.util.Map<?, ?>) sv).get("string") instanceof String
+                && ((String) ((java.util.Map<?, ?>) sv).get("string"))
+                    .matches("^\\*{5}[0-9a-f]{5}$"),
+            () -> row.get("key") + ": selectedValue " + sv + " is not redacted");
+        row.put("selected_value", TestSetup.map("redacted", true));
+      }
+      assertEquals(
+          TestSetup.list(
+              TestSetup.map(
+                  "key",
+                  "confidential.provided.a.number",
+                  "type",
+                  "CONFIG",
+                  "value",
+                  "1234",
+                  "value_type",
+                  "string",
+                  "count",
+                  1L,
+                  "reason",
+                  1L,
+                  "selected_value",
+                  TestSetup.map("redacted", true),
+                  "summary",
+                  TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
+          projected);
+    }
+  }
+
+  @Test
+  @DisplayName("non-confidential ENV_VAR-provided value is reported as its resolved value")
+  void nonConfidentialEnvVarProvidedValueIsReportedAsItsResolvedValue() throws Exception {
+    try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
+      Quonfig client = t.client();
+      t.saw("provided.a.number", client.getLong("provided.a.number", null));
+      assertEquals(
+          TestSetup.list(
+              TestSetup.map(
+                  "key",
+                  "provided.a.number",
+                  "type",
+                  "CONFIG",
+                  "value",
+                  1234L,
+                  "value_type",
+                  "int",
+                  "count",
+                  1L,
+                  "reason",
+                  1L,
+                  "selected_value",
+                  TestSetup.map("int", 1234L),
                   "summary",
                   TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
           t.evaluationSummaries());

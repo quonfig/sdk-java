@@ -6,7 +6,9 @@
 package com.quonfig.sdk.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quonfig.sdk.Quonfig;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
@@ -67,6 +69,64 @@ class GetOrRaiseTest {
     Quonfig client = TestSetup.client();
     assertThrows(
         QuonfigKeyNotFoundException.class, () -> client.getLongOrThrow("provided.not.a.number"));
+  }
+
+  @Test
+  @DisplayName("coercion error for an int env var names the variable and never its value")
+  void coercionErrorForAnIntEnvVarNamesTheVariableAndNeverItsValue() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigKeyNotFoundException raised =
+              assertThrows(
+                  QuonfigKeyNotFoundException.class,
+                  () -> client.getLongOrThrow("provided.secret.not.an.int"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertTrue(
+              raisedMessage.contains(
+                  "environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to int for config \"provided.secret.not.an.int\""),
+              () ->
+                  "message lacks "
+                      + "environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to int for config \"provided.secret.not.an.int\""
+                      + ": "
+                      + raisedMessage);
+          assertFalse(
+              raisedMessage.contains("hunter2"),
+              () -> "message contains " + "hunter2" + ": " + raisedMessage);
+          assertFalse(
+              raisedMessage.contains("postgres://"),
+              () -> "message contains " + "postgres://" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("coercion error for a double env var names the variable and never its value")
+  void coercionErrorForADoubleEnvVarNamesTheVariableAndNeverItsValue() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigKeyNotFoundException raised =
+              assertThrows(
+                  QuonfigKeyNotFoundException.class,
+                  () -> client.getDoubleOrThrow("provided.secret.not.a.double"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertTrue(
+              raisedMessage.contains(
+                  "environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to double for config \"provided.secret.not.a.double\""),
+              () ->
+                  "message lacks "
+                      + "environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to double for config \"provided.secret.not.a.double\""
+                      + ": "
+                      + raisedMessage);
+          assertFalse(
+              raisedMessage.contains("hunter2"),
+              () -> "message contains " + "hunter2" + ": " + raisedMessage);
+          assertFalse(
+              raisedMessage.contains("postgres://"),
+              () -> "message contains " + "postgres://" + ": " + raisedMessage);
+        });
   }
 
   @Test
