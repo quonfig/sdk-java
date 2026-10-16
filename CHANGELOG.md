@@ -1,27 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 - 2026-10-16
 
-### Changed
+### Upgrade notes
 
 > **UPGRADE: auth-failure rule (qfg-goi1.10.27, minor).** Retry cadence and log levels change
 > after a rejected 401/403/404/410 fetch cycle; a revoked key logs one config ERROR.
-
-- **A rejected SDK key slows down instead of retrying at the normal cadence (auth-failure rule,
-  qfg-goi1.10.27, minor).** When a Layer 2 fallback-poll cycle gets no 200/304 on any leg and the
-  primary leg answered 401, 403, 404 or 410, the client enters an internal auth-failed regime: SSE
-  is stopped, the fallback poller stops, and the client sends one fetch probe across every leg
-  every 150-300s (uniform, no doubling, never giving up). It logs one ERROR naming the status and
-  the primary host (never the key) on entry, DEBUG per probe, and one INFO on exit. The first probe
-  that gets a valid 200 or a 304 on any leg installs it, leaves auth-failed and restarts SSE from
-  its base backoff. `connectionState()` reports `DISCONNECTED` while auth-failed (never
-  `FALLING_BACK`); there is no new state or getter. A primary 503 with a secondary 401, a 200 on
-  any leg, an SSE 401 on its own, the init fetch and `refresh()` never enter; SSE behavior before
-  entry is unchanged. `HttpTransportException` now carries each leg's status
-  (`legStatuses()`, `primaryStatus()`), since a failover walk used to report only the last leg's.
-  Pinned by supervisor contract Test 8 (integration-test-data v2026.10.16,
-  `SupervisorAuthFailureTest`). Before: the poller kept fetching every 60s in `FALLING_BACK`
-  forever with SSE retrying alongside, logging only DEBUG.
 
 > **UPGRADE: rule operator semantics (qfg-goi1.5.8, minor).** Aligns sdk-java with the canonical
 > cross-SDK operator rules pinned in integration-test-data v2026.10.16.1. Two rules change who
@@ -40,15 +24,33 @@
 > `PROP_AFTER` as epoch milliseconds or as ISO 8601 / RFC 3339 strings with `Z` or a numeric offset
 > (date-only and offset-less strings never match).
 
+> **UPGRADE: may change returned values (qfg-goi1.10.8, minor).** `getStringList` and `getJson`
+> return a copy per call; see Changed below.
+
+### Changed
+
+- **A rejected SDK key slows down instead of retrying at the normal cadence (auth-failure rule,
+  qfg-goi1.10.27, minor).** When a Layer 2 fallback-poll cycle gets no 200/304 on any leg and the
+  primary leg answered 401, 403, 404 or 410, the client enters an internal auth-failed regime: SSE
+  is stopped, the fallback poller stops, and the client sends one fetch probe across every leg
+  every 150-300s (uniform, no doubling, never giving up). It logs one ERROR naming the status and
+  the primary host (never the key) on entry, DEBUG per probe, and one INFO on exit. The first probe
+  that gets a valid 200 or a 304 on any leg installs it, leaves auth-failed and restarts SSE from
+  its base backoff. `connectionState()` reports `DISCONNECTED` while auth-failed (never
+  `FALLING_BACK`); there is no new state or getter. A primary 503 with a secondary 401, a 200 on
+  any leg, an SSE 401 on its own, the init fetch and `refresh()` never enter; SSE behavior before
+  entry is unchanged. `HttpTransportException` now carries each leg's status
+  (`legStatuses()`, `primaryStatus()`), since a failover walk used to report only the last leg's.
+  Pinned by supervisor contract Test 8 (integration-test-data v2026.10.16,
+  `SupervisorAuthFailureTest`). Before: the poller kept fetching every 60s in `FALLING_BACK`
+  forever with SSE retrying alongside, logging only DEBUG.
+
 - **Integral floats as plain digits; abbreviated semver (qfg-goi1.5.8, minor).** See the UPGRADE
   note above. Also fixes `IN_INT_RANGE` criteria stored as `{"type": "int_range", ...}`: the
   loader did not know the `int_range` value type, dropped the bounds and matched every value; the
   range is now `[start, end)` as specified.
 
 ### Changed (getStringList / getJson copies)
-
-> **UPGRADE: may change returned values (qfg-goi1.10.8, minor).** Ships in a minor release of its
-> own, not bundled with the patch fixes listed under Fixed.
 
 - **`getStringList` and `getJson` return a deep copy, not the cache's own object (qfg-goi1.10.8,
   minor).** The plain, `*Details` and `*OrThrow` forms (and `BoundQuonfig`) used to return the
