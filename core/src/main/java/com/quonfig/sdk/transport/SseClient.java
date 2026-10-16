@@ -51,11 +51,17 @@ import org.slf4j.LoggerFactory;
  *       on the secondary and freshness is never silently bound to the mirror. Mirrors sdk-go
  *       ({@code startSSE} → {@code streamURLFor(0)}). The path {@code /api/v2/sse/config} is
  *       appended.
- *   <li>Reconnect: exponential backoff (initialDelay → maxDelay) with jitter, reset to initial on a
- *       successful event-bearing connection. Server-initiated disconnects (LB recycling, 30s
- *       comment heartbeats that eventually drop the socket) are non-fatal.
- *   <li>Comments ({@code :keepalive}) are silently dropped — they never trip the connection-state
- *       callback or the envelope handler.
+ *   <li>A connection counts as connected at its FIRST VALID FRAME, not at the 200 headers
+ *       (supervisor contract "a connection is connected at its first valid frame", qfg-goi1.10.9):
+ *       a complete comment-only block ({@code : keepalive}) or a {@code data:} block that decodes
+ *       and validates as a delivery envelope. Only then does the connected edge fire and does the
+ *       session reset the backoff. A connection that ends before its first frame is a failed
+ *       attempt.
+ *   <li>Reconnect: exponential backoff (initialDelay → maxDelay) with jitter, reset to initial
+ *       after a session that delivered a frame. Server-initiated disconnects after a frame (LB
+ *       recycling) are non-fatal.
+ *   <li>Comments ({@code :keepalive}) never reach the envelope handler. The first one on a
+ *       connection is that connection's first frame.
  * </ul>
  *
  * <p>This class is internal to the SDK; the public {@code Quonfig} client wraps it and is
@@ -118,6 +124,12 @@ public final class SseClient {
   // in runLoop this is only ever -1 or 0; a reintroduced list-walk would surface here.
   private volatile int connectedStreamIndex = -1;
 
+  // Per-connection first-frame bookkeeping, touched only on the loop thread. pendingStreamIndex is
+  // the leg the in-flight connection is on; it becomes connectedStreamIndex at the first frame.
+  // frameSeen survives an IOException out of parseStream so connectOnce can still report it.
+  private int pendingStreamIndex;
+  private boolean frameSeen;
+
   private SseClient(Builder b) {
     Objects.requireNonNull(b.streamUrls, "streamUrls");
     if (b.streamUrls.isEmpty()) {
@@ -161,8 +173,9 @@ public final class SseClient {
   }
 
   /**
-   * Registers (or replaces) the handler invoked with {@code true} when a stream connects and {@code
-   * false} when it drops. Never called twice in a row with the same value.
+   * Registers (or replaces) the handler invoked with {@code true} when a stream connection delivers
+   * its first valid frame (not at the 200 headers) and {@code false} when that connection drops.
+   * Never called twice in a row with the same value.
    */
   public void onConnectionStateChange(Consumer<Boolean> handler) {
     this.stateHandler = handler;
@@ -235,7 +248,7 @@ public final class SseClient {
     URI primary = streamUrls.get(0);
     try {
       while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
-        boolean connectedOK;
+        boolean connectedOK; // true iff the connection delivered at least one valid frame
         try {
           connectedOK = connectOnce(primary);
         } catch (Throwable t) {
@@ -251,8 +264,9 @@ public final class SseClient {
         }
 
         if (connectedOK) {
-          // Live stream that ended — reset backoff. Server-initiated close is
-          // normal (LB recycles connections); don't punish it.
+          // A session that delivered a frame and then ended — reset backoff. Server-initiated
+          // close is normal (LB recycles connections); don't punish it. A 200 that ended before
+          // any frame is a failed attempt and grows the delay like a connect error.
           delay = initialDelay;
         }
 
@@ -285,8 +299,9 @@ public final class SseClient {
   /**
    * Opens a single SSE request against {@code base + /api/v2/sse/config} and reads until the body
    * errors or {@link #stop()} is called. Returns true iff the response came back 200 OK and the
-   * stream was actually consumed — callers use this to distinguish backoff-worthy failures (DNS,
-   * refused, 4xx, 5xx) from normal session recycling.
+   * stream delivered at least one valid frame ("frame seen"), including when the read later ended
+   * with an IOException or the watchdog. Callers use this to tell backoff-worthy failures (DNS,
+   * refused, 4xx, 5xx, a 200 that closed before any frame) from normal session recycling.
    */
   private boolean connectOnce(URI base) {
     URI target = appendPath(base, SSE_PATH);
@@ -330,21 +345,21 @@ public final class SseClient {
         }
         return false;
       }
-      // Record the ACTUAL leg this connection landed on before firing the connected
-      // edge, so state-change handlers (Quonfig records it for the f05 assertion)
-      // observe a consistent index. With the runLoop pin this is always 0.
-      connectedStreamIndex = streamUrls.indexOf(base);
-      setConnected(true);
+      // The 200 headers alone are not "connected": parseStream fires the connected edge at the
+      // first valid frame. Record the leg now so that edge publishes the ACTUAL leg (Quonfig
+      // records it for the f05 assertion). With the runLoop pin this is always 0.
+      pendingStreamIndex = streamUrls.indexOf(base);
       try {
-        parseStream(body);
+        return parseStream(body);
       } finally {
+        // Edge-only: a no-op when no frame arrived and the connected edge never fired.
         setConnected(false);
         connectedStreamIndex = -1;
       }
-      return true;
     } catch (IOException e) {
-      // Stream errored mid-read — treat as normal recycling.
-      return true;
+      // Stream errored mid-read (or the watchdog closed it). Normal recycling only if this
+      // session delivered a frame; a frameless 200 is a failed attempt.
+      return frameSeen;
     } finally {
       activeBody = null;
       try {
@@ -411,15 +426,27 @@ public final class SseClient {
    *
    * <ul>
    *   <li>Lines starting with {@code "data:"} accumulate the per-event payload.
-   *   <li>Lines starting with {@code ":"} are comments (keepalives) — ignored.
+   *   <li>Lines starting with {@code ":"} are comments (keepalives); never delivered.
    *   <li>An empty line terminates the event: the buffered payload is parsed as a {@link
    *       ConfigEnvelope} via Jackson.
    *   <li>{@code id:}, {@code event:}, {@code retry:} are recognized but unused.
    * </ul>
+   *
+   * <p>First-frame rule: the connected edge fires once per connection, at the first valid frame and
+   * before that frame's envelope is handed to the handler. A valid frame is a block ended by a
+   * blank line that either carries data decoding and validating as a delivery envelope, or holds at
+   * least one comment line and no other field. Headers alone, a block cut off by EOF, malformed or
+   * non-envelope data, an {@code id:}-only block and a bare blank line are not frames.
+   *
+   * @return whether this connection delivered a valid frame
    */
-  private void parseStream(InputStream in) throws IOException {
+  boolean parseStream(InputStream in) throws IOException {
+    frameSeen = false;
     BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
     StringBuilder dataBuf = new StringBuilder();
+    // Per-block flags, reset on each blank line.
+    boolean sawComment = false;
+    boolean sawField = false;
     // Stall watchdog. Java's HttpClient has no per-read deadline; we get the same
     // effect by scheduling a task to close the body after readWatchdog of silence.
     // close() unblocks readLine() with EOF or IOException, which falls out to
@@ -436,15 +463,23 @@ public final class SseClient {
           prev.cancel(false);
         }
         if (Thread.currentThread().isInterrupted()) {
-          return;
+          return frameSeen;
         }
         if (line.isEmpty()) {
-          flush(dataBuf);
+          if (dataBuf.length() > 0) {
+            flush(dataBuf);
+          } else if (sawComment && !sawField) {
+            markFrame();
+          }
+          sawComment = false;
+          sawField = false;
           continue;
         }
         if (line.charAt(0) == ':') {
+          sawComment = true;
           continue;
         }
+        sawField = true;
         String rest = stripFieldPrefix(line, "data:");
         if (rest != null) {
           if (dataBuf.length() > 0) {
@@ -453,6 +488,7 @@ public final class SseClient {
           dataBuf.append(rest);
         }
       }
+      return frameSeen;
     } finally {
       ScheduledFuture<?> prev = watchdog.getAndSet(null);
       if (prev != null) {
@@ -477,16 +513,22 @@ public final class SseClient {
         TimeUnit.NANOSECONDS);
   }
 
+  /** Fires the connected edge at this connection's first valid frame; no-op after that. */
+  private void markFrame() {
+    if (frameSeen) {
+      return;
+    }
+    frameSeen = true;
+    connectedStreamIndex = pendingStreamIndex;
+    setConnected(true);
+  }
+
   private void flush(StringBuilder dataBuf) {
     if (dataBuf.length() == 0) {
       return;
     }
     String payload = dataBuf.toString();
     dataBuf.setLength(0);
-    Consumer<ConfigEnvelope> cb = envelopeHandler;
-    if (cb == null) {
-      return;
-    }
     ConfigEnvelope env;
     try {
       env = MAPPER.readValue(payload, ConfigEnvelope.class);
@@ -500,6 +542,12 @@ public final class SseClient {
       // Valid JSON but not a delivery envelope (no meta.version) — installing it would wipe every
       // held config. Drop it exactly like malformed JSON (qfg-9dxb.3).
       log.warn("SSE: discarding non-envelope payload (missing meta.version)");
+      return;
+    }
+    // A valid envelope is a frame: raise the connected edge before the install sees it.
+    markFrame();
+    Consumer<ConfigEnvelope> cb = envelopeHandler;
+    if (cb == null) {
       return;
     }
     try {
