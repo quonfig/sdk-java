@@ -321,6 +321,10 @@ public final class DatadirLoader {
       case "duration":
         return ValueType.DURATION;
       case "json":
+      // IN_INT_RANGE criteria carry {"type": "int_range", "value": {"start", "end"}}; keep the
+      // object as a native Map so Operators.extractIntRange can read its bounds.
+      case "int_range":
+      case "intRange":
         return ValueType.JSON;
       case "weightedValues":
       case "weighted_values":

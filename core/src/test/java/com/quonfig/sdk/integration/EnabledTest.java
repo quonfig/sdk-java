@@ -965,12 +965,14 @@ class EnabledTest {
   }
 
   @Test
-  @DisplayName("returns false for PROP_SEMVER_EQUAL rule when the given prop is not a valid semver")
-  void returnsFalseForPropSemverEqualRuleWhenTheGivenPropIsNotAValidSemver() throws Exception {
+  @DisplayName(
+      "returns true for PROP_SEMVER_EQUAL rule when the given prop is an abbreviated major.minor version")
+  void returnsTrueForPropSemverEqualRuleWhenTheGivenPropIsAnAbbreviatedMajorMinorVersion()
+      throws Exception {
     Quonfig client = TestSetup.client();
     BoundQuonfig scoped =
         client.withContext(TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0"))));
-    assertEquals(false, scoped.featureIsOn("feature-flag.semver-equal"));
+    assertEquals(true, scoped.featureIsOn("feature-flag.semver-equal"));
   }
 
   @Test
@@ -1031,5 +1033,353 @@ class EnabledTest {
     BoundQuonfig scoped =
         client.withContext(TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "0.0.5"))));
     assertEquals(false, scoped.featureIsOn("feature-flag.semver-greater-than"));
+  }
+
+  @Test
+  @DisplayName("returns true for PROP_IS_ONE_OF [\"true\"] when the context value is boolean true")
+  void returnsTrueForPropIsOneOfTrueWhenTheContextValueIsBooleanTrue() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("beta", true))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.is-one-of.bool"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_IS_ONE_OF [\"true\"] when the context value is boolean false")
+  void returnsFalseForPropIsOneOfTrueWhenTheContextValueIsBooleanFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("beta", false))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.is-one-of.bool"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_IS_ONE_OF [\"true\"] when the context value is the string \"true\"")
+  void returnsTrueForPropIsOneOfTrueWhenTheContextValueIsTheStringTrue() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("beta", "true"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.is-one-of.bool"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_IS_NOT_ONE_OF [\"true\"] when the context value is boolean true")
+  void returnsFalseForPropIsNotOneOfTrueWhenTheContextValueIsBooleanTrue() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("beta", true))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.is-not-one-of.bool"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_IS_ONE_OF number strings when the context value is the integer 1")
+  void returnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger1() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 1L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.is-one-of.number"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_IS_ONE_OF number strings when the context value is the number 1.5")
+  void returnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheNumber15() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 1.5d))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.is-one-of.number"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_IS_ONE_OF number strings when the context value is the integer 1234567")
+  void returnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger1234567()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 1234567L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.is-one-of.number"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_IS_ONE_OF number strings when the context value is the integer 2")
+  void returnsFalseForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger2() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 2L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.is-one-of.number"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_ENDS_WITH_ONE_OF [\"3\"] when the context value is the integer 123")
+  void returnsTrueForPropEndsWithOneOf3WhenTheContextValueIsTheInteger123() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 123L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.ends-with-one-of.number"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_ENDS_WITH_ONE_OF [\"3\"] when the context value is the integer 124")
+  void returnsFalseForPropEndsWithOneOf3WhenTheContextValueIsTheInteger124() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 124L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.ends-with-one-of.number"));
+  }
+
+  @Test
+  @DisplayName("returns true for IN_INT_RANGE [0, 10) when the context value is the start bound 0")
+  void returnsTrueForInIntRange010WhenTheContextValueIsTheStartBound0() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 0L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.in-int-range"));
+  }
+
+  @Test
+  @DisplayName("returns true for IN_INT_RANGE [0, 10) when the context value is 9")
+  void returnsTrueForInIntRange010WhenTheContextValueIs9() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 9L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.in-int-range"));
+  }
+
+  @Test
+  @DisplayName("returns false for IN_INT_RANGE [0, 10) when the context value is the end bound 10")
+  void returnsFalseForInIntRange010WhenTheContextValueIsTheEndBound10() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 10L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.in-int-range"));
+  }
+
+  @Test
+  @DisplayName("returns false for IN_INT_RANGE [0, 10) when the context value is -1")
+  void returnsFalseForInIntRange010WhenTheContextValueIs1() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", -1L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.in-int-range"));
+  }
+
+  @Test
+  @DisplayName("returns true for IN_INT_RANGE with no end when the context value is 5000000000")
+  void returnsTrueForInIntRangeWithNoEndWhenTheContextValueIs5000000000() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", 5000000000L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.in-int-range.open-end"));
+  }
+
+  @Test
+  @DisplayName("returns true for IN_INT_RANGE with no start when the context value is -5")
+  void returnsTrueForInIntRangeWithNoStartWhenTheContextValueIs5() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("n", -5L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.in-int-range.open-start"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_SEMVER_EQUAL 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")
+  void returnsFalseForPropSemverEqual200WhenTheGivenPropIsThePrerelease200Beta1() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0.0-beta.1"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.semver-equal"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_SEMVER_LESS_THAN 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")
+  void returnsTrueForPropSemverLessThan200WhenTheGivenPropIsThePrerelease200Beta1()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0.0-beta.1"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.semver-less-than"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_SEMVER_GREATER_THAN 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")
+  void returnsFalseForPropSemverGreaterThan200WhenTheGivenPropIsThePrerelease200Beta1()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0.0-beta.1"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.semver-greater-than"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_SEMVER_EQUAL 2.0.0 when the given prop differs only by build metadata")
+  void returnsTrueForPropSemverEqual200WhenTheGivenPropDiffersOnlyByBuildMetadata()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0.0+build.5"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.semver-equal"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_SEMVER_LESS_THAN 2.0.0-beta when the given prop is the prerelease 2.0.0-alpha")
+  void returnsTrueForPropSemverLessThan200BetaWhenTheGivenPropIsThePrerelease200Alpha()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2.0.0-alpha"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.semver-less-than.prerelease"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_SEMVER_EQUAL 2.0.0 when the given prop is the abbreviated major version 2")
+  void returnsTrueForPropSemverEqual200WhenTheGivenPropIsTheAbbreviatedMajorVersion2()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "2"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.semver-equal"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_SEMVER_EQUAL 2.0.0 when the given prop has a v prefix")
+  void returnsFalseForPropSemverEqual200WhenTheGivenPropHasAVPrefix() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("app", TestSetup.map("version", "v2.0.0"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.semver-equal"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_BEFORE when the given prop is a date-only string")
+  void returnsFalseForPropBeforeWhenTheGivenPropIsADateOnlyString() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", "2024-11-01"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.before"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_BEFORE when the given prop is an RFC3339 string without an offset")
+  void returnsFalseForPropBeforeWhenTheGivenPropIsAnRfc3339StringWithoutAnOffset()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(
+                TestSetup.map("user", TestSetup.map("creation_date", "2024-11-01T00:00:00"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.before"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_BEFORE when the given prop is a free-form date string")
+  void returnsFalseForPropBeforeWhenTheGivenPropIsAFreeFormDateString() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", "Nov 1 2024"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.before"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_BEFORE when the given prop is an RFC3339 string with a numeric offset")
+  void returnsTrueForPropBeforeWhenTheGivenPropIsAnRfc3339StringWithANumericOffset()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(
+                TestSetup.map(
+                    "user", TestSetup.map("creation_date", "2024-11-01T02:00:00+02:00"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.before"));
+  }
+
+  @Test
+  @DisplayName("returns true for PROP_BEFORE when the given prop is an all-digit epoch-ms string")
+  void returnsTrueForPropBeforeWhenTheGivenPropIsAnAllDigitEpochMsString() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", "1730419200000"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.before"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_BEFORE an RFC3339 criterion when the given prop is an earlier epoch-ms number")
+  void returnsTrueForPropBeforeAnRfc3339CriterionWhenTheGivenPropIsAnEarlierEpochMsNumber()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", 1730419200000L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.before.rfc3339-criterion"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_BEFORE an RFC3339 criterion when the given prop is a later RFC3339 string")
+  void returnsFalseForPropBeforeAnRfc3339CriterionWhenTheGivenPropIsALaterRfc3339String()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(
+                TestSetup.map("user", TestSetup.map("creation_date", "2025-01-01T00:00:00Z"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.before.rfc3339-criterion"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_AFTER an all-digit criterion \"999\" when the given prop is 500")
+  void returnsFalseForPropAfterAnAllDigitCriterion999WhenTheGivenPropIs500() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", 500L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.after.numeric-string-criterion"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_AFTER an all-digit criterion \"999\" when the given prop is 1000")
+  void returnsTrueForPropAfterAnAllDigitCriterion999WhenTheGivenPropIs1000() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("creation_date", 1000L))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.after.numeric-string-criterion"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_GREATER_THAN 30 when the given prop is a numeric string above the threshold")
+  void returnsFalseForPropGreaterThan30WhenTheGivenPropIsANumericStringAboveTheThreshold()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("age", "35"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.greater-than"));
   }
 }
