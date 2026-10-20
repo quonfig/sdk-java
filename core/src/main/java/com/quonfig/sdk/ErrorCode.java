@@ -12,6 +12,11 @@ public enum ErrorCode {
    * The config exists but its declared {@code valueType} does not match the typed getter called.
    */
   TYPE_MISMATCH,
+  /**
+   * The client has no config yet: init has not completed, or it failed and the background retry has
+   * not healed it (OpenFeature's {@code PROVIDER_NOT_READY}).
+   */
+  PROVIDER_NOT_READY,
   /** Internal evaluation failure not covered by another code (env var missing, decryption, …). */
   GENERAL;
 }

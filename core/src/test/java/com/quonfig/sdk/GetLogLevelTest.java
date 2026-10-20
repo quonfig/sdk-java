@@ -145,7 +145,10 @@ class GetLogLevelTest {
             .fallbackPollEnabled(false)
             .configFetchTimeout(Duration.ofSeconds(8))
             .configFetchHedgeAbort(Duration.ofSeconds(8))
-            .initTimeout(Duration.ofSeconds(10))
+            // 2.0.0 (qfg-9p4i.9): the constructor blocks until init settles. CONTINUE with a short
+            // initTimeout returns a client while the slow first fetch is still in flight.
+            .onInitFailure(OnInitFailure.CONTINUE)
+            .initTimeout(Duration.ofMillis(500))
             .build();
     try (Quonfig q = new Quonfig(o)) {
       long start = System.nanoTime();
@@ -154,7 +157,7 @@ class GetLogLevelTest {
       assertTrue(elapsedMs < 500, "getLogLevel must not block on init; took " + elapsedMs + "ms");
       assertFalse(early.isPresent(), "no opinion before init completes");
 
-      q.initFuture().get(10, TimeUnit.SECONDS);
+      assertTrue(q.awaitReady(Duration.ofSeconds(10)), "init must complete");
       assertEquals(LogLevel.WARN, q.getLogLevel("a.b", null).orElseThrow());
     } finally {
       api.stop(0);

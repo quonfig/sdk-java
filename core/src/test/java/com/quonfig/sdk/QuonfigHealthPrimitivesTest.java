@@ -162,6 +162,7 @@ class QuonfigHealthPrimitivesTest {
             .telemetryUrl("http://127.0.0.1:1")
             .environment("production")
             .initTimeout(Duration.ofMillis(50))
+            .onInitFailure(OnInitFailure.CONTINUE)
             .disableTelemetry(true)
             .build();
     try (Quonfig q = new Quonfig(o)) {

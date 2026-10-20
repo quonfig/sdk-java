@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.quonfig.sdk.Quonfig;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
+import com.quonfig.sdk.exceptions.QuonfigInitException;
 import com.quonfig.sdk.exceptions.QuonfigInitTimeoutException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
 import org.junit.jupiter.api.Disabled;
@@ -37,20 +38,208 @@ class GetOrRaiseTest {
   }
 
   @Test
-  @Disabled(
-      "unsupported by sdk-java: sdk-java has no on_init_failure option: a client that misses initTimeout always throws QuonfigInitTimeoutException from get*OrThrow, never the :return-mode missing_default error")
-  @DisplayName("get_or_raise raises the correct error if it doesn't raise on init timeout")
-  void getOrRaiseRaisesTheCorrectErrorIfItDoesnTRaiseOnInitTimeout() throws Exception {
-    try (Quonfig client = TestSetup.httpClient("http://192.0.2.1:1", 0.01d)) {
+  @DisplayName("init fails by default when every delivery leg refuses the connection")
+  void initFailsByDefaultWhenEveryDeliveryLegRefusesTheConnection() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertFalse(
+        raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @DisplayName(
+      "init with on_init_failure fail raises when every delivery leg refuses the connection")
+  void initWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertFalse(
+        raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @DisplayName(
+      "init with on_init_failure fail raises the init timeout when every delivery leg hangs")
+  void initWithOnInitFailureFailRaisesTheInitTimeoutWhenEveryDeliveryLegHangs() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://192.0.2.1:1", "http://192.0.2.1:2"))
+            .streamUrls(java.util.List.of("http://192.0.2.1:1", "http://192.0.2.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(200))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertTrue(raised instanceof QuonfigInitTimeoutException, raised.toString());
+    assertTrue(elapsedMs < 2000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @DisplayName("init with on_init_failure fail raises at once when every delivery leg answers 401")
+  void initWithOnInitFailureFailRaisesAtOnceWhenEveryDeliveryLegAnswers401() throws Exception {
+    java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
+    for (int i = 0; i < 2; i++) {
+      com.sun.net.httpserver.HttpServer leg =
+          com.sun.net.httpserver.HttpServer.create(
+              new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+      leg.createContext(
+          "/",
+          ex -> {
+            ex.sendResponseHeaders(401, -1);
+            ex.close();
+          });
+      leg.start();
+      legs.add(leg);
+    }
+    try {
+      com.quonfig.sdk.Options o =
+          com.quonfig.sdk.Options.builder()
+              .sdkKey("itd-init-failure")
+              .apiUrls(
+                  java.util.List.of(
+                      "http://127.0.0.1:" + legs.get(0).getAddress().getPort(),
+                      "http://127.0.0.1:" + legs.get(1).getAddress().getPort()))
+              .streamUrls(
+                  java.util.List.of(
+                      "http://127.0.0.1:" + legs.get(0).getAddress().getPort(),
+                      "http://127.0.0.1:" + legs.get(1).getAddress().getPort()))
+              .initTimeout(java.time.Duration.ofMillis(8000))
+              .fallbackPollEnabled(false)
+              .enableQuonfigUserContext(false)
+              .disableTelemetry(true)
+              .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+              .build();
+      long start = System.nanoTime();
+      QuonfigInitException raised =
+          assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+      long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+      assertFalse(
+          raised instanceof QuonfigInitTimeoutException,
+          "reason unauthorized, not the init timeout");
+      assertTrue(elapsedMs < 4000, "init raised after " + elapsedMs + "ms");
+    } finally {
+      for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
+    }
+  }
+
+  @Test
+  @DisplayName("get_or_raise returns the default after init continues past refused delivery legs")
+  void getOrRaiseReturnsTheDefaultAfterInitContinuesPastRefusedDeliveryLegs() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.CONTINUE)
+            .build();
+    try (Quonfig client = new Quonfig(o)) {
+      assertEquals("DEFAULT", client.getString("any-key", "DEFAULT"));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "get_or_raise raises missing_default after init continues past refused delivery legs")
+  void getOrRaiseRaisesMissingDefaultAfterInitContinuesPastRefusedDeliveryLegs() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.CONTINUE)
+            .build();
+    try (Quonfig client = new Quonfig(o)) {
       assertThrows(QuonfigKeyNotFoundException.class, () -> client.getStringOrThrow("any-key"));
     }
   }
 
   @Test
-  @DisplayName("get_or_raise can raise an error if the client does not initialize in time")
-  void getOrRaiseCanRaiseAnErrorIfTheClientDoesNotInitializeInTime() throws Exception {
-    try (Quonfig client = TestSetup.httpClient("http://192.0.2.1:1", 0.01d)) {
-      assertThrows(QuonfigInitTimeoutException.class, () -> client.getStringOrThrow("any-key"));
+  @Disabled(
+      "unsupported by sdk-java: sdk-java has no legacy on_init_failure spellings to keep as aliases (init-failure design B.2: \"java: none\")")
+  @DisplayName(
+      "deprecated on_init_failure raise behaves as fail when every delivery leg refuses the connection")
+  void deprecatedOnInitFailureRaiseBehavesAsFailWhenEveryDeliveryLegRefusesTheConnection()
+      throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertFalse(
+        raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @Disabled(
+      "unsupported by sdk-java: sdk-java has no legacy on_init_failure spellings to keep as aliases (init-failure design B.2: \"java: none\")")
+  @DisplayName(
+      "deprecated on_init_failure return behaves as continue when every delivery leg refuses the connection")
+  void deprecatedOnInitFailureReturnBehavesAsContinueWhenEveryDeliveryLegRefusesTheConnection()
+      throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.CONTINUE)
+            .build();
+    try (Quonfig client = new Quonfig(o)) {
+      assertThrows(QuonfigKeyNotFoundException.class, () -> client.getStringOrThrow("any-key"));
     }
   }
 

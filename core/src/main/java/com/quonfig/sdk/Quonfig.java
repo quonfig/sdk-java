@@ -15,6 +15,7 @@ import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
+import com.quonfig.sdk.exceptions.QuonfigInitException;
 import com.quonfig.sdk.exceptions.QuonfigInitTimeoutException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
 import com.quonfig.sdk.supervisor.FallbackPoller;
@@ -69,7 +70,11 @@ import org.slf4j.event.Level;
  *       feature-flags/, segments/, log-levels/, schemas/). Typical local-dev mode.
  *   <li><b>http</b> (default when neither datadir nor datafile is set) — fetch the initial envelope
  *       from {@link Options#apiUrls()} and stream updates over SSE from {@link
- *       Options#streamUrls()}. Constructor returns immediately; init runs in a background thread.
+ *       Options#streamUrls()}. The constructor blocks until the first config loads, retrying
+ *       through blips until {@link Options#initTimeout()}; then {@link Options#onInitFailure()}
+ *       decides: {@link OnInitFailure#FAIL} (the default) throws {@link QuonfigInitException},
+ *       {@link OnInitFailure#WAIT} keeps blocking, {@link OnInitFailure#CONTINUE} returns on code
+ *       defaults.
  *   <li><b>datafile</b> — load a pre-serialized {@link ConfigEnvelope} from {@link
  *       Options#datafile()} (filesystem path) or {@link Options#datafileEnvelope()} (in-memory).
  *       Mirrors sdk-node's {@code datafile?: string | object} shape; the envelope's {@code
@@ -77,11 +82,12 @@ import org.slf4j.event.Level;
  *       explicitly. Synchronous like datadir mode.
  * </ul>
  *
- * <p>Lifecycle: typed getters block on {@link #initFuture()} (with {@link Options#initTimeout()})
- * before returning. If every leg fails at boot the client is not dead: it logs the failure, retries
- * in the background, and getters serve the real config once one installs. {@link #close()} stops
- * background SSE / polling / init-retry / telemetry threads. {@link #flush()} drains telemetry
- * without closing.
+ * <p>Lifecycle: getters never block on init; before the first config loads they return the caller's
+ * default with {@link Reason#ERROR} / {@link ErrorCode#PROVIDER_NOT_READY}. A client that exists
+ * (including the one {@link QuonfigInitException#client()} carries after a caught FAIL) is never
+ * dead: it retries in the background, and getters serve the real config once one installs. {@link
+ * #close()} stops background SSE / polling / init-retry / telemetry threads. {@link #flush()}
+ * drains telemetry without closing.
  *
  * <p>Thread-safety: all public methods are safe to call from any thread.
  */
@@ -181,8 +187,33 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** {@code meta.version} of the held delivery envelope; logged on recovery. */
   private volatile String heldVersion;
 
-  /** Background init-retry thread after a total init failure (qfg-9p4i.4); null otherwise. */
+  /** The init thread (first hedged attempt, then the retry loop); null outside delivery mode. */
   private volatile Thread initRetryThread;
+
+  /**
+   * Init-progress state shared by the init thread and the blocking constructor / {@link
+   * #awaitReady(Duration)} (qfg-9p4i.9). Guarded by {@link #initSignal}; every change notifies it.
+   */
+  private final Object initSignal = new Object();
+
+  private volatile long initStartNanos;
+
+  /** Failed init attempts so far. */
+  private int initAttemptsFailed;
+
+  /** {@code <errs>} of the latest failed attempt (section C). */
+  private volatile String initLastErrs = "";
+
+  /** The latest failed attempt got 401/403 from every leg; {@link #initAuthStatus} holds it. */
+  private boolean initAuthRejected;
+
+  private int initAuthStatus;
+
+  /** Every leg of the latest failed attempt timed out (no answer), as opposed to failing fast. */
+  private boolean initLastAttemptTimedOut;
+
+  /** The constructor has finished its init decision (returned or thrown). */
+  private volatile boolean initDecided;
 
   /**
    * Highest stream-URL index the SSE stream has EVER connected on, as reported by {@link
@@ -299,8 +330,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                     + "primary and secondary URLs to keep it");
       }
       this.initFuture = new CompletableFuture<>();
+      this.initStartNanos = System.nanoTime();
+      options
+          .logger()
+          .debug(
+              "[quonfig] init: fetching config (initTimeout={}, onInitFailure={})",
+              formatSeconds(options.initTimeout()),
+              modeName(options.onInitFailure()));
       Thread t = new Thread(this::runInit, "quonfig-init");
       t.setDaemon(true);
+      this.initRetryThread = t;
       t.start();
     }
 
@@ -333,6 +372,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       this.failoverCollector = null;
       this.telemetryReporter = null;
     }
+
+    if (initRetryThread != null) {
+      // Delivery mode: the constructor is the init call (design B.6). Blocks until the first config
+      // loads or onInitFailure decides at initTimeout (qfg-9p4i.9).
+      awaitInitOutcome();
+    }
   }
 
   private static TelemetrySender resolveTelemetrySender(Options options) {
@@ -354,6 +399,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     this.resolver = r;
     this.lastRefreshAt = Instant.now();
     this.initialized = true;
+    synchronized (initSignal) {
+      initSignal.notifyAll();
+    }
   }
 
   private void runInit() {
@@ -372,10 +420,14 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               .configFetchTimeout(options.configFetchTimeout())
               .build();
       this.httpTransport = http;
-      fetchInitialHedged(http);
+      if (fetchInitialHedged(http)) {
+        initRetryLoop(http, initStartNanos);
+      }
     } catch (Exception e) {
+      // Misconfigured URLs (the transport could not be built): nothing to retry against. The
+      // constructor reports it at initTimeout per onInitFailure.
       Throwable cause = e.getCause() != null ? e.getCause() : e;
-      onTotalInitFailure(cause, cause.toString());
+      onInitAttemptFailed(cause.toString(), 0, isTimeout(cause));
     }
   }
 
@@ -392,7 +444,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * install lands before {@link #initFuture} is consumed by a slow caller), bounded by the per-leg
    * abort × the number of legs, which is below {@link Options#initTimeout()}.
    */
-  private void fetchInitialHedged(HttpTransport http) {
+  private boolean fetchInitialHedged(HttpTransport http) {
     long hedgeDelayMs = options.configFetchHedgeDelay().toMillis();
     long hedgeAbortMs = options.configFetchHedgeAbort().toMillis();
     boolean hasSecondary = http.legCount() > 1;
@@ -472,16 +524,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
     if (readyLatched.get()) {
       // At least one leg installed and already latched readiness + started SSE (see fireHedgeLeg).
-      return;
+      return false;
     }
 
     // Nothing installed. Preserve the init-failure contract: surface the failure so getters apply
     // OnInitFailure (init-throw). If legErrors is empty the legs all 304'd (no change) — still a
     // successful, ready client; complete normally.
     if (!legErrors.isEmpty()) {
-      Throwable first = legErrors.get(0);
-      Throwable cause = first.getCause() != null ? first.getCause() : first;
       StringBuilder errs = new StringBuilder();
+      int authStatus = legErrorByIndex.size() == http.legCount() ? 0 : -1;
+      boolean allTimedOut = true;
       for (Map.Entry<Integer, Throwable> le : legErrorByIndex.entrySet()) {
         if (errs.length() > 0) errs.append("; ");
         errs.append(legLabel(le.getKey()))
@@ -489,12 +541,22 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
             .append(legHost(le.getKey()))
             .append(": ")
             .append(le.getValue().getMessage());
+        int st =
+            le.getValue() instanceof HttpTransportException
+                ? ((HttpTransportException) le.getValue()).statusCode()
+                : 0;
+        if (authStatus >= 0) authStatus = (st == 401 || st == 403) ? st : -1;
+        allTimedOut &= isTimeout(le.getValue());
       }
-      onTotalInitFailure(cause, errs.toString());
-    } else {
-      this.initialized = true;
-      initFuture.complete(null);
+      onInitAttemptFailed(errs.toString(), Math.max(authStatus, 0), allTimedOut);
+      return true;
     }
+    this.initialized = true;
+    completeInitFuture();
+    synchronized (initSignal) {
+      initSignal.notifyAll();
+    }
+    return false;
   }
 
   /**
@@ -534,7 +596,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               // null, the generation guard accepts the first snapshot), so the latch coincides with
               // a real install.
               if (readyLatched.compareAndSet(false, true)) {
-                initFuture.complete(null);
+                completeInitFuture();
+                if (initDecided) {
+                  // The constructor already gave up (CONTINUE at initTimeout) while this first
+                  // attempt was still in flight: this is the heal (section C).
+                  logRecovered(initStartNanos, legIndex);
+                }
                 startSse();
               }
               // Fire the config-update callback whenever this leg actually advanced the held
@@ -815,49 +882,236 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** Upper bound on the background init-retry backoff (design B.3: 0.5s doubling, cap 30s). */
   private static final long INIT_RETRY_MAX_BACKOFF_MS = 30_000L;
 
+  /** Progress WARN cadence while the constructor blocks before initTimeout (section C). */
+  private static final long INIT_PROGRESS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(5);
+
+  /** WAIT-mode progress WARN cadence once initTimeout has passed (section C). */
+  private static final long WAIT_PROGRESS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
+
   /**
-   * Total init failure (every leg failed): completes the init future exceptionally, logs it at
-   * ERROR (the client is starting on code defaults), and starts the background init retry so the
-   * client heals when delivery comes back (qfg-9p4i.4; design decision 4 and section C). Before
-   * this, the failure was permanent and silent: nothing retried and nothing was logged.
+   * Records one failed init attempt (every fired leg failed) and wakes the blocking constructor.
+   * {@code authStatus} is 401/403 when every leg rejected the SDK key, else 0. The first failure
+   * before the init decision is the "start of wait" WARN (section C); a healthy boot never logs
+   * init above DEBUG.
    */
-  private void onTotalInitFailure(Throwable cause, String errs) {
-    long startNanos = System.nanoTime();
-    initFuture.completeExceptionally(
-        new IllegalStateException("client initialization failed: " + cause.getMessage(), cause));
-    if (closed) return;
-    int primaryStatus =
-        cause instanceof HttpTransportException
-            ? ((HttpTransportException) cause).primaryStatus()
-            : 0;
-    if (primaryStatus == 0 && cause instanceof HttpTransportException) {
-      primaryStatus = ((HttpTransportException) cause).statusCode();
+  private void onInitAttemptFailed(String errs, int authStatus, boolean timedOut) {
+    int attempts;
+    synchronized (initSignal) {
+      attempts = ++initAttemptsFailed;
+      initLastErrs = errs;
+      initAuthRejected = authStatus == 401 || authStatus == 403;
+      initAuthStatus = authStatus;
+      initLastAttemptTimedOut = timedOut;
+      initSignal.notifyAll();
     }
-    HttpTransport http = this.httpTransport;
-    if (isAuthClassStatus(primaryStatus)) {
+    if (attempts == 1 && !initDecided && !closed) {
+      options
+          .logger()
+          .warn(
+              "[quonfig] init: config not loaded yet, retrying until initTimeout ({}). {}",
+              formatSeconds(options.initTimeout()),
+              errs);
+    }
+  }
+
+  /**
+   * The constructor's init gate (design B.3, section C). Blocks until the first config loads, then
+   * returns. Otherwise, at {@link Options#initTimeout()} (or at once when every leg rejected the
+   * key) applies {@link Options#onInitFailure()}: FAIL throws {@link QuonfigInitException} carrying
+   * this still-retrying client, CONTINUE returns on code defaults, WAIT keeps blocking (an auth
+   * rejection is logged and retried: the key may be provisioned late). Logs the section C lines.
+   */
+  private void awaitInitOutcome() {
+    OnInitFailure mode = options.onInitFailure();
+    long start = initStartNanos;
+    long timeoutNanos = options.initTimeout().toNanos();
+    long deadline = start + timeoutNanos;
+    long nextProgress = start + INIT_PROGRESS_INTERVAL_NANOS;
+    long nextWaitProgress = Long.MAX_VALUE;
+    boolean authLogged = false;
+    boolean waitTimeoutLogged = false;
+    synchronized (initSignal) {
+      try {
+        while (true) {
+          if (initialized) {
+            initDecided = true;
+            return;
+          }
+          long now = System.nanoTime();
+          if (initAuthRejected) {
+            if (mode == OnInitFailure.FAIL) {
+              throw initFailed(QuonfigInitException.Reason.UNAUTHORIZED, now);
+            }
+            if (mode == OnInitFailure.CONTINUE) {
+              continueOnDefaults(QuonfigInitException.Reason.UNAUTHORIZED, now);
+              return;
+            }
+            if (!authLogged) {
+              authLogged = true;
+              options
+                  .logger()
+                  .error(
+                      "[quonfig] init: SDK key rejected ({}) by every delivery leg. Check the key"
+                          + " and environment. onInitFailure=wait: still blocking startup and"
+                          + " retrying (the key may be provisioned late). {}",
+                      initAuthStatus,
+                      initLastErrs);
+            }
+          }
+          boolean pastDeadline = now - deadline >= 0;
+          if (pastDeadline && mode != OnInitFailure.WAIT) {
+            QuonfigInitException.Reason reason =
+                initAttemptsFailed == 0 || initLastAttemptTimedOut
+                    ? QuonfigInitException.Reason.TIMEOUT
+                    : QuonfigInitException.Reason.UNAVAILABLE;
+            if (mode == OnInitFailure.FAIL) throw initFailed(reason, now);
+            continueOnDefaults(reason, now);
+            return;
+          }
+          if (pastDeadline && !waitTimeoutLogged) {
+            waitTimeoutLogged = true;
+            nextWaitProgress = now + WAIT_PROGRESS_INTERVAL_NANOS;
+            options
+                .logger()
+                .warn(
+                    "[quonfig] init: no config after {}s. onInitFailure=wait: still blocking startup"
+                        + " and retrying indefinitely. {}. Use onInitFailure=fail or continue to"
+                        + " bound startup.",
+                    seconds(now - start),
+                    initLastErrs);
+          } else if (pastDeadline && now - nextWaitProgress >= 0) {
+            nextWaitProgress = now + WAIT_PROGRESS_INTERVAL_NANOS;
+            options
+                .logger()
+                .warn(
+                    "[quonfig] init: still blocked waiting for config ({} elapsed, attempt {}). {}",
+                    formatElapsed(TimeUnit.NANOSECONDS.toSeconds(now - start)),
+                    initAttemptsFailed + 1,
+                    initLastErrs);
+          } else if (!pastDeadline && now - nextProgress >= 0) {
+            nextProgress += INIT_PROGRESS_INTERVAL_NANOS;
+            if (initAttemptsFailed > 0) {
+              options
+                  .logger()
+                  .warn(
+                      "[quonfig] init: still waiting for config ({}s elapsed of {}, attempt {}). {}",
+                      seconds(now - start),
+                      formatSeconds(options.initTimeout()),
+                      initAttemptsFailed + 1,
+                      initLastErrs);
+            }
+          }
+          long wakeAt = pastDeadline ? nextWaitProgress : Math.min(deadline, nextProgress);
+          long waitMs = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(wakeAt - now) + 1);
+          initSignal.wait(waitMs);
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        initDecided = true;
+        QuonfigInitException ex =
+            new QuonfigInitException(
+                QuonfigInitException.Reason.UNAVAILABLE,
+                "[quonfig] init interrupted before a config loaded",
+                e,
+                this);
+        initFuture.completeExceptionally(ex);
+        throw ex;
+      }
+    }
+  }
+
+  /** FAIL: logs the section C ERROR line and builds the exception carrying this client. */
+  private QuonfigInitException initFailed(QuonfigInitException.Reason reason, long now) {
+    initDecided = true;
+    String msg;
+    if (reason == QuonfigInitException.Reason.UNAUTHORIZED) {
+      msg =
+          "[quonfig] init FAILED: SDK key rejected ("
+              + initAuthStatus
+              + ") by every delivery leg. Check the key and environment. onInitFailure=fail:"
+              + " raising now. "
+              + initLastErrs;
       options
           .logger()
           .error(
-              "[quonfig] init FAILED: SDK key rejected ({}) by {}. Check the key and environment."
-                  + " Serving code defaults (Reason.ERROR); retrying in background. {}",
-              primaryStatus,
-              primaryHost(),
+              "[quonfig] init FAILED: SDK key rejected ({}) by every delivery leg. Check the key"
+                  + " and environment. onInitFailure=fail: raising now. {}",
+              initAuthStatus,
+              initLastErrs);
+    } else {
+      String errs = initLastErrs.isEmpty() ? "no attempt finished" : initLastErrs;
+      msg =
+          "[quonfig] init FAILED: no config after " + seconds(now - initStartNanos) + "s. " + errs;
+      options
+          .logger()
+          .error(
+              "[quonfig] init FAILED: no config after {}s. {}. onInitFailure=fail: raising"
+                  + " QuonfigInitException. Options: onInitFailure=wait to keep waiting,"
+                  + " onInitFailure=continue to start on code defaults, or raise initTimeout.",
+              seconds(now - initStartNanos),
+              errs);
+    }
+    QuonfigInitException ex =
+        reason == QuonfigInitException.Reason.TIMEOUT
+            ? new QuonfigInitTimeoutException(msg, null, this)
+            : new QuonfigInitException(reason, msg, null, this);
+    initFuture.completeExceptionally(ex);
+    return ex;
+  }
+
+  /** CONTINUE: logs the section C ERROR line (server SDK) and lets the constructor return. */
+  private void continueOnDefaults(QuonfigInitException.Reason reason, long now) {
+    initDecided = true;
+    String errs = initLastErrs.isEmpty() ? "no attempt finished" : initLastErrs;
+    if (reason == QuonfigInitException.Reason.UNAUTHORIZED) {
+      options
+          .logger()
+          .error(
+              "[quonfig] init FAILED: SDK key rejected ({}) by every delivery leg. Check the key"
+                  + " and environment. onInitFailure=continue: STARTING ON CODE DEFAULTS. This"
+                  + " instance may disagree with the rest of your fleet. Retrying in background. {}",
+              initAuthStatus,
               errs);
     } else {
       options
           .logger()
           .error(
-              "[quonfig] init FAILED: no config loaded. {}. STARTING ON CODE DEFAULTS: getters"
-                  + " return the caller's default (Reason.ERROR) until config arrives. This"
-                  + " instance may disagree with the rest of your fleet. Retrying in background.",
+              "[quonfig] init: no config after {}s. onInitFailure=continue: STARTING ON CODE"
+                  + " DEFAULTS. This instance may disagree with the rest of your fleet. Retrying in"
+                  + " background. {}",
+              seconds(now - initStartNanos),
               errs);
     }
-    if (http == null) return; // misconfigured URLs: nothing to retry against
-    Thread t = new Thread(() -> initRetryLoop(http, startNanos, errs), "quonfig-init-retry");
-    t.setDaemon(true);
-    this.initRetryThread = t;
-    if (closed) return;
-    t.start();
+    initFuture.completeExceptionally(
+        new QuonfigInitException(
+            reason, "[quonfig] init: no config loaded; continuing on code defaults", null, null));
+  }
+
+  private static String seconds(long nanos) {
+    return String.format(java.util.Locale.ROOT, "%.1f", nanos / 1_000_000_000.0);
+  }
+
+  /** {@code 10s} / {@code 1.5s}: a Duration in seconds for the init log lines. */
+  private static String formatSeconds(Duration d) {
+    long ms = d.toMillis();
+    return ms % 1000 == 0
+        ? (ms / 1000) + "s"
+        : String.format(java.util.Locale.ROOT, "%.1fs", ms / 1000.0);
+  }
+
+  private static String modeName(OnInitFailure mode) {
+    return mode.name().toLowerCase(Locale.ROOT);
+  }
+
+  /** True when {@code t} (or a cause) is a request timeout: the leg never answered. */
+  private static boolean isTimeout(Throwable t) {
+    for (Throwable c = t; c != null; c = c.getCause()) {
+      if (c instanceof TimeoutException || c instanceof java.net.http.HttpTimeoutException) {
+        return true;
+      }
+      if (c.getCause() == c) break;
+    }
+    return false;
   }
 
   /**
@@ -867,8 +1121,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * starts SSE plus the fallback poller exactly as a successful first fetch does. While not ready
    * it logs a WARN every 30s for 5 minutes, then every 5 minutes (section C).
    */
-  private void initRetryLoop(HttpTransport http, long startNanos, String firstErrs) {
-    String lastErrs = firstErrs;
+  private void initRetryLoop(HttpTransport http, long startNanos) {
+    String lastErrs = initLastErrs;
     long nextWarnNanos = startNanos + TimeUnit.SECONDS.toNanos(30);
     int attempt = 0;
     while (!closed) {
@@ -907,9 +1161,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         }
         lastErrs = describeSequentialFailure(cause);
         options.logger().debug("[quonfig] init retry {} failed: {}", attempt, lastErrs);
+        onInitAttemptFailed(lastErrs, sequentialAuthStatus(cause), isTimeout(cause));
       }
       long now = System.nanoTime();
-      if (now - nextWarnNanos >= 0 && !closed && !initialized) {
+      // Background WARNs start once the constructor has decided (CONTINUE, or a caught FAIL);
+      // while it still blocks (WAIT, or before initTimeout) it logs its own progress lines.
+      if (initDecided && now - nextWarnNanos >= 0 && !closed && !initialized) {
         long elapsedS = TimeUnit.NANOSECONDS.toSeconds(now - startNanos);
         options
             .logger()
@@ -926,19 +1183,43 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private void healAfterInitFailure(long startNanos, boolean installedHere) {
     if (closed) return;
-    this.initFuture = CompletableFuture.completedFuture(null);
-    double elapsed = (System.nanoTime() - startNanos) / 1_000_000_000.0;
-    int idx = resolvedFromIndex;
+    completeInitFuture();
+    logRecovered(startNanos, resolvedFromIndex);
+    if (installedHere) fireConfigUpdate();
+    startSse();
+  }
+
+  /**
+   * Marks init complete. Within the init window the original future is still pending: complete it.
+   * After a decided failure it holds the failure: replace it so {@link #initFuture()} reflects the
+   * current state.
+   */
+  private void completeInitFuture() {
+    CompletableFuture<Void> f = this.initFuture;
+    if (!f.complete(null) && f.isCompletedExceptionally()) {
+      this.initFuture = CompletableFuture.completedFuture(null);
+    }
+  }
+
+  /** Heal line (section C): WARN, the level that saw the failure. {@code idx} -1 = refresh(). */
+  private void logRecovered(long startNanos, int idx) {
     options
         .logger()
         .warn(
             "[quonfig] init recovered: config loaded after {}s via {} (version {}). Now serving"
                 + " live config.",
-            String.format(java.util.Locale.ROOT, "%.1f", elapsed),
+            seconds(System.nanoTime() - startNanos),
             idx >= 0 ? legLabel(idx) : "refresh",
             heldVersion);
-    if (installedHere) fireConfigUpdate();
-    startSse();
+  }
+
+  /** 401/403 when every leg of a sequential walk rejected the key, else 0. */
+  private static int sequentialAuthStatus(Throwable cause) {
+    if (!(cause instanceof HttpTransportException)) return 0;
+    int[] legs = ((HttpTransportException) cause).legStatuses();
+    if (legs.length == 0) return 0;
+    for (int st : legs) if (st != 401 && st != 403) return 0;
+    return legs[0];
   }
 
   private String describeSequentialFailure(Throwable cause) {
@@ -981,17 +1262,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return m > 0 ? m + "m" + sec + "s" : sec + "s";
   }
 
-  /**
-   * Test seam (package-private): runs inside {@link #startSse()} just after its entry {@code
-   * closed} check, so a test can call {@link #close()} inside the close-vs-init window
-   * deterministically. Always null in production.
-   */
-  volatile Runnable startSseHookForTest;
-
   private void startSse() {
     if (closed) return;
-    Runnable hook = startSseHookForTest;
-    if (hook != null) hook.run();
+    Consumer<Quonfig> hook = options.startSseHookForTest();
+    if (hook != null) hook.accept(this);
 
     // Use a one-element array so the lambdas can read the final supervisor reference. We have
     // to build the FallbackPoller (whose callbacks reference the supervisor) before the
@@ -1283,17 +1557,21 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   }
 
   /**
-   * The current init outcome. After a total init failure this is completed exceptionally; once the
-   * background retry (or {@link #refresh()}) installs a config, a completed future replaces it. A
-   * future fetched before the heal keeps its failure, so poll {@link #ready()} for liveness.
+   * The current init outcome. Completed when the first config loads; completed exceptionally with
+   * the {@link QuonfigInitException} when the constructor gave up (FAIL or CONTINUE at {@code
+   * initTimeout}). Once the background retry (or {@link #refresh()}) installs a config, a completed
+   * future replaces a failed one. A future fetched before the heal keeps its failure, so use {@link
+   * #isReady()} / {@link #awaitReady(Duration)} for liveness.
    */
   public CompletableFuture<Void> initFuture() {
     return initFuture;
   }
 
+  /** Keys of the held config; empty before the first config loads. */
   public Set<String> keys() {
-    awaitInit();
-    return store.keys();
+    requireOpen();
+    InMemoryConfigStore s = store;
+    return initialized && s != null ? s.keys() : Set.of();
   }
 
   public boolean featureIsOn(String key, ContextSet ctx) {
@@ -1339,15 +1617,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * when no log-level config exists or the resolved value is unparseable — filters use that signal
    * as "no opinion" and defer to whatever the underlying logging library would do.
    *
-   * <p>Returns {@link Optional#empty()} immediately while initialization is still in flight,
-   * instead of blocking on {@link #initFuture()} like the typed getters do. The logging filters
-   * call this on every log statement, so blocking here would stall every thread that logs during
-   * startup for up to {@link Options#initTimeout()} (qfg-goi1.2.16).
+   * <p>Returns {@link Optional#empty()} immediately until the first config loads. The logging
+   * filters call this on every log statement, so it must never block (qfg-goi1.2.16).
    */
   @Override
   public Optional<LogLevel> getLogLevel(String loggerPath, ContextSet ctx) {
     Objects.requireNonNull(loggerPath, "loggerPath");
-    if (!initFuture.isDone()) {
+    if (!initialized) {
       return Optional.empty();
     }
     return resolveLogLevelString(loggerPath, ctx).flatMap(LogLevel::fromString);
@@ -1498,6 +1774,35 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return initialized && !closed;
   }
 
+  /** Readiness query (design B.4): same as {@link #ready()}. */
+  public boolean isReady() {
+    return ready();
+  }
+
+  /**
+   * Blocks up to {@code timeout} for the client to become ready (design B.4); returns {@link
+   * #isReady()}. Useful on a client that survived a caught {@link QuonfigInitException} or was
+   * built with {@link OnInitFailure#CONTINUE}. Returns {@code false} at once after {@link #close()}
+   * and, with the interrupt flag restored, when the waiting thread is interrupted.
+   */
+  public boolean awaitReady(Duration timeout) {
+    long deadline = System.nanoTime() + Math.max(0L, timeout.toNanos());
+    synchronized (initSignal) {
+      while (!ready()) {
+        if (closed) return false;
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) return false;
+        try {
+          initSignal.wait(Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remaining)));
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return ready();
+        }
+      }
+      return true;
+    }
+  }
+
   /**
    * Highest {@code Meta.generation} the client has installed ({@code 0} before the first install,
    * or while only unversioned servers have answered). A higher generation is strictly newer; this
@@ -1576,7 +1881,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * Retry-After}; a failed batch is kept and resent later, so this does not throw.
    */
   public void flush() {
-    awaitInit();
+    requireOpen();
     if (telemetryReporter != null) {
       try {
         telemetryReporter.flush();
@@ -1590,6 +1895,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   @Override
   public void close() {
     closed = true;
+    synchronized (initSignal) {
+      initSignal.notifyAll();
+    }
     Thread retry = initRetryThread;
     if (retry != null) retry.interrupt();
     DatadirWatcher dw = datadirWatcher;
@@ -1862,12 +2170,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *
    * <ul>
    *   <li>{@link QuonfigKeyNotFoundException} when the key does not exist or no rule produced a
-   *       value, and when the value cannot be coerced to the requested type (an ENV_VAR value such
-   *       as {@code "not_a_number"} for an INT, or a malformed duration, stored or ENV_VAR).
+   *       value (including before the first config loads, on a client that is not ready), and when
+   *       the value cannot be coerced to the requested type (an ENV_VAR value such as {@code
+   *       "not_a_number"} for an INT, or a malformed duration, stored or ENV_VAR).
    *   <li>{@link QuonfigEnvVarNotSetException} when an ENV_VAR-provided value's variable is unset.
    *   <li>{@link QuonfigDecryptionException} when a confidential value cannot be decrypted.
-   *   <li>{@link QuonfigInitTimeoutException} when the client did not initialize within {@link
-   *       Options#initTimeout()}.
    *   <li>{@link IllegalArgumentException} when the config's value type does not match the getter
    *       (for example {@code getLongOrThrow} on a STRING config).
    *   <li>{@link IllegalStateException} when the client is closed.
@@ -1981,22 +2288,29 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   @SuppressWarnings("unchecked")
   private <T> EvaluationDetails<T> evaluateTyped(
       String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType, boolean raise) {
-    try {
-      awaitInit();
-    } catch (IllegalStateException e) {
-      if (raise) {
-        if (e.getCause() instanceof TimeoutException) {
-          throw new QuonfigInitTimeoutException(e.getMessage(), e);
-        }
-        throw e;
-      }
+    // Getters never block on init (design B.3): the constructor is the only gate.
+    if (closed) {
+      if (raise) throw new IllegalStateException(CLOSED_MESSAGE);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
           variantFor(Reason.ERROR, -1, -1),
           null,
           ErrorCode.GENERAL,
-          e.getMessage(),
+          CLOSED_MESSAGE,
+          baseMetadata(null, key, null, Reason.ERROR, -1, -1));
+    }
+    // Any install makes the client ready, including one after a failed init (background retry or
+    // refresh()); a failed init future must not shadow it (qfg-9p4i.4).
+    if (!initialized) {
+      if (raise) throw new QuonfigKeyNotFoundException(noValueMessage(key));
+      return new EvaluationDetails<>(
+          def,
+          Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
+          null,
+          ErrorCode.PROVIDER_NOT_READY,
+          "Quonfig client is not ready: no config has loaded yet",
           baseMetadata(null, key, null, Reason.ERROR, -1, -1));
     }
     ContextSet effective = merge(options.globalContext(), ctx);
@@ -2321,22 +2635,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return baseMetadata(cfg.id(), cfg.key(), cfg.type().name(), reason, ruleIndex, weightedIndex);
   }
 
-  private void awaitInit() {
-    if (closed) throw new IllegalStateException("Quonfig client is closed");
-    // Any install makes the client ready, including one that lands after a total init failure
-    // (background retry or refresh()); the failed init future must not shadow it (qfg-9p4i.4).
-    if (initialized) return;
-    try {
-      initFuture.get(options.initTimeout().toMillis(), TimeUnit.MILLISECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new IllegalStateException("interrupted while awaiting init", e);
-    } catch (TimeoutException e) {
-      throw new IllegalStateException("client initialization exceeded " + options.initTimeout(), e);
-    } catch (java.util.concurrent.ExecutionException e) {
-      Throwable cause = e.getCause() != null ? e.getCause() : e;
-      throw new IllegalStateException(cause.getMessage(), cause);
-    }
+  private static final String CLOSED_MESSAGE = "Quonfig client is closed";
+
+  private void requireOpen() {
+    if (closed) throw new IllegalStateException(CLOSED_MESSAGE);
   }
 
   private void fireConfigUpdate() {

@@ -61,7 +61,10 @@ class QuonfigLog4j2FilterPreInitTest {
             .fallbackPollEnabled(false)
             .configFetchTimeout(Duration.ofSeconds(8))
             .configFetchHedgeAbort(Duration.ofSeconds(8))
-            .initTimeout(Duration.ofSeconds(10))
+            // 2.0.0 (qfg-9p4i.9): the constructor blocks until init settles. CONTINUE with a short
+            // initTimeout returns a client while the slow first fetch is still in flight.
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.CONTINUE)
+            .initTimeout(Duration.ofMillis(500))
             .build();
     try (Quonfig q = new Quonfig(o)) {
       QuonfigLog4j2Filter filter = new QuonfigLog4j2Filter(q);
@@ -72,7 +75,7 @@ class QuonfigLog4j2FilterPreInitTest {
       assertTrue(elapsedMs < 500, "decide must not block on init; took " + elapsedMs + "ms");
       assertEquals(Result.NEUTRAL, early);
 
-      q.initFuture().get(10, TimeUnit.SECONDS);
+      assertTrue(q.awaitReady(Duration.ofSeconds(10)), "init must complete");
       assertEquals(Result.DENY, filter.decide("a.b", Level.INFO));
     } finally {
       api.stop(0);
