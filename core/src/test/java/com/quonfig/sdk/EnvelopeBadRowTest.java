@@ -16,7 +16,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -198,8 +197,13 @@ class EnvelopeBadRowTest {
     HttpServer api = api(envelope(1, badRow("flag.a"), badRow("flag.b")));
     HttpServer stream = stream(null);
 
-    try (Quonfig q = new Quonfig(options(api, stream, log))) {
-      assertThrows(ExecutionException.class, () -> q.initFuture().get(5, TimeUnit.SECONDS));
+    // 2.0.0 (qfg-9p4i.9): no config loads, so the constructor throws under the FAIL default; the
+    // exception carries the (still-retrying) client.
+    com.quonfig.sdk.exceptions.QuonfigInitException e =
+        assertThrows(
+            com.quonfig.sdk.exceptions.QuonfigInitException.class,
+            () -> new Quonfig(options(api, stream, log)));
+    try (Quonfig q = e.client()) {
       assertEquals(0, q.heldGeneration());
       assertEquals(0, q.configInstallCount());
     }

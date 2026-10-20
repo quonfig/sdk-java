@@ -97,7 +97,8 @@ class ApiUrlsFailoverWarnTest {
         // above hedgeAbort so the unrelated initTimeout<=hedgeAbort warning never fires.
         .configFetchHedgeDelay(Duration.ofMillis(50))
         .configFetchHedgeAbort(Duration.ofMillis(300))
-        .initTimeout(Duration.ofSeconds(2));
+        .onInitFailure(OnInitFailure.CONTINUE)
+        .initTimeout(Duration.ofMillis(400));
   }
 
   private static long failoverWarnCount(RecordingLogger recording) {

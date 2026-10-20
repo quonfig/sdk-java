@@ -84,6 +84,9 @@ class CloseDuringInitTest {
 
   private static Options options(String apiBase, String streamBase) {
     return Options.builder()
+        // Closes the client inside the close-vs-init window. Set on the builder: since 2.0.0 the
+        // constructor blocks until init settles, so the window has passed by the time it returns.
+        .startSseHookForTest(Quonfig::close)
         .sdkKey("test-sdk")
         .envLookup(k -> Optional.empty())
         .enableQuonfigUserContext(false)
@@ -102,7 +105,6 @@ class CloseDuringInitTest {
   void closeInsideStartSseWindow_leavesNoSseLoop() throws Exception {
     String base = startStub();
     Quonfig q = new Quonfig(options(base, base));
-    q.startSseHookForTest = q::close;
     awaitInitSettled(q);
     Thread.sleep(1200);
     assertEquals(0, streamHits.get(), "a closed client must not dial the SSE stream");
@@ -116,7 +118,6 @@ class CloseDuringInitTest {
   void closeInsideStartSseWindow_leavesNoFallbackPoller() throws Exception {
     String base = startStub();
     Quonfig q = new Quonfig(options(base, "http://127.0.0.1:1"));
-    q.startSseHookForTest = q::close;
     awaitInitSettled(q);
     int afterInit = configHits.get();
     Thread.sleep(1200);

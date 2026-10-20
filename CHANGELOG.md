@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### BREAKING (2.0.0)
+
+> **BREAKING: the constructor now blocks until the first config loads, and throws
+> `QuonfigInitException` when none can (qfg-9p4i.9).** Before, `new Quonfig(options)` returned at
+> once in SDK-key mode and, when delivery was down, the client silently ran on your code defaults
+> (`Reason.ERROR`). That instance then ran a different config from the rest of your fleet. Quonfig
+> now fails by default, as the other server SDKs do.
+>
+> - **New option `Options.builder().onInitFailure(OnInitFailure)`**, default `FAIL`. In every mode
+>   the constructor first blocks and retries through blips (jittered backoff, 0.5 s doubling) until
+>   `initTimeout` (default 10 s, unchanged). A healthy boot returns as soon as the first config
+>   lands, typically 100-300 ms.
+>   - `FAIL`: at `initTimeout`, throw `QuonfigInitException`. When every delivery leg answers
+>     401/403 it throws at once, without waiting out the timeout. `QuonfigInitTimeoutException` is
+>     thrown when no attempt finished in time (legs hung).
+>   - `WAIT`: keep blocking, with no upper bound, until a config loads. Pair it with a readiness
+>     probe.
+>   - `CONTINUE`: return at `initTimeout` with no config, the old fail-open behavior. Set this to
+>     keep 1.x behavior.
+> - **`QuonfigInitException`** (new, `extends RuntimeException`) has `reason()`
+>   (`UNAVAILABLE`, `UNAUTHORIZED`, `TIMEOUT`) and `client()`. **`QuonfigInitTimeoutException`
+>   is no longer `final`** and now extends it. Existing `catch (QuonfigInitTimeoutException e)`
+>   blocks still compile and match.
+> - **No dead clients.** The client a failed constructor built keeps retrying in the background.
+>   `e.client()` returns it, and it becomes ready when delivery comes back. Keep it, or `close()`
+>   it if you don't. A process that lets the exception escape is unaffected (daemon threads).
+> - **Getters never block on init.** Before the first config loads, they return the caller's
+>   default with `Reason.ERROR` and the new `ErrorCode.PROVIDER_NOT_READY` (was
+>   `ErrorCode.GENERAL` after waiting up to `initTimeout`). `get*OrThrow` throws
+>   `QuonfigKeyNotFoundException` (was `QuonfigInitTimeoutException` after the wait). `keys()`
+>   returns an empty set.
+> - **Readiness API:** `isReady()` and `awaitReady(Duration)`. `initFuture()` is kept. It completes
+>   exceptionally with the `QuonfigInitException` when the constructor gives up (`FAIL` or
+>   `CONTINUE`), and a completed future replaces it on heal.
+> - **Logging contract (design section C):** DEBUG on init start. One WARN on the first failed
+>   attempt, then a progress WARN every 5 s until `initTimeout`. An ERROR when `FAIL` raises or
+>   `CONTINUE` starts on code defaults. Under `WAIT`, a WARN at the timeout and every 30 s after.
+>   The recovery line is a WARN. Lines carry the `[quonfig]` prefix and leg hosts, never the SDK
+>   key. A healthy boot logs nothing above DEBUG.
+>
+> **To upgrade:** wrap construction if you want to handle a down delivery path, or set
+> `.onInitFailure(OnInitFailure.CONTINUE)` to keep 1.x fail-open behavior. Datadir and datafile
+> modes are unchanged; they load synchronously. sdk-java had no legacy `onInitFailure` spellings,
+> so there are no deprecated aliases.
+
 ### Fixed
 
 - **A total init failure no longer leaves a permanently dead client (qfg-9p4i.4, patch).** When
@@ -18,8 +63,8 @@
     it. The retry then logs `[quonfig] init recovered: ...` at WARN, fires the config-update
     callback, and starts SSE plus the fallback poller as a successful first fetch does.
     `initFuture()` returns a completed future from then on. `close()` stops the retry.
-  - The constructor and the default behavior are otherwise unchanged: it does not block, and
-    getters still return the caller's default with `Reason.ERROR` until config arrives.
+  - (Superseded in the same release by the 2.0.0 change above: the constructor now blocks, and
+    `FAIL` is the default.)
 
 ## 1.8.0 - 2026-10-20
 

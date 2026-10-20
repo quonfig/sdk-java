@@ -79,6 +79,7 @@ public final class Options {
   private final String telemetryUrl;
   private final String environment;
   private final Duration initTimeout;
+  private final OnInitFailure onInitFailure;
   private final Duration configFetchTimeout;
   private final Duration configFetchHedgeDelay;
   private final Duration configFetchHedgeAbort;
@@ -116,6 +117,7 @@ public final class Options {
   private final String loggerKey;
   private final Duration sseReadWatchdog;
   private final BiFunction<String, Duration, Duration> waitHookForTest;
+  private final Consumer<Quonfig> startSseHookForTest;
   private final boolean dataDirAutoReload;
   private final long dataDirAutoReloadDebounceMs;
   private final Boolean enableQuonfigUserContext;
@@ -168,6 +170,7 @@ public final class Options {
     this.enableQuonfigUserContext = b.enableQuonfigUserContext;
 
     this.initTimeout = b.initTimeout != null ? b.initTimeout : DEFAULT_INIT_TIMEOUT;
+    this.onInitFailure = b.onInitFailure != null ? b.onInitFailure : OnInitFailure.FAIL;
     this.configFetchTimeout =
         b.configFetchTimeout != null ? b.configFetchTimeout : DEFAULT_CONFIG_FETCH_TIMEOUT;
     this.configFetchHedgeDelay =
@@ -248,6 +251,7 @@ public final class Options {
     this.loggerKey = b.loggerKey;
     this.sseReadWatchdog = b.sseReadWatchdog;
     this.waitHookForTest = b.waitHookForTest;
+    this.startSseHookForTest = b.startSseHookForTest;
     this.dataDirAutoReload = b.dataDirAutoReload;
     this.dataDirAutoReloadDebounceMs =
         b.dataDirAutoReloadDebounceMs > 0
@@ -327,6 +331,14 @@ public final class Options {
 
   public Duration initTimeout() {
     return initTimeout;
+  }
+
+  /**
+   * What the constructor does when no config has loaded by {@link #initTimeout()}. Defaults to
+   * {@link OnInitFailure#FAIL}. See {@link OnInitFailure}.
+   */
+  public OnInitFailure onInitFailure() {
+    return onInitFailure;
   }
 
   /**
@@ -588,6 +600,16 @@ public final class Options {
   }
 
   /**
+   * Test seam (package-private): runs inside {@code startSse()} just after its entry {@code closed}
+   * check, so a test can call {@link Quonfig#close()} inside the close-vs-init window
+   * deterministically. Set on the builder because the constructor blocks until init settles. Null
+   * in production.
+   */
+  Consumer<Quonfig> startSseHookForTest() {
+    return startSseHookForTest;
+  }
+
+  /**
    * Whether the datadir-mode client should watch the workspace for filesystem changes and
    * atomically reload the envelope on every debounced burst. Default {@code false} — adding a
    * background watcher thread to a previously-quiet datadir client is a behavior change, so it is
@@ -640,6 +662,7 @@ public final class Options {
     private String telemetryUrl;
     private String environment;
     private Duration initTimeout;
+    private OnInitFailure onInitFailure;
     private Duration configFetchTimeout;
     private Duration configFetchHedgeDelay;
     private Duration configFetchHedgeAbort;
@@ -677,6 +700,7 @@ public final class Options {
     private String loggerKey;
     private Duration sseReadWatchdog;
     private BiFunction<String, Duration, Duration> waitHookForTest;
+    private Consumer<Quonfig> startSseHookForTest;
     private boolean dataDirAutoReload;
     private long dataDirAutoReloadDebounceMs;
     private Boolean enableQuonfigUserContext;
@@ -717,6 +741,17 @@ public final class Options {
 
     public Builder initTimeout(Duration v) {
       this.initTimeout = v;
+      return this;
+    }
+
+    /**
+     * What the constructor does when no config has loaded by {@link #initTimeout(Duration)}: {@link
+     * OnInitFailure#FAIL} (the default, throws {@link
+     * com.quonfig.sdk.exceptions.QuonfigInitException}), {@link OnInitFailure#WAIT} or {@link
+     * OnInitFailure#CONTINUE}. {@code null} restores the default.
+     */
+    public Builder onInitFailure(OnInitFailure v) {
+      this.onInitFailure = v;
       return this;
     }
 
@@ -808,6 +843,12 @@ public final class Options {
      */
     Builder waitHookForTest(BiFunction<String, Duration, Duration> v) {
       this.waitHookForTest = v;
+      return this;
+    }
+
+    /** See {@link Options#startSseHookForTest()}. */
+    Builder startSseHookForTest(Consumer<Quonfig> v) {
+      this.startSseHookForTest = v;
       return this;
     }
 

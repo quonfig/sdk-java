@@ -61,13 +61,15 @@ class QuonfigLifecycleTest {
             .telemetryUrl("http://127.0.0.1:1")
             .environment("production")
             .initTimeout(Duration.ofMillis(10))
+            // 2.0.0: FAIL (the default) throws from the constructor; CONTINUE returns on defaults.
+            .onInitFailure(OnInitFailure.CONTINUE)
             .disableTelemetry(true)
             .build();
     try (Quonfig q = new Quonfig(o)) {
       EvaluationDetails<String> d = q.getStringDetails("any-key", "fallback");
       assertEquals("fallback", d.value());
       assertEquals(Reason.ERROR, d.reason());
-      assertNotNull(d.errorCode(), "errorCode must be set on init-timeout ERROR");
+      assertEquals(ErrorCode.PROVIDER_NOT_READY, d.errorCode());
       assertNotNull(d.errorMessage(), "errorMessage must accompany errorCode");
       // Plain getter returns the caller's default rather than throwing.
       assertEquals("fallback", q.getString("any-key", "fallback"));

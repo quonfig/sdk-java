@@ -187,6 +187,9 @@ final class FailoverChaosTest {
       System.err.printf("[pre-init] inject %s%n", describeInject(ev.inject));
     }
 
+    // Timeline rule 2: t=0 is taken BEFORE the constructor, which blocks until the first config
+    // loads since 2.0.0 (qfg-9p4i.9), so the initial fetch sits inside the window.
+    long baselineMs = System.currentTimeMillis();
     Quonfig client =
         new Quonfig(
             Options.builder()
@@ -202,8 +205,6 @@ final class FailoverChaosTest {
                 .fallbackPollEnabled(false)
                 .sseReadWatchdog(Duration.ofSeconds(5))
                 .build());
-
-    long baselineMs = System.currentTimeMillis();
     List<Thread> bg = new ArrayList<>();
 
     // Schedule at_ms > 0 chaos events. The failover-rig aliases are self-restoring (each carries

@@ -180,6 +180,9 @@ final class ChaosTest {
             // they detect on the closed connection, not the watchdog.
             .sseReadWatchdog(Duration.ofSeconds(10));
 
+    // Timeline rule 2: t=0 is taken BEFORE the constructor, which blocks until the first config
+    // loads since 2.0.0 (qfg-9p4i.9), so the initial fetch sits inside the window.
+    long baselineMs = System.currentTimeMillis();
     Quonfig client = null;
     try {
       client =
@@ -192,7 +195,6 @@ final class ChaosTest {
     Quonfig finalClient = client;
 
     // Schedule chaos events.
-    long baselineMs = System.currentTimeMillis();
     Map<String, InjectionState> injections = new ConcurrentHashMap<>();
     List<Thread> chaosThreads = new ArrayList<>();
     if (run.chaos != null) {

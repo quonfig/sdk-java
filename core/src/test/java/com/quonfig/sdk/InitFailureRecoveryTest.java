@@ -90,7 +90,10 @@ class InitFailureRecoveryTest {
         .apiUrls(List.of(base, base))
         .streamUrls(List.of(base))
         .telemetryUrl(base)
-        .initTimeout(Duration.ofSeconds(5))
+        // 2.0.0 (qfg-9p4i.9): the constructor blocks until initTimeout and FAIL is the default.
+        // CONTINUE returns a client on code defaults, the shape these recovery tests exercise.
+        .onInitFailure(OnInitFailure.CONTINUE)
+        .initTimeout(Duration.ofMillis(500))
         .disableTelemetry(true)
         .logger(logger)
         // Shrink the background init-retry backoff so the test runs in milliseconds.
