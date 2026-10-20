@@ -29,3 +29,20 @@ updates:
     groups:
       gradle-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Runtime dependencies of the published artifacts (api/implementation,
+      # plus compileOnly integrations where the customer brings their own
+      # version). A major bump here raises the floor every customer must run.
+      # Raise these deliberately in a release, not via Dependabot.
+      - dependency-name: "com.fasterxml.jackson.core:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.slf4j:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "com.google.guava:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "org.apache.logging.log4j:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ch.qos.logback:*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "io.micronaut:*"
+        update-types: ["version-update:semver-major"]
