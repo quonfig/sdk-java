@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.8.0 - 2026-10-20
 
 ### Upgrade notes
 
@@ -69,6 +69,9 @@
 >   starts/ends/contains and `HIERARCHICAL_MATCH`, so `PROP_IS_ONE_OF ["1234567"]` now matches
 >   `1234567.0`, and lists holding `"1.0"` or exponent strings (`"5.0E9"`) stop matching.
 >   Booleans stay `"true"`/`"false"`.
+>
+> Both who-matches changes were approved as minors under Decision 1 (qfg-goi1.5, 2026-10-09; prod
+> corpus scan: 0 affected criteria).
 >
 > Dates are unchanged in sdk-java but are now strict in every SDK: pass dates to `PROP_BEFORE` /
 > `PROP_AFTER` as epoch milliseconds or as ISO 8601 / RFC 3339 strings with `Z` or a numeric offset
