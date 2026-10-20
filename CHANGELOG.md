@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A total init failure no longer leaves a permanently dead client (qfg-9p4i.4, patch).** When
+  every leg failed at boot (refused, DNS, 5xx, or a rejected key), the client completed its init
+  future exceptionally and stopped: nothing retried, SSE never started, nothing was logged, and
+  every getter returned the caller's default with `Reason.ERROR` until the process restarted, even
+  after `refresh()` installed a config (while `ready()` reported `true`). Now:
+  - The failure is logged at ERROR with each leg's host and error
+    (`[quonfig] init FAILED: ...`; "SDK key rejected" for 401/403/404/410). The SDK key is never
+    logged.
+  - A background thread keeps fetching with jittered backoff (0.5 s doubling, capped at 30 s) and
+    logs a WARN every 30 s for 5 minutes, then every 5 minutes, while still not connected.
+  - The first config that installs, from that retry or from `refresh()`, makes the getters serve
+    it. The retry then logs `[quonfig] init recovered: ...` at WARN, fires the config-update
+    callback, and starts SSE plus the fallback poller as a successful first fetch does.
+    `initFuture()` returns a completed future from then on. `close()` stops the retry.
+  - The constructor and the default behavior are otherwise unchanged: it does not block, and
+    getters still return the caller's default with `Reason.ERROR` until config arrives.
+
 ## 1.8.0 - 2026-10-20
 
 ### Upgrade notes
