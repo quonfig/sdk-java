@@ -38,6 +38,62 @@ dependencies {
 </dependency>
 ```
 
+## Startup and init failure
+
+In SDK-key (delivery) mode, `new Quonfig(options)` is the init call. It blocks until the first
+config loads, retrying through blips with jittered backoff, for up to `initTimeout` (default
+10 s). A healthy boot returns as soon as the first config lands. If no config has loaded by
+then, `onInitFailure` decides what happens:
+
+| `onInitFailure` | At `initTimeout` |
+|-----------------|------------------|
+| `FAIL` (default) | Throws `QuonfigInitException`. |
+| `WAIT` | Keeps blocking, with no upper bound, until a config loads. Pair it with a readiness probe. |
+| `CONTINUE` | Returns with no config. Getters return your code defaults until a config loads. |
+
+```java
+Options opts = Options.builder()
+    .sdkKey(System.getenv("QUONFIG_BACKEND_SDK_KEY"))
+    .initTimeout(Duration.ofSeconds(10))
+    .onInitFailure(OnInitFailure.FAIL) // or WAIT, CONTINUE
+    .build();
+
+try {
+  Quonfig q = new Quonfig(opts);
+} catch (QuonfigInitException e) {
+  // e.reason() is one of:
+  //   UNAUTHORIZED  every delivery leg answered 401/403/404/410
+  //   TIMEOUT       the last attempt hung (every leg timed out), or none finished
+  //   UNAVAILABLE   the delivery legs answered with errors (refused, DNS, 5xx, ...)
+  // e.client() is a live client that keeps retrying and heals when delivery comes back.
+  // Keep it, or close it:
+  e.client().close();
+}
+```
+
+- **Rejected SDK key.** When every delivery leg answers 401, 403, 404 or 410, `FAIL` throws (and
+  `CONTINUE` returns) at once, without waiting out `initTimeout`, with reason `UNAUTHORIZED`.
+  One leg alone never decides this.
+- **`initTimeout` of zero or less** runs exactly one init attempt and then applies
+  `onInitFailure`: `FAIL` throws, `CONTINUE` starts on code defaults, and `WAIT` keeps retrying.
+  It does not mean "no deadline".
+- **A caught `FAIL` leaves a live client.** `QuonfigInitException.client()` returns the client the
+  constructor built. It keeps retrying in the background (with SSE and the fallback poller running)
+  and becomes ready when delivery recovers. If you do not keep it, call `close()` on it, especially
+  if you retry construction in a loop: every failed constructor leaves one such client.
+  `QuonfigInitTimeoutException` (reason `TIMEOUT`) extends `QuonfigInitException`.
+- **Getters never block on init.** Before the first config loads they return the caller's default
+  with `Reason.ERROR` and `ErrorCode.PROVIDER_NOT_READY`.
+- **Readiness:** `isReady()` reports whether a config has loaded, and `awaitReady(Duration)` blocks
+  up to the given time for one (returns `true` once ready). `initFuture()` completes when the first
+  config loads.
+- **Logging:** init lines start with `[quonfig] init` and carry an `event=quonfig.init.<name>`
+  SLF4J key-value (`start`, `retrying`, `waiting`, `unauthorized`, `failed`, `continue`, `wait`,
+  `recovered`, `not_connected`). They name leg hosts and `HTTP <status>` only, never the SDK key,
+  URL credentials or response bodies. A healthy boot logs nothing above DEBUG.
+
+Datadir and datafile modes load synchronously and do not use `initTimeout` or `onInitFailure`.
+
 ## Dynamic log levels
 
 Add the matching filter at startup; every logger automatically picks up Quonfig log-level configs.

@@ -21,9 +21,12 @@ public class QuonfigInitException extends RuntimeException {
   public enum Reason {
     /** Every delivery leg failed (refused, DNS, 5xx, ...) until {@code initTimeout}. */
     UNAVAILABLE,
-    /** Every delivery leg answered 401/403: the SDK key was rejected. */
+    /** Every delivery leg answered 401/403/404/410: the SDK key was rejected. */
     UNAUTHORIZED,
-    /** No attempt finished before {@code initTimeout} (legs hung). */
+    /**
+     * The last init attempt hung (every leg timed out), or none finished before {@code
+     * initTimeout}.
+     */
     TIMEOUT
   }
 
