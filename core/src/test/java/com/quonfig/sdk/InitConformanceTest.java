@@ -508,4 +508,111 @@ class InitConformanceTest {
     clients.add(e.client());
     assertEquals(QuonfigInitException.Reason.UNAVAILABLE, e.reason(), e.getMessage());
   }
+
+  // --- qfg-9p4i.17.9: the reason comes from per-leg results, never a wrapped cause ---------
+
+  /** Retry backoff for the test: {@code first} for the first {@code n} retries, then 30s. */
+  private static java.util.function.BiFunction<String, Duration, Duration> retriesThenPark(
+      int n, Duration first) {
+    AtomicInteger retries = new AtomicInteger();
+    return (kind, d) -> {
+      if (!"init-retry".equals(kind)) return d;
+      return retries.incrementAndGet() <= n ? first : Duration.ofSeconds(30);
+    };
+  }
+
+  @Test
+  void deadline_case1_fastFailureThenBlackholedAttemptCut_isTimeout() throws Exception {
+    // Attempt 1: both legs 503 at once. Every later request hangs, and initTimeout cuts the
+    // in-flight retry before any of its legs answered: the cut attempt hung, so timeout.
+    HttpServer s = fastThenBlackhole(2);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(s, logger, Duration.ofMillis(1500))
+            .configFetchTimeout(Duration.ofSeconds(5))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, e.reason(), e.getMessage());
+  }
+
+  @Test
+  void deadline_case2_cutsAttempt1_primaryFastSecondaryHung_isUnavailable() throws Exception {
+    // initTimeout cuts attempt 1 while it is in flight: the primary answered 503 at once and the
+    // secondary still hangs. One leg answered, so attempt 1 did not hang: unavailable.
+    HttpServer primary = server(new AtomicInteger(503));
+    HttpServer secondary = fastThenBlackhole(0);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(base(primary), base(primary), logger, Duration.ofMillis(1000))
+            .apiUrls(List.of(base(primary), base(secondary)))
+            .configFetchHedgeAbort(Duration.ofSeconds(10))
+            .configFetchTimeout(Duration.ofSeconds(10))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, e.reason(), e.getMessage());
+  }
+
+  @Test
+  void deadline_case3_inBackoffAfterRetryWithAnsweredPrimary_isUnavailable() throws Exception {
+    // Every attempt: the primary answers 503 at once, the secondary hangs until its per-leg
+    // timeout. Attempt 1 (hedged) and attempt 2 (the sequential retry) both complete, then the
+    // backoff parks past initTimeout, so the deadline falls between attempts and the last
+    // completed attempt decides. Its primary answered, so it did not hang: unavailable, even
+    // though the sequential walk's error wraps the secondary's HttpTimeoutException.
+    for (int status : new int[] {503, 401}) {
+      HttpServer primary = server(new AtomicInteger(status));
+      HttpServer secondary = fastThenBlackhole(0);
+      RecordingLogger logger = new RecordingLogger();
+      Options o =
+          options(base(primary), base(primary), logger, Duration.ofMillis(2000))
+              .apiUrls(List.of(base(primary), base(secondary)))
+              .configFetchHedgeAbort(Duration.ofMillis(400))
+              .configFetchTimeout(Duration.ofMillis(300))
+              .waitHookForTest(retriesThenPark(1, Duration.ofMillis(50)))
+              .onInitFailure(OnInitFailure.FAIL)
+              .build();
+      QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+      clients.add(e.client());
+      assertEquals(
+          QuonfigInitException.Reason.UNAVAILABLE, e.reason(), status + ": " + e.getMessage());
+    }
+  }
+
+  @Test
+  void deadline_case4_allLegsHungThroughout_cut_isTimeout() throws Exception {
+    // Every leg of every attempt hangs; initTimeout cuts an attempt in flight: timeout.
+    HttpServer s = fastThenBlackhole(0);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(s, logger, Duration.ofMillis(1200))
+            .configFetchTimeout(Duration.ofMillis(300))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, e.reason(), e.getMessage());
+  }
+
+  @Test
+  void deadline_case4_allLegsHungThroughout_inBackoff_isTimeout() throws Exception {
+    // Every leg of every attempt hangs until its timeout; attempt 1 (hedged) and attempt 2
+    // (sequential) complete, then the deadline falls in the backoff: the last completed attempt
+    // had every leg time out, so timeout.
+    HttpServer s = fastThenBlackhole(0);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(s, logger, Duration.ofMillis(2500))
+            .configFetchHedgeAbort(Duration.ofMillis(400))
+            .configFetchTimeout(Duration.ofMillis(300))
+            .waitHookForTest(retriesThenPark(1, Duration.ofMillis(50)))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, e.reason(), e.getMessage());
+  }
 }

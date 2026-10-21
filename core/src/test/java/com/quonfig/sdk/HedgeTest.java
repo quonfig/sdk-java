@@ -157,6 +157,40 @@ final class HedgeTest {
     }
   }
 
+  /**
+   * The hedged init leg is bounded by configFetchHedgeAbort (design doc: per-leg abort 6s), not by
+   * the shorter configFetchTimeout that bounds sequential refresh/poll requests (qfg-9p4i.17.9). A
+   * primary slower than configFetchTimeout but inside the hedge abort answers attempt 1.
+   */
+  @Test
+  void slowPrimaryInsideHedgeAbortAnswersPastConfigFetchTimeout() throws Exception {
+    Upstream primary = Upstream.serving(42, Duration.ofMillis(1000));
+    int deadSecondary = closedPort();
+    int deadStream = closedPort();
+    try {
+      Quonfig client =
+          new Quonfig(
+              Options.builder()
+                  .sdkKey("test-backend-key")
+                  .apiUrls(List.of(primary.url(), "http://127.0.0.1:" + deadSecondary))
+                  .streamUrls(List.of("http://127.0.0.1:" + deadStream))
+                  .disableTelemetry(true)
+                  .fallbackPollEnabled(false)
+                  .initTimeout(Duration.ofSeconds(4))
+                  .configFetchTimeout(Duration.ofMillis(300))
+                  .configFetchHedgeAbort(Duration.ofSeconds(3))
+                  .build());
+      try {
+        assertEquals(42, client.heldGeneration());
+        assertEquals(1, primary.hits(), "the first attempt's primary leg should have answered");
+      } finally {
+        client.close();
+      }
+    } finally {
+      primary.stop();
+    }
+  }
+
   // ---- helpers ----
 
   private static Quonfig newHedgeClient(Upstream primary, Upstream secondary, int deadStream) {

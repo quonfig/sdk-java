@@ -145,10 +145,22 @@ public final class HttpTransport {
    *
    * <p>Unlike {@link #get(URI, String)} this does NOT apply the overall {@link #timeout}; the hedge
    * caller bounds each leg with its own per-leg abort deadline (the JDK {@code HttpRequest.timeout}
-   * set in {@link #buildRequest} still bounds the single attempt). ETag is a per-call parameter, so
-   * two concurrent legs cannot share a mutable ETag slot — there is no 304-mask data race.
+   * is {@code configFetchTimeout} here; the overload taking a request timeout replaces it). ETag is
+   * a per-call parameter, so two concurrent legs cannot share a mutable ETag slot — there is no
+   * 304-mask data race.
    */
   public CompletableFuture<HttpResponse<String>> getFrom(int legIndex, URI url, String etag) {
+    return getFrom(legIndex, url, etag, null);
+  }
+
+  /**
+   * Like {@link #getFrom(int, URI, String)}, but the JDK request timeout is {@code requestTimeout}
+   * instead of the per-URL {@code configFetchTimeout}. The init hedge passes its per-leg abort, so
+   * a leg is bounded by the hedge abort (design default 6s) rather than the shorter sequential
+   * per-URL deadline. {@code null} keeps {@code configFetchTimeout}.
+   */
+  public CompletableFuture<HttpResponse<String>> getFrom(
+      int legIndex, URI url, String etag, Duration requestTimeout) {
     Objects.requireNonNull(url, "url");
     if (legIndex < 0 || legIndex >= baseUrls.size()) {
       return CompletableFuture.failedFuture(
@@ -156,7 +168,15 @@ public final class HttpTransport {
               0, "", "leg index " + legIndex + " out of range (legs=" + baseUrls.size() + ")"));
     }
     URI target = rebase(baseUrls.get(legIndex), url);
-    HttpRequest req = buildRequest(target, "GET", null, etag);
+    HttpRequest req =
+        buildRequest(
+            target,
+            "GET",
+            null,
+            etag,
+            requestTimeout != null && requestTimeout.compareTo(Duration.ZERO) > 0
+                ? requestTimeout
+                : configFetchTimeout);
     return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
         .thenCompose(
             resp -> {
@@ -277,13 +297,18 @@ public final class HttpTransport {
   }
 
   private HttpRequest buildRequest(URI target, String method, String body, String etag) {
+    return buildRequest(target, method, body, etag, configFetchTimeout);
+  }
+
+  private HttpRequest buildRequest(
+      URI target, String method, String body, String etag, Duration requestTimeout) {
     // Per-URL deadline: bound THIS single attempt (one base URL) rather than the whole failover
     // chain, so a hung primary aborts after configFetchTimeout and the secondary still has budget
     // inside the caller's overall timeout. Applies uniformly to the initial fetch and the fallback
     // poller, since both route through this transport (qfg-7h5d.1.4/.10).
     HttpRequest.Builder b =
         HttpRequest.newBuilder(target)
-            .timeout(configFetchTimeout)
+            .timeout(requestTimeout)
             .header("Authorization", authHeader)
             .header("X-Quonfig-SDK-Version", Version.header())
             .header("Accept", "application/json");
