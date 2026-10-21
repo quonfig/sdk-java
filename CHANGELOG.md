@@ -67,6 +67,12 @@
   `stream` when SSE delivered the first config.
 - README documents the init contract (`onInitFailure`, `initTimeout`, `QuonfigInitException`,
   readiness, closing a caught client).
+- **When `initTimeout` cuts off an attempt that is still running, that attempt decides the
+  reason** (design doc decision 10, the sdk-go rule). If none of its legs has answered, it hung
+  and the reason is `TIMEOUT`, even when earlier attempts failed fast. If one leg already failed
+  fast while another still hangs, the reason is `UNAVAILABLE`. Before, the reason came from the
+  last attempt that had finished. A deadline that lands between attempts still uses the last
+  finished attempt.
 
 ### Fixed
 

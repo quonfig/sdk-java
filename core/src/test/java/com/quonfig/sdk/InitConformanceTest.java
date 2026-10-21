@@ -50,7 +50,46 @@ class InitConformanceTest {
     for (Quonfig q : clients) {
       if (q != null) q.close();
     }
+    blackhole.countDown();
     for (HttpServer s : servers) s.stop(0);
+  }
+
+  /** Released at teardown; a blackholed request blocks on it and never answers before. */
+  private final java.util.concurrent.CountDownLatch blackhole =
+      new java.util.concurrent.CountDownLatch(1);
+
+  /**
+   * Config endpoint whose first {@code fastHits} requests answer 503 at once and every later one
+   * hangs without answering (a black hole). {@code fastHits} 0 hangs every request.
+   */
+  private HttpServer fastThenBlackhole(int fastHits) throws IOException {
+    AtomicInteger hits = new AtomicInteger();
+    HttpServer s = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    s.setExecutor(Executors.newCachedThreadPool());
+    s.createContext(
+        "/api/v2/configs",
+        (HttpExchange ex) -> {
+          if (hits.incrementAndGet() > fastHits) {
+            try {
+              blackhole.await();
+            } catch (InterruptedException ignored) {
+              // teardown
+            }
+            ex.close();
+            return;
+          }
+          ex.sendResponseHeaders(503, -1);
+          ex.close();
+        });
+    s.createContext(
+        "/api/v2/sse/config",
+        (HttpExchange ex) -> {
+          ex.sendResponseHeaders(503, -1);
+          ex.close();
+        });
+    s.start();
+    servers.add(s);
+    return s;
   }
 
   /**
@@ -418,5 +457,55 @@ class InitConformanceTest {
     assertFalse(q.isReady());
     assertTrue(logged(logger, Level.DEBUG, "event=quonfig.init.start"), "" + logger.entries);
     assertTrue(logged(logger, Level.ERROR, "event=quonfig.init.continue"), "" + logger.entries);
+  }
+
+  // --- D10: the deadline cuts an attempt still in flight: that attempt is the last one -------
+
+  @Test
+  void d10_deadlineCutsAHungAttempt_afterAFastFailure_isTimeout() throws Exception {
+    // Attempt 1: both legs 503 at once. Attempt 2 (the background retry, 50ms later) hangs on
+    // every leg, and initTimeout cuts it. The cut attempt is the last attempt, none of its legs
+    // answered, so it hung: timeout, even though attempt 1 failed fast (decision 10).
+    HttpServer s = fastThenBlackhole(2);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(s, logger, Duration.ofMillis(1500)).onInitFailure(OnInitFailure.FAIL).build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, e.reason(), e.getMessage());
+  }
+
+  @Test
+  void d10_deadlineDuringBackoff_afterAFastFailure_isUnavailable() throws Exception {
+    // Every attempt 503s at once and the retry backoff outlasts initTimeout: the deadline lands
+    // between attempts, so the last attempt is the completed fast failure: unavailable.
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(server(new AtomicInteger(503)), logger, Duration.ofMillis(1000))
+            .waitHookForTest((kind, d) -> "init-retry".equals(kind) ? Duration.ofSeconds(30) : d)
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, e.reason(), e.getMessage());
+  }
+
+  @Test
+  void d10_deadlineCutsAnAttempt_oneLegFastOneHung_isUnavailable() throws Exception {
+    // The first attempt is still in flight at the deadline: the primary answered 503 at once and
+    // the secondary hangs (its per-leg abort outlasts initTimeout). One leg answered, so the
+    // attempt did not hang: unavailable.
+    HttpServer primary = server(new AtomicInteger(503));
+    HttpServer secondary = fastThenBlackhole(0);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(base(primary), base(primary), logger, Duration.ofMillis(1000))
+            .apiUrls(List.of(base(primary), base(secondary)))
+            .configFetchHedgeAbort(Duration.ofSeconds(10))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, e.reason(), e.getMessage());
   }
 }
