@@ -56,6 +56,7 @@ class GetOrRaiseTest {
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
     assertFalse(
         raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
     assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
   }
 
@@ -80,6 +81,7 @@ class GetOrRaiseTest {
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
     assertFalse(
         raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
     assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
   }
 
@@ -90,8 +92,8 @@ class GetOrRaiseTest {
     com.quonfig.sdk.Options o =
         com.quonfig.sdk.Options.builder()
             .sdkKey("itd-init-failure")
-            .apiUrls(java.util.List.of("http://192.0.2.1:1", "http://192.0.2.1:2"))
-            .streamUrls(java.util.List.of("http://192.0.2.1:1", "http://192.0.2.1:2"))
+            .apiUrls(java.util.List.of("http://192.0.2.1:8001", "http://192.0.2.1:8002"))
+            .streamUrls(java.util.List.of("http://192.0.2.1:8001", "http://192.0.2.1:8002"))
             .initTimeout(java.time.Duration.ofMillis(200))
             .fallbackPollEnabled(false)
             .enableQuonfigUserContext(false)
@@ -103,6 +105,7 @@ class GetOrRaiseTest {
         assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
     assertTrue(raised instanceof QuonfigInitTimeoutException, raised.toString());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, raised.reason());
     assertTrue(elapsedMs < 2000, "init raised after " + elapsedMs + "ms");
   }
 
@@ -110,31 +113,27 @@ class GetOrRaiseTest {
   @DisplayName("init with on_init_failure fail raises at once when every delivery leg answers 401")
   void initWithOnInitFailureFailRaisesAtOnceWhenEveryDeliveryLegAnswers401() throws Exception {
     java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
-    for (int i = 0; i < 2; i++) {
+    java.util.List<String> legUrls = new java.util.ArrayList<>();
+    for (int status : new int[] {401, 401}) {
       com.sun.net.httpserver.HttpServer leg =
           com.sun.net.httpserver.HttpServer.create(
               new java.net.InetSocketAddress("127.0.0.1", 0), 0);
       leg.createContext(
           "/",
           ex -> {
-            ex.sendResponseHeaders(401, -1);
+            ex.sendResponseHeaders(status, -1);
             ex.close();
           });
       leg.start();
       legs.add(leg);
+      legUrls.add("http://127.0.0.1:" + leg.getAddress().getPort());
     }
     try {
       com.quonfig.sdk.Options o =
           com.quonfig.sdk.Options.builder()
               .sdkKey("itd-init-failure")
-              .apiUrls(
-                  java.util.List.of(
-                      "http://127.0.0.1:" + legs.get(0).getAddress().getPort(),
-                      "http://127.0.0.1:" + legs.get(1).getAddress().getPort()))
-              .streamUrls(
-                  java.util.List.of(
-                      "http://127.0.0.1:" + legs.get(0).getAddress().getPort(),
-                      "http://127.0.0.1:" + legs.get(1).getAddress().getPort()))
+              .apiUrls(legUrls)
+              .streamUrls(legUrls)
               .initTimeout(java.time.Duration.ofMillis(8000))
               .fallbackPollEnabled(false)
               .enableQuonfigUserContext(false)
@@ -148,6 +147,7 @@ class GetOrRaiseTest {
       assertFalse(
           raised instanceof QuonfigInitTimeoutException,
           "reason unauthorized, not the init timeout");
+      assertEquals(QuonfigInitException.Reason.UNAUTHORIZED, raised.reason());
       assertTrue(elapsedMs < 4000, "init raised after " + elapsedMs + "ms");
     } finally {
       for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
@@ -217,6 +217,7 @@ class GetOrRaiseTest {
     long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
     assertFalse(
         raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
     assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
   }
 
@@ -240,6 +241,306 @@ class GetOrRaiseTest {
             .build();
     try (Quonfig client = new Quonfig(o)) {
       assertThrows(QuonfigKeyNotFoundException.class, () -> client.getStringOrThrow("any-key"));
+    }
+  }
+
+  @Test
+  @DisplayName("init with on_init_failure fail raises at once when every delivery leg answers 404")
+  void initWithOnInitFailureFailRaisesAtOnceWhenEveryDeliveryLegAnswers404() throws Exception {
+    java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
+    java.util.List<String> legUrls = new java.util.ArrayList<>();
+    for (int status : new int[] {404, 404}) {
+      com.sun.net.httpserver.HttpServer leg =
+          com.sun.net.httpserver.HttpServer.create(
+              new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+      leg.createContext(
+          "/",
+          ex -> {
+            ex.sendResponseHeaders(status, -1);
+            ex.close();
+          });
+      leg.start();
+      legs.add(leg);
+      legUrls.add("http://127.0.0.1:" + leg.getAddress().getPort());
+    }
+    try {
+      com.quonfig.sdk.Options o =
+          com.quonfig.sdk.Options.builder()
+              .sdkKey("itd-init-failure")
+              .apiUrls(legUrls)
+              .streamUrls(legUrls)
+              .initTimeout(java.time.Duration.ofMillis(8000))
+              .fallbackPollEnabled(false)
+              .enableQuonfigUserContext(false)
+              .disableTelemetry(true)
+              .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+              .build();
+      long start = System.nanoTime();
+      QuonfigInitException raised =
+          assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+      long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+      assertFalse(
+          raised instanceof QuonfigInitTimeoutException,
+          "reason unauthorized, not the init timeout");
+      assertEquals(QuonfigInitException.Reason.UNAUTHORIZED, raised.reason());
+      assertTrue(elapsedMs < 4000, "init raised after " + elapsedMs + "ms");
+    } finally {
+      for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
+    }
+  }
+
+  @Test
+  @DisplayName("init with on_init_failure fail raises at once when every delivery leg answers 410")
+  void initWithOnInitFailureFailRaisesAtOnceWhenEveryDeliveryLegAnswers410() throws Exception {
+    java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
+    java.util.List<String> legUrls = new java.util.ArrayList<>();
+    for (int status : new int[] {410, 410}) {
+      com.sun.net.httpserver.HttpServer leg =
+          com.sun.net.httpserver.HttpServer.create(
+              new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+      leg.createContext(
+          "/",
+          ex -> {
+            ex.sendResponseHeaders(status, -1);
+            ex.close();
+          });
+      leg.start();
+      legs.add(leg);
+      legUrls.add("http://127.0.0.1:" + leg.getAddress().getPort());
+    }
+    try {
+      com.quonfig.sdk.Options o =
+          com.quonfig.sdk.Options.builder()
+              .sdkKey("itd-init-failure")
+              .apiUrls(legUrls)
+              .streamUrls(legUrls)
+              .initTimeout(java.time.Duration.ofMillis(8000))
+              .fallbackPollEnabled(false)
+              .enableQuonfigUserContext(false)
+              .disableTelemetry(true)
+              .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+              .build();
+      long start = System.nanoTime();
+      QuonfigInitException raised =
+          assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+      long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+      assertFalse(
+          raised instanceof QuonfigInitTimeoutException,
+          "reason unauthorized, not the init timeout");
+      assertEquals(QuonfigInitException.Reason.UNAUTHORIZED, raised.reason());
+      assertTrue(elapsedMs < 4000, "init raised after " + elapsedMs + "ms");
+    } finally {
+      for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "init with on_init_failure fail raises unavailable when only the primary answers 401 and the secondary 503")
+  void initWithOnInitFailureFailRaisesUnavailableWhenOnlyThePrimaryAnswers401AndTheSecondary503()
+      throws Exception {
+    java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
+    java.util.List<String> legUrls = new java.util.ArrayList<>();
+    for (int status : new int[] {401, 503}) {
+      com.sun.net.httpserver.HttpServer leg =
+          com.sun.net.httpserver.HttpServer.create(
+              new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+      leg.createContext(
+          "/",
+          ex -> {
+            ex.sendResponseHeaders(status, -1);
+            ex.close();
+          });
+      leg.start();
+      legs.add(leg);
+      legUrls.add("http://127.0.0.1:" + leg.getAddress().getPort());
+    }
+    try {
+      com.quonfig.sdk.Options o =
+          com.quonfig.sdk.Options.builder()
+              .sdkKey("itd-init-failure")
+              .apiUrls(legUrls)
+              .streamUrls(legUrls)
+              .initTimeout(java.time.Duration.ofMillis(1500))
+              .fallbackPollEnabled(false)
+              .enableQuonfigUserContext(false)
+              .disableTelemetry(true)
+              .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+              .build();
+      long start = System.nanoTime();
+      QuonfigInitException raised =
+          assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+      long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+      assertFalse(
+          raised instanceof QuonfigInitTimeoutException,
+          "reason unavailable, not the init timeout");
+      assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
+      assertTrue(elapsedMs < 6000, "init raised after " + elapsedMs + "ms");
+    } finally {
+      for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "init with init_timeout_ms 0 and on_init_failure fail raises after one attempt when every delivery leg refuses the connection")
+  void
+      initWithInitTimeoutMs0AndOnInitFailureFailRaisesAfterOneAttemptWhenEveryDeliveryLegRefusesTheConnection()
+          throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(0))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertFalse(
+        raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
+    assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @DisplayName(
+      "get_or_raise returns the default after init with init_timeout_ms 0 continues past refused delivery legs")
+  void getOrRaiseReturnsTheDefaultAfterInitWithInitTimeoutMs0ContinuesPastRefusedDeliveryLegs()
+      throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .streamUrls(java.util.List.of("http://127.0.0.1:1", "http://127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(0))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.CONTINUE)
+            .build();
+    try (Quonfig client = new Quonfig(o)) {
+      assertEquals("DEFAULT", client.getString("any-key", "DEFAULT"));
+    }
+  }
+
+  @Test
+  @DisplayName(
+      "init with on_init_failure fail raises the init timeout when every delivery leg hangs past its per-leg abort")
+  void initWithOnInitFailureFailRaisesTheInitTimeoutWhenEveryDeliveryLegHangsPastItsPerLegAbort()
+      throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(java.util.List.of("http://192.0.2.1:8001", "http://192.0.2.1:8002"))
+            .streamUrls(java.util.List.of("http://192.0.2.1:8001", "http://192.0.2.1:8002"))
+            .initTimeout(java.time.Duration.ofMillis(10000))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertTrue(raised instanceof QuonfigInitTimeoutException, raised.toString());
+    assertEquals(QuonfigInitException.Reason.TIMEOUT, raised.reason());
+    assertTrue(elapsedMs < 14000, "init raised after " + elapsedMs + "ms");
+  }
+
+  @Test
+  @DisplayName("init error never carries the userinfo of a delivery URL")
+  void initErrorNeverCarriesTheUserinfoOfADeliveryUrl() throws Exception {
+    com.quonfig.sdk.Options o =
+        com.quonfig.sdk.Options.builder()
+            .sdkKey("itd-init-failure")
+            .apiUrls(
+                java.util.List.of(
+                    "http://qfguser:qfgsecret@127.0.0.1:1", "http://qfguser:qfgsecret@127.0.0.1:2"))
+            .streamUrls(
+                java.util.List.of(
+                    "http://qfguser:qfgsecret@127.0.0.1:1", "http://qfguser:qfgsecret@127.0.0.1:2"))
+            .initTimeout(java.time.Duration.ofMillis(500))
+            .fallbackPollEnabled(false)
+            .enableQuonfigUserContext(false)
+            .disableTelemetry(true)
+            .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+            .build();
+    long start = System.nanoTime();
+    QuonfigInitException raised =
+        assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+    long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+    assertFalse(
+        raised instanceof QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+    assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
+    assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+    java.util.Set<Throwable> seen =
+        java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    for (Throwable e = raised; e != null && seen.add(e); e = e.getCause()) {
+      String m = String.valueOf(e.getMessage());
+      assertFalse(m.contains("qfgsecret"), e.toString());
+      assertFalse(m.contains("qfguser"), e.toString());
+    }
+  }
+
+  @Test
+  @DisplayName("init error never carries an upstream response body")
+  void initErrorNeverCarriesAnUpstreamResponseBody() throws Exception {
+    java.util.List<com.sun.net.httpserver.HttpServer> legs = new java.util.ArrayList<>();
+    java.util.List<String> legUrls = new java.util.ArrayList<>();
+    byte[] legBody =
+        "upstream exploded: qfg-upstream-body-marker"
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    for (int status : new int[] {503, 503}) {
+      com.sun.net.httpserver.HttpServer leg =
+          com.sun.net.httpserver.HttpServer.create(
+              new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+      leg.createContext(
+          "/",
+          ex -> {
+            ex.sendResponseHeaders(status, legBody.length);
+            ex.getResponseBody().write(legBody);
+            ex.close();
+          });
+      leg.start();
+      legs.add(leg);
+      legUrls.add("http://127.0.0.1:" + leg.getAddress().getPort());
+    }
+    try {
+      com.quonfig.sdk.Options o =
+          com.quonfig.sdk.Options.builder()
+              .sdkKey("itd-init-failure")
+              .apiUrls(legUrls)
+              .streamUrls(legUrls)
+              .initTimeout(java.time.Duration.ofMillis(500))
+              .fallbackPollEnabled(false)
+              .enableQuonfigUserContext(false)
+              .disableTelemetry(true)
+              .onInitFailure(com.quonfig.sdk.OnInitFailure.FAIL)
+              .build();
+      long start = System.nanoTime();
+      QuonfigInitException raised =
+          assertThrows(QuonfigInitException.class, () -> new Quonfig(o).close());
+      long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+      assertFalse(
+          raised instanceof QuonfigInitTimeoutException,
+          "reason unavailable, not the init timeout");
+      assertEquals(QuonfigInitException.Reason.UNAVAILABLE, raised.reason());
+      assertTrue(elapsedMs < 5000, "init raised after " + elapsedMs + "ms");
+      java.util.Set<Throwable> seen =
+          java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+      for (Throwable e = raised; e != null && seen.add(e); e = e.getCause()) {
+        String m = String.valueOf(e.getMessage());
+        assertFalse(m.contains("qfg-upstream-body-marker"), e.toString());
+      }
+    } finally {
+      for (com.sun.net.httpserver.HttpServer leg : legs) leg.stop(0);
     }
   }
 
