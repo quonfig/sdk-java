@@ -153,7 +153,8 @@ public final class HttpTransport {
               }
               String excerpt = excerpt(resp.body());
               return CompletableFuture.failedFuture(
-                  new HttpTransportException(sc, excerpt, "HTTP " + sc + " from " + target));
+                  new HttpTransportException(
+                      sc, excerpt, "HTTP " + sc + " from " + redact(target)));
             });
   }
 
@@ -191,7 +192,7 @@ public final class HttpTransport {
                       new HttpTransportException(
                           0,
                           "",
-                          "transport error contacting " + target + ": " + cause,
+                          "transport error contacting " + redact(target) + ": " + cause,
                           cause,
                           legStatuses);
                   return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
@@ -210,7 +211,7 @@ public final class HttpTransport {
                         new HttpTransportException(
                             sc,
                             excerpt,
-                            "HTTP " + sc + " from " + target + ": rejected body",
+                            "HTTP " + sc + " from " + redact(target) + ": rejected body",
                             null,
                             legStatuses);
                     return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
@@ -228,7 +229,7 @@ public final class HttpTransport {
                 String excerpt = excerpt(resp.body());
                 HttpTransportException ex =
                     new HttpTransportException(
-                        sc, excerpt, "HTTP " + sc + " from " + target, null, legStatuses);
+                        sc, excerpt, "HTTP " + sc + " from " + redact(target), null, legStatuses);
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
               }
               return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
@@ -286,6 +287,28 @@ public final class HttpTransport {
       sb.append('?').append(query);
     }
     return URI.create(sb.toString());
+  }
+
+  /**
+   * {@code target} for an error message, with any URL userinfo ({@code user:pass@}) removed, so a
+   * credential embedded in a configured base URL never reaches a log line or an exception message
+   * (design doc decision 9).
+   */
+  static String redact(URI target) {
+    if (target.getRawUserInfo() == null) return target.toString();
+    try {
+      return new URI(
+              target.getScheme(),
+              null,
+              target.getHost(),
+              target.getPort(),
+              target.getPath(),
+              target.getQuery(),
+              target.getFragment())
+          .toString();
+    } catch (java.net.URISyntaxException e) {
+      return target.getScheme() + "://" + target.getHost();
+    }
   }
 
   private static String excerpt(String body) {

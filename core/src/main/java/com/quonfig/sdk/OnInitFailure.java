@@ -13,8 +13,8 @@ package com.quonfig.sdk;
 public enum OnInitFailure {
   /**
    * Throw {@link com.quonfig.sdk.exceptions.QuonfigInitException} at {@code initTimeout} (or at
-   * once when every delivery leg rejects the SDK key with 401/403). The default: an instance that
-   * boots on code defaults runs a different config than the rest of the fleet.
+   * once when every delivery leg rejects the SDK key with 401/403/404/410). The default: an
+   * instance that boots on code defaults runs a different config than the rest of the fleet.
    */
   FAIL,
   /** Keep blocking the constructor, with no upper bound, until a config loads. */

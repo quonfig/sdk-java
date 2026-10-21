@@ -47,6 +47,25 @@
 > modes are unchanged; they load synchronously. sdk-java had no legacy `onInitFailure` spellings,
 > so there are no deprecated aliases.
 
+### Changed (init-failure conformance, qfg-9p4i.17.3)
+
+- **404 and 410 now count as a rejected SDK key at init**, like 401 and 403. When every delivery
+  leg answers one of them, `FAIL` throws `QuonfigInitException` (reason `UNAUTHORIZED`) at once
+  and `CONTINUE` returns at once. One leg alone never decides it.
+- **`initTimeout` of zero or less runs exactly one init attempt**, then applies `onInitFailure`.
+  Before, it decided before any attempt ran (`FAIL` threw "no attempt finished"), and every later
+  background fetch was bounded by the same zero timeout, so the client never healed.
+- **Init log lines and the `QuonfigInitException` message no longer carry URL credentials or the
+  request URL.** The first attempt's errors read `primary=<host:port>: HTTP 503` (or `timed out`),
+  like later attempts. Transport error messages strip `user:pass@` from the URL.
+- **SSE and the fallback poller start at the init decision** under `CONTINUE` and for a caught
+  `FAIL` (the client in `e.client()`), not only once the background retry heals. A config that
+  arrives over SSE, the fallback poller or `refresh()` heals the client at once.
+- **Init log lines carry an `event=quonfig.init.<name>` SLF4J key-value** (SLF4J 2 fluent API; no
+  new dependency). The recovery line names `stream` when SSE delivered the first config.
+- README documents the init contract (`onInitFailure`, `initTimeout`, `QuonfigInitException`,
+  readiness, closing a caught client).
+
 ### Fixed
 
 - **A total init failure no longer leaves a permanently dead client (qfg-9p4i.4, patch).** When

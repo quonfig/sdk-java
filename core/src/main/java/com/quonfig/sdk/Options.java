@@ -329,6 +329,16 @@ public final class Options {
     return environment;
   }
 
+  /**
+   * How long the constructor blocks and retries for the first config before applying {@link
+   * #onInitFailure()} (SDK-key delivery mode). Defaults to {@link #DEFAULT_INIT_TIMEOUT} (10s).
+   *
+   * <p>A zero or negative value runs exactly ONE init attempt (every delivery leg tried once) and
+   * then applies {@code onInitFailure}: {@code FAIL} throws {@link
+   * com.quonfig.sdk.exceptions.QuonfigInitException}, {@code CONTINUE} returns on code defaults
+   * (and the client keeps retrying in the background), {@code WAIT} keeps retrying until a config
+   * loads. It never means "no deadline" and never decides before an attempt has run.
+   */
   public Duration initTimeout() {
     return initTimeout;
   }
@@ -739,6 +749,17 @@ public final class Options {
       return this;
     }
 
+    /**
+     * How long the constructor blocks and retries for the first config before applying {@link
+     * #onInitFailure(OnInitFailure)} (SDK-key delivery mode). Defaults to {@link
+     * Options#DEFAULT_INIT_TIMEOUT} (10s).
+     *
+     * <p>A zero or negative value runs exactly ONE init attempt (every delivery leg tried once) and
+     * then applies {@code onInitFailure}: {@code FAIL} throws {@link
+     * com.quonfig.sdk.exceptions.QuonfigInitException}, {@code CONTINUE} returns on code defaults
+     * (and the client keeps retrying in the background), {@code WAIT} keeps retrying until a config
+     * loads. It never means "no deadline" and never decides before an attempt has run.
+     */
     public Builder initTimeout(Duration v) {
       this.initTimeout = v;
       return this;
