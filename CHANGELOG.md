@@ -73,6 +73,15 @@
   fast while another still hangs, the reason is `UNAVAILABLE`. Before, the reason came from the
   last attempt that had finished. A deadline that lands between attempts still uses the last
   finished attempt.
+- **A finished retry attempt whose primary answered is no longer reported as `TIMEOUT`
+  (qfg-9p4i.17.9, decision 7).** When the deadline fell in the backoff after a retry where the
+  primary answered (for example 401 or 503) and the secondary timed out, the reason was
+  `TIMEOUT`, because the error of the failover walk wraps the secondary's timeout. The reason now
+  comes from each leg's own result: `TIMEOUT` only when every leg timed out, else `UNAVAILABLE`.
+- **Each hedged init leg is bounded by `configFetchHedgeAbort` (default 6s), as documented.**
+  Before, the JDK request timeout `configFetchTimeout` (default 3s) also bounded it, so a primary
+  slower than 3s was cut off during init. `configFetchTimeout` still bounds the sequential
+  retries, `refresh()` and the fallback poller.
 
 ### Fixed
 

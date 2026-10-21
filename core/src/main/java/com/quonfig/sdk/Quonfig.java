@@ -224,6 +224,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** A leg of the in-flight attempt already failed with an answer (not a timeout). */
   private boolean initInFlightLegAnswered;
 
+  /**
+   * Sequence number of the current init attempt. A leg report carries the number of the attempt
+   * that fired it, so a late leg of an earlier attempt never marks the current one as answered.
+   */
+  private int initAttemptSeq;
+
   /** {@link System#nanoTime()} when the in-flight attempt started. */
   private long initInFlightStartNanos;
 
@@ -489,7 +495,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * abort × the number of legs, which is below {@link Options#initTimeout()}.
    */
   private boolean fetchInitialHedged(HttpTransport http) {
-    beginInitAttempt();
+    int attemptSeq = beginInitAttempt();
     long hedgeDelayMs = options.configFetchHedgeDelay().toMillis();
     long hedgeAbortMs = options.configFetchHedgeAbort().toMillis();
     boolean hasSecondary = http.legCount() > 1;
@@ -509,14 +515,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     Map<Integer, Throwable> legErrorByIndex = new java.util.concurrent.ConcurrentSkipListMap<>();
 
     CompletableFuture<Void> primaryLeg =
-        fireHedgeLeg(http, 0, hedgeAbortMs, readyLatched, legErrors, legErrorByIndex);
+        fireHedgeLeg(http, 0, hedgeAbortMs, readyLatched, legErrors, legErrorByIndex, attemptSeq);
 
     if (hasSecondary) {
       Runnable fireSecondary =
           () -> {
             if (secondaryFired.compareAndSet(false, true)) {
               secondaryLeg.set(
-                  fireHedgeLeg(http, 1, hedgeAbortMs, readyLatched, legErrors, legErrorByIndex));
+                  fireHedgeLeg(
+                      http, 1, hedgeAbortMs, readyLatched, legErrors, legErrorByIndex, attemptSeq));
             }
           };
 
@@ -617,12 +624,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       long abortMs,
       java.util.concurrent.atomic.AtomicBoolean readyLatched,
       java.util.List<Throwable> legErrors,
-      Map<Integer, Throwable> legErrorByIndex) {
+      Map<Integer, Throwable> legErrorByIndex,
+      int attemptSeq) {
     // The returned future reflects the RAW leg outcome so the hedge arbiter can distinguish a fast
     // error (hedge now) from a fast success (suppress the hedge): it completes exceptionally on a
     // transport/timeout/decode error and normally on a successful resolve. The install + readiness
     // latch are side effects performed inside thenApply before the success propagates.
-    return http.getFrom(legIndex, URI.create(CONFIGS_PATH), null)
+    // The JDK request timeout is the hedge abort too, so the leg is bounded by hedgeAbort (design
+    // default 6s) and not by the shorter sequential configFetchTimeout (qfg-9p4i.17.9).
+    return http.getFrom(legIndex, URI.create(CONFIGS_PATH), null, Duration.ofMillis(abortMs))
         .orTimeout(abortMs, TimeUnit.MILLISECONDS)
         .thenAccept(
             resp -> {
@@ -662,7 +672,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                 Throwable cause = t.getCause() != null ? t.getCause() : t;
                 legErrors.add(cause);
                 legErrorByIndex.putIfAbsent(legIndex, cause);
-                onInitLegFailed(cause);
+                onInitLegFailed(attemptSeq, cause);
               }
             });
   }
@@ -941,20 +951,35 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** WAIT-mode progress WARN cadence once initTimeout has passed (section C). */
   private static final long WAIT_PROGRESS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
-  /** An init attempt starts: none of its legs has answered yet. */
-  private void beginInitAttempt() {
+  /**
+   * An init attempt starts: none of its legs has answered yet. Returns the attempt's sequence
+   * number, which its leg reports carry (see {@link #onInitLegFailed}).
+   */
+  private int beginInitAttempt() {
     synchronized (initSignal) {
       initAttemptInFlight = true;
       initInFlightLegAnswered = false;
       initInFlightStartNanos = System.nanoTime();
+      return ++initAttemptSeq;
     }
   }
 
-  /** A leg of the in-flight attempt failed; an answer (anything but a timeout) means no hang. */
-  private void onInitLegFailed(Throwable cause) {
+  /**
+   * A leg of attempt {@code attemptSeq} failed. An answer (any status, a rejected body, or a fast
+   * transport error such as a refused connect) means the leg did not hang; a request timeout does.
+   * The cause is the leg's own error, never a wrapper whose cause chain names another leg.
+   */
+  private void onInitLegFailed(int attemptSeq, Throwable cause) {
     if (isTimeout(cause)) return;
     synchronized (initSignal) {
-      initInFlightLegAnswered = true;
+      if (attemptSeq == initAttemptSeq) initInFlightLegAnswered = true;
+    }
+  }
+
+  /** True when no leg of the current attempt has answered: every leg timed out or is pending. */
+  private boolean initAttemptHung() {
+    synchronized (initSignal) {
+      return !initInFlightLegAnswered;
     }
   }
 
@@ -1235,9 +1260,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       }
       if (closed) return;
       attempt++;
-      beginInitAttempt();
+      int attemptSeq = beginInitAttempt();
       try {
-        boolean installed = fetchAndInstallSequential(http, this::onInitLegFailed);
+        boolean installed =
+            fetchAndInstallSequential(http, cause -> onInitLegFailed(attemptSeq, cause));
         recordSuccessfulRefresh();
         if (initialized) {
           healAfterInitFailure(startNanos, installed);
@@ -1252,7 +1278,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         }
         lastErrs = describeSequentialFailure(cause);
         options.logger().debug("[quonfig] init retry {} failed: {}", attempt, lastErrs);
-        onInitAttemptFailed(lastErrs, sequentialAuthStatus(cause), isTimeout(cause));
+        // Hung iff no leg answered (design doc decision 7). Not isTimeout(cause): when the primary
+        // answered 401/503 and the secondary timed out, the walk's error wraps the secondary's
+        // HttpTimeoutException, yet the attempt did not hang (qfg-9p4i.17.9).
+        onInitAttemptFailed(lastErrs, sequentialAuthStatus(cause), initAttemptHung());
       }
       long now = System.nanoTime();
       // Background WARNs start once the constructor has decided (CONTINUE, or a caught FAIL);
