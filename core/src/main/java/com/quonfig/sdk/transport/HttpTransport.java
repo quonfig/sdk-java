@@ -11,6 +11,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /**
@@ -108,8 +109,20 @@ public final class HttpTransport {
    */
   public CompletableFuture<HttpResponse<String>> get(
       URI url, String etag, Predicate<String> acceptBody) {
+    return get(url, etag, acceptBody, null);
+  }
+
+  /**
+   * Like {@link #get(URI, String, Predicate)}, and also reports each leg that fails during the
+   * failover walk to {@code onLegFailed} as it fails: the transport error (a request timeout is a
+   * {@link java.net.http.HttpTimeoutException}), or an {@link HttpTransportException} for an
+   * unusable status or a rejected body. Lets the init loop tell a leg that answered fast from one
+   * still in flight when initTimeout cuts the attempt. {@code null} reports nothing.
+   */
+  public CompletableFuture<HttpResponse<String>> get(
+      URI url, String etag, Predicate<String> acceptBody, Consumer<Throwable> onLegFailed) {
     Objects.requireNonNull(url, "url");
-    return tryFrom(url, etag, "GET", null, 0, acceptBody, new int[baseUrls.size()])
+    return tryFrom(url, etag, "GET", null, 0, acceptBody, new int[baseUrls.size()], onLegFailed)
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
@@ -162,7 +175,7 @@ public final class HttpTransport {
   public CompletableFuture<HttpResponse<String>> post(URI url, String body) {
     Objects.requireNonNull(url, "url");
     Objects.requireNonNull(body, "body");
-    return tryFrom(url, null, "POST", body, 0, null, new int[baseUrls.size()])
+    return tryFrom(url, null, "POST", body, 0, null, new int[baseUrls.size()], null)
         .orTimeout(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
   }
 
@@ -178,7 +191,8 @@ public final class HttpTransport {
       String body,
       int idx,
       Predicate<String> acceptBody,
-      int[] legStatuses) {
+      int[] legStatuses,
+      Consumer<Throwable> onLegFailed) {
     URI target = rebase(baseUrls.get(idx), input);
     HttpRequest req = buildRequest(target, method, body, etag);
     return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
@@ -186,8 +200,9 @@ public final class HttpTransport {
             (resp, t) -> {
               boolean isLast = idx + 1 >= baseUrls.size();
               if (t != null) {
+                Throwable cause = t.getCause() != null ? t.getCause() : t;
+                reportLegFailed(onLegFailed, cause);
                 if (isLast) {
-                  Throwable cause = t.getCause() != null ? t.getCause() : t;
                   HttpTransportException ex =
                       new HttpTransportException(
                           0,
@@ -197,7 +212,8 @@ public final class HttpTransport {
                           legStatuses);
                   return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
                 }
-                return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
+                return tryFrom(
+                    input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
               }
               int sc = resp.statusCode();
               legStatuses[idx] = sc;
@@ -205,18 +221,19 @@ public final class HttpTransport {
                 if (acceptBody != null && !accepts(acceptBody, resp.body())) {
                   // A 2xx the caller can't use (e.g. not a config envelope) is a leg error, so the
                   // walk fails over just as it would on a 5xx (qfg-9dxb.3).
+                  HttpTransportException ex =
+                      new HttpTransportException(
+                          sc,
+                          excerpt(resp.body()),
+                          "HTTP " + sc + " from " + redact(target) + ": rejected body",
+                          null,
+                          legStatuses);
+                  reportLegFailed(onLegFailed, ex);
                   if (isLast) {
-                    String excerpt = excerpt(resp.body());
-                    HttpTransportException ex =
-                        new HttpTransportException(
-                            sc,
-                            excerpt,
-                            "HTTP " + sc + " from " + redact(target) + ": rejected body",
-                            null,
-                            legStatuses);
                     return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
                   }
-                  return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
+                  return tryFrom(
+                      input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
                 }
                 lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
@@ -225,16 +242,30 @@ public final class HttpTransport {
                 lastResolvedIndex = idx;
                 return CompletableFuture.completedFuture(resp);
               }
+              HttpTransportException ex =
+                  new HttpTransportException(
+                      sc,
+                      excerpt(resp.body()),
+                      "HTTP " + sc + " from " + redact(target),
+                      null,
+                      legStatuses);
+              reportLegFailed(onLegFailed, ex);
               if (isLast) {
-                String excerpt = excerpt(resp.body());
-                HttpTransportException ex =
-                    new HttpTransportException(
-                        sc, excerpt, "HTTP " + sc + " from " + redact(target), null, legStatuses);
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
               }
-              return tryFrom(input, etag, method, body, idx + 1, acceptBody, legStatuses);
+              return tryFrom(
+                  input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
             })
         .thenCompose(f -> f);
+  }
+
+  private static void reportLegFailed(Consumer<Throwable> onLegFailed, Throwable cause) {
+    if (onLegFailed == null) return;
+    try {
+      onLegFailed.accept(cause);
+    } catch (RuntimeException ignored) {
+      // A listener must never break the failover walk.
+    }
   }
 
   private static boolean accepts(Predicate<String> acceptBody, String body) {

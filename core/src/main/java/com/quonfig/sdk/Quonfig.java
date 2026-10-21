@@ -215,6 +215,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** Every leg of the latest failed attempt timed out (no answer), as opposed to failing fast. */
   private boolean initLastAttemptTimedOut;
 
+  /**
+   * An init attempt is running and has not finished. When initTimeout cuts it, it is the last
+   * attempt (design doc decision 10): {@code timeout} unless one of its legs already answered.
+   */
+  private boolean initAttemptInFlight;
+
+  /** A leg of the in-flight attempt already failed with an answer (not a timeout). */
+  private boolean initInFlightLegAnswered;
+
+  /** {@link System#nanoTime()} when the in-flight attempt started. */
+  private long initInFlightStartNanos;
+
   /** The constructor has finished its init decision (returned or thrown). */
   private volatile boolean initDecided;
 
@@ -477,6 +489,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * abort × the number of legs, which is below {@link Options#initTimeout()}.
    */
   private boolean fetchInitialHedged(HttpTransport http) {
+    beginInitAttempt();
     long hedgeDelayMs = options.configFetchHedgeDelay().toMillis();
     long hedgeAbortMs = options.configFetchHedgeAbort().toMillis();
     boolean hasSecondary = http.legCount() > 1;
@@ -649,6 +662,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                 Throwable cause = t.getCause() != null ? t.getCause() : t;
                 legErrors.add(cause);
                 legErrorByIndex.putIfAbsent(legIndex, cause);
+                onInitLegFailed(cause);
               }
             });
   }
@@ -686,6 +700,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * every leg failed.
    */
   private boolean fetchAndInstallSequential(HttpTransport http) throws Exception {
+    return fetchAndInstallSequential(http, null);
+  }
+
+  /** {@code onLegFailed} sees each leg that fails during the walk (see {@link HttpTransport}). */
+  private boolean fetchAndInstallSequential(
+      HttpTransport http, java.util.function.Consumer<Throwable> onLegFailed) throws Exception {
     java.util.concurrent.atomic.AtomicReference<ConfigEnvelope> parsed =
         new java.util.concurrent.atomic.AtomicReference<>();
     HttpResponse<String> resp =
@@ -702,7 +722,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
                         .debug("quonfig: rejecting config response body: {}", e.getMessage());
                     return false;
                   }
-                })
+                },
+                onLegFailed)
             .get(fetchBudget(options).toMillis(), TimeUnit.MILLISECONDS);
     if (resp.statusCode() == 304) {
       return false;
@@ -920,6 +941,37 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /** WAIT-mode progress WARN cadence once initTimeout has passed (section C). */
   private static final long WAIT_PROGRESS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
+  /** An init attempt starts: none of its legs has answered yet. */
+  private void beginInitAttempt() {
+    synchronized (initSignal) {
+      initAttemptInFlight = true;
+      initInFlightLegAnswered = false;
+      initInFlightStartNanos = System.nanoTime();
+    }
+  }
+
+  /** A leg of the in-flight attempt failed; an answer (anything but a timeout) means no hang. */
+  private void onInitLegFailed(Throwable cause) {
+    if (isTimeout(cause)) return;
+    synchronized (initSignal) {
+      initInFlightLegAnswered = true;
+    }
+  }
+
+  /**
+   * The reason for a failed init at the deadline (design doc decisions 7 and 10, the sdk-go rule):
+   * {@code timeout} when the last attempt hung or none completed, else {@code unavailable}. An
+   * attempt the deadline cuts while still in flight is the last attempt: it hung unless one of its
+   * legs already answered. An attempt that started at or after the deadline (the retry loop can
+   * begin one before this thread wakes) does not count. Caller holds {@link #initSignal}.
+   */
+  private QuonfigInitException.Reason deadlineReason(long deadline) {
+    boolean cut = initAttemptInFlight && initInFlightStartNanos - deadline < 0;
+    boolean hung =
+        cut ? !initInFlightLegAnswered : initAttemptsFailed == 0 || initLastAttemptTimedOut;
+    return hung ? QuonfigInitException.Reason.TIMEOUT : QuonfigInitException.Reason.UNAVAILABLE;
+  }
+
   /**
    * Records one failed init attempt (every fired leg failed) and wakes the blocking constructor.
    * {@code authStatus} is 401/403 when every leg rejected the SDK key, else 0. The first failure
@@ -935,6 +987,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       initAuthRejected = isAuthClassStatus(authStatus);
       initAuthStatus = authStatus;
       initLastAttemptTimedOut = timedOut;
+      initAttemptInFlight = false;
       initSignal.notifyAll();
     }
     if (attempts == 1 && !initDecided && !closed) {
@@ -995,10 +1048,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           }
           boolean pastDeadline = oneAttempt ? initAttemptsFailed > 0 : now - deadline >= 0;
           if (pastDeadline && mode != OnInitFailure.WAIT) {
-            QuonfigInitException.Reason reason =
-                initAttemptsFailed == 0 || initLastAttemptTimedOut
-                    ? QuonfigInitException.Reason.TIMEOUT
-                    : QuonfigInitException.Reason.UNAVAILABLE;
+            QuonfigInitException.Reason reason = deadlineReason(deadline);
             if (mode == OnInitFailure.FAIL) throw initFailed(reason, now);
             continueOnDefaults(reason, now);
             return;
@@ -1185,8 +1235,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       }
       if (closed) return;
       attempt++;
+      beginInitAttempt();
       try {
-        boolean installed = fetchAndInstallSequential(http);
+        boolean installed = fetchAndInstallSequential(http, this::onInitLegFailed);
         recordSuccessfulRefresh();
         if (initialized) {
           healAfterInitFailure(startNanos, installed);
