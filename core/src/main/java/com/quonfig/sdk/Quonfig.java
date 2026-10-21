@@ -225,6 +225,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final java.util.concurrent.atomic.AtomicBoolean initHealed =
       new java.util.concurrent.atomic.AtomicBoolean();
 
+  /**
+   * The SLF4J 2 fluent API is usable; cleared on the first LinkageError (slf4j-api 1.x at runtime),
+   * after which init lines use the classic calls with an {@code event=} prefix.
+   */
+  private volatile boolean fluentInitLogging = true;
+
   /** SSE + the fallback poller have been started (startSse runs once). */
   private final java.util.concurrent.atomic.AtomicBoolean sseStarted =
       new java.util.concurrent.atomic.AtomicBoolean();
@@ -1266,7 +1272,35 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * fluent API; a logger without key-value support prints it as a {@code event=...} prefix).
    */
   private void initLog(Level level, String event, String format, Object... args) {
-    options.logger().atLevel(level).addKeyValue("event", "quonfig.init." + event).log(format, args);
+    String ev = "quonfig.init." + event;
+    org.slf4j.Logger log = options.logger();
+    if (fluentInitLogging) {
+      try {
+        log.atLevel(level).addKeyValue("event", ev).log(format, args);
+        return;
+      } catch (LinkageError e) {
+        // slf4j-api 1.x won the classpath (e.g. pinned by a Spring Boot 2 BOM): there is no
+        // fluent API at runtime. Never let a log line break construction; use the classic calls.
+        fluentInitLogging = false;
+      }
+    }
+    String f = "event=" + ev + " " + format;
+    switch (level) {
+      case ERROR:
+        log.error(f, args);
+        break;
+      case WARN:
+        log.warn(f, args);
+        break;
+      case INFO:
+        log.info(f, args);
+        break;
+      case DEBUG:
+        log.debug(f, args);
+        break;
+      default:
+        log.trace(f, args);
+    }
   }
 
   /** {@code initTimeout <= 0}: run exactly one attempt, then apply onInitFailure (decision 8). */

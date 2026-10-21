@@ -393,4 +393,30 @@ class InitConformanceTest {
     clients.add(q2);
     assertTrue(logged(logger2, Level.ERROR, "event=quonfig.init.continue"), "" + logger2.entries);
   }
+
+  /**
+   * A logger linked against SLF4J 1.x: {@code atLevel} does not exist at runtime. Apps that pin
+   * slf4j-api 1.7 (e.g. through the Spring Boot 2 BOM) resolve it over our 2.0 dependency, and the
+   * fluent call then throws a LinkageError.
+   */
+  static final class Slf4j1Logger extends RecordingLogger {
+    @Override
+    public org.slf4j.spi.LoggingEventBuilder atLevel(Level level) {
+      throw new NoSuchMethodError("org.slf4j.Logger.atLevel(Lorg/slf4j/event/Level;)");
+    }
+  }
+
+  @Test
+  void i7_slf4j1Classpath_initStillWorks_andLinesCarryTheEvent() throws Exception {
+    RecordingLogger logger = new Slf4j1Logger();
+    Options o =
+        options(server(new AtomicInteger(503)), logger, Duration.ofMillis(300))
+            .onInitFailure(OnInitFailure.CONTINUE)
+            .build();
+    Quonfig q = new Quonfig(o);
+    clients.add(q);
+    assertFalse(q.isReady());
+    assertTrue(logged(logger, Level.DEBUG, "event=quonfig.init.start"), "" + logger.entries);
+    assertTrue(logged(logger, Level.ERROR, "event=quonfig.init.continue"), "" + logger.entries);
+  }
 }

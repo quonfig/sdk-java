@@ -109,7 +109,7 @@ class ApiUrlsFailoverWarnTest {
   }
 
   /** Minimal SLF4J logger capturing each call as (level, message-pattern, stringified-args). */
-  static final class RecordingLogger extends AbstractLogger {
+  static class RecordingLogger extends AbstractLogger {
     final List<Entry> entries = new CopyOnWriteArrayList<>();
 
     static final class Entry {

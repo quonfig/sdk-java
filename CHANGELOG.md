@@ -62,7 +62,9 @@
   `FAIL` (the client in `e.client()`), not only once the background retry heals. A config that
   arrives over SSE, the fallback poller or `refresh()` heals the client at once.
 - **Init log lines carry an `event=quonfig.init.<name>` SLF4J key-value** (SLF4J 2 fluent API; no
-  new dependency). The recovery line names `stream` when SSE delivered the first config.
+  new dependency). When an app pins slf4j-api 1.x at runtime, they fall back to the classic calls
+  with an `event=...` message prefix instead of failing construction. The recovery line names
+  `stream` when SSE delivered the first config.
 - README documents the init contract (`onInitFailure`, `initTimeout`, `QuonfigInitException`,
   readiness, closing a caught client).
 
