@@ -4,10 +4,9 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.Version;
 import com.quonfig.sdk.wire.ConfigEnvelope;
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -71,7 +70,19 @@ import org.slf4j.LoggerFactory;
  */
 public final class SseClient {
 
-  private static final Logger log = LoggerFactory.getLogger(SseClient.class);
+  /**
+   * Size-caps rule (ITD supervisor contract, qfg-6vno.20.2): at most this many bytes are buffered
+   * for one SSE event, counting every line of the block (so any single line and the joined
+   * multi-line {@code data:} are both capped). Reading stops at the cap, even for a line with no
+   * terminator. An event over the cap is not a frame and the connection is a failed attempt. A
+   * constant, not an option.
+   */
+  static final int MAX_EVENT_BYTES = 4 * 1024 * 1024;
+
+  /** How much of a non-200 SSE response body is drained before giving up on it. */
+  private static final int MAX_ERROR_DRAIN = 1024;
+
+  private final Logger log;
 
   /**
    * Ignores unknown properties so an additive server field (top-level or in {@code meta}) never
@@ -121,7 +132,7 @@ public final class SseClient {
   private volatile boolean connected;
 
   // Tracks the currently-open SSE body stream so stop() can force a read to
-  // unblock. BufferedReader.readLine() on a socket-backed stream does NOT
+  // unblock. A blocking read on a socket-backed stream does NOT
   // respond to Thread.interrupt(); the only reliable wakeup is to close the
   // underlying InputStream.
   private volatile InputStream activeBody;
@@ -138,6 +149,12 @@ public final class SseClient {
   private int pendingStreamIndex;
   private boolean frameSeen;
 
+  // Oversized-event episode (size-caps rule): set by the first event over MAX_EVENT_BYTES, cleared
+  // by the next valid envelope. While set, a keepalive is not a frame, so a connection that only
+  // re-delivers the oversized event never reports connected and the fallback poller keeps
+  // freshness. Also gates the WARN to one per episode. Loop thread only.
+  private boolean oversized;
+
   private SseClient(Builder b) {
     Objects.requireNonNull(b.streamUrls, "streamUrls");
     if (b.streamUrls.isEmpty()) {
@@ -153,6 +170,7 @@ public final class SseClient {
     // Independent of readWatchdog on purpose (qfg-rriw); see awaitHeaders.
     this.headerTimeout = b.headerTimeout != null ? b.headerTimeout : DEFAULT_HEADER_TIMEOUT;
     this.waitHook = b.waitHook;
+    this.log = b.logger != null ? b.logger : LoggerFactory.getLogger(SseClient.class);
     this.connectAttempts = b.connectAttempts != null ? b.connectAttempts : new AtomicLong();
     this.workerRestarts = b.workerRestarts != null ? b.workerRestarts : new AtomicLong();
     this.watchdogExecutor =
@@ -371,7 +389,7 @@ public final class SseClient {
         // treated like a transport error — a key rotation will be picked up on
         // the next reconnect cycle.
         try {
-          body.readNBytes(4096);
+          body.readNBytes(MAX_ERROR_DRAIN);
         } catch (IOException ignored) {
           // ignored
         }
@@ -388,6 +406,23 @@ public final class SseClient {
         setConnected(false);
         connectedStreamIndex = -1;
       }
+    } catch (OversizedEventException e) {
+      // Over the event cap: not a frame, and the connection is a failed attempt even if an
+      // earlier frame on it connected, so backoff keeps growing (size-caps rule).
+      if (!oversized) {
+        oversized = true;
+        log.warn(
+            "SSE: event from {} exceeds the maximum size of {} bytes; dropping it and backing off"
+                + " (fallback polling will take over)",
+            HttpTransport.redact(target),
+            MAX_EVENT_BYTES);
+      } else {
+        log.debug(
+            "SSE: event from {} still exceeds the maximum size of {} bytes",
+            HttpTransport.redact(target),
+            MAX_EVENT_BYTES);
+      }
+      return false;
     } catch (IOException e) {
       // Stream errored mid-read (or the watchdog closed it). Normal recycling only if this
       // session delivered a frame; a frameless 200 is a failed attempt.
@@ -474,8 +509,11 @@ public final class SseClient {
    */
   boolean parseStream(InputStream in) throws IOException {
     frameSeen = false;
-    BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+    BoundedLineReader reader = new BoundedLineReader(in);
     StringBuilder dataBuf = new StringBuilder();
+    // Bytes of the current block (every line since the last blank line), capped at
+    // MAX_EVENT_BYTES: the reader stops reading a line at the remaining budget.
+    int blockBytes = 0;
     // Per-block flags, reset on each blank line.
     boolean sawComment = false;
     boolean sawField = false;
@@ -489,7 +527,7 @@ public final class SseClient {
     try {
       watchdog.set(scheduleWatchdog(in));
       String line;
-      while ((line = reader.readLine()) != null) {
+      while ((line = reader.readLine(MAX_EVENT_BYTES - blockBytes)) != null) {
         ScheduledFuture<?> prev = watchdog.getAndSet(scheduleWatchdog(in));
         if (prev != null) {
           prev.cancel(false);
@@ -501,12 +539,19 @@ public final class SseClient {
           if (dataBuf.length() > 0) {
             flush(dataBuf);
           } else if (sawComment && !sawField) {
-            markFrame();
+            if (oversized) {
+              // A keepalive alone does not end an oversized episode; only an envelope does.
+              log.debug("SSE: keepalive during an oversized-event episode; not connected");
+            } else {
+              markFrame();
+            }
           }
           sawComment = false;
           sawField = false;
+          blockBytes = 0;
           continue;
         }
+        blockBytes += reader.lastLineBytes();
         if (line.charAt(0) == ':') {
           sawComment = true;
           continue;
@@ -576,7 +621,9 @@ public final class SseClient {
       log.warn("SSE: discarding non-envelope payload (missing meta.version)");
       return;
     }
-    // A valid envelope is a frame: raise the connected edge before the install sees it.
+    // A valid envelope is a frame: raise the connected edge before the install sees it. It also
+    // ends any oversized-event episode.
+    oversized = false;
     markFrame();
     Consumer<ConfigEnvelope> cb = envelopeHandler;
     if (cb == null) {
@@ -586,6 +633,90 @@ public final class SseClient {
       cb.accept(env);
     } catch (RuntimeException e) {
       log.warn("SSE: onEnvelope handler threw: {}", e.getMessage());
+    }
+  }
+
+  /** An SSE event over {@link #MAX_EVENT_BYTES}; internal to the read loop. */
+  static final class OversizedEventException extends IOException {
+    private static final long serialVersionUID = 1L;
+
+    OversizedEventException() {
+      super("SSE event exceeds " + MAX_EVENT_BYTES + " bytes");
+    }
+  }
+
+  /**
+   * Line reader over the raw body with a per-call byte limit (size-caps rule). Splits on {@code
+   * \n}, {@code \r} and {@code \r\n} like {@link java.io.BufferedReader#readLine()}, but throws
+   * {@link OversizedEventException} as soon as a line passes the limit instead of buffering it
+   * whole, so a line with no terminator holds at most the limit plus one read chunk.
+   */
+  static final class BoundedLineReader {
+    private final InputStream in;
+    private final byte[] buf = new byte[8192];
+    private final ByteArrayOutputStream line = new ByteArrayOutputStream();
+    private int pos;
+    private int lim;
+    private boolean skipLf;
+    private int lastLineBytes;
+
+    BoundedLineReader(InputStream in) {
+      this.in = in;
+    }
+
+    /** Bytes of the line the last {@link #readLine(int)} returned, terminator excluded. */
+    int lastLineBytes() {
+      return lastLineBytes;
+    }
+
+    /**
+     * Next line without its terminator, or {@code null} at EOF. A last line without a terminator is
+     * returned at EOF, as {@code BufferedReader} does.
+     */
+    String readLine(int maxBytes) throws IOException {
+      line.reset();
+      while (true) {
+        if (pos >= lim) {
+          int n = in.read(buf);
+          if (n < 0) {
+            return line.size() > 0 ? finish() : null;
+          }
+          pos = 0;
+          lim = n;
+          continue;
+        }
+        if (skipLf) {
+          skipLf = false;
+          if (buf[pos] == '\n') {
+            pos++;
+            continue;
+          }
+        }
+        int start = pos;
+        while (pos < lim) {
+          byte c = buf[pos];
+          if (c == '\n' || c == '\r') {
+            append(start, pos - start, maxBytes);
+            pos++;
+            skipLf = c == '\r';
+            return finish();
+          }
+          pos++;
+        }
+        append(start, pos - start, maxBytes);
+      }
+    }
+
+    private void append(int off, int len, int maxBytes) throws OversizedEventException {
+      if (line.size() + len > maxBytes) {
+        throw new OversizedEventException();
+      }
+      line.write(buf, off, len);
+    }
+
+    private String finish() {
+      lastLineBytes = line.size();
+      return new String(line.toByteArray(), StandardCharsets.UTF_8);
     }
   }
 
@@ -641,6 +772,7 @@ public final class SseClient {
     private BiFunction<String, Duration, Duration> waitHook;
     private AtomicLong connectAttempts;
     private AtomicLong workerRestarts;
+    private Logger logger;
 
     /**
      * Primary stream URL first. Only the first entry is ever dialed — the stream is pinned to the
@@ -720,6 +852,12 @@ public final class SseClient {
     public Builder counters(AtomicLong connectAttempts, AtomicLong workerRestarts) {
       this.connectAttempts = connectAttempts;
       this.workerRestarts = workerRestarts;
+      return this;
+    }
+
+    /** Test seam: where SSE log lines go. Defaults to this class's SLF4J logger. */
+    Builder logger(Logger logger) {
+      this.logger = logger;
       return this;
     }
 

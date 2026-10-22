@@ -11,8 +11,11 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * HTTP transport for api-delivery (config fetch + GETs with ETag) and api-telemetry (POST). Uses
@@ -32,8 +35,19 @@ import java.util.function.Predicate;
  */
 public final class HttpTransport {
 
-  /** Body excerpt is capped to keep error allocations bounded. */
-  static final int MAX_BODY_EXCERPT = 8192;
+  /**
+   * At most this many bytes of a non-2xx body are ever read, and they are what {@link
+   * HttpTransportException#bodyExcerpt()} exposes. Never logged, never in a message (size-caps
+   * rule, qfg-6vno.20.2; was 8 KiB, read after buffering the whole body).
+   */
+  static final int MAX_BODY_EXCERPT = 1024;
+
+  /**
+   * Size-caps rule (ITD supervisor contract, qfg-6vno.20.2): a 2xx body over this many bytes is a
+   * failed leg, exactly like a 5xx. A {@code Content-Length} over the cap fails before the body is
+   * read; otherwise reading stops at cap + 1. A constant, not an option.
+   */
+  static final int MAX_CONFIG_BODY_BYTES = 16 * 1024 * 1024;
 
   /**
    * Default per-URL config-fetch deadline. Bounds a single attempt against one base URL so a hung
@@ -48,6 +62,13 @@ public final class HttpTransport {
   private final String authHeader;
   private final Duration timeout;
   private final Duration configFetchTimeout;
+  private final Logger log;
+
+  /**
+   * Per base URL: whether that leg is in an oversized-body episode. The first oversized body of an
+   * episode logs one WARN, repeats log at DEBUG; the next accepted 2xx from that leg ends it.
+   */
+  private final AtomicBoolean[] oversizedEpisode;
 
   /**
    * Index into {@link #baseUrls} of the base URL that produced the most recent successful (2xx/304)
@@ -74,6 +95,9 @@ public final class HttpTransport {
     String creds = "1:" + b.sdkKey;
     this.authHeader =
         "Basic " + Base64.getEncoder().encodeToString(creds.getBytes(StandardCharsets.UTF_8));
+    this.log = b.logger != null ? b.logger : LoggerFactory.getLogger(HttpTransport.class);
+    this.oversizedEpisode = new AtomicBoolean[baseUrls.size()];
+    for (int i = 0; i < oversizedEpisode.length; i++) oversizedEpisode[i] = new AtomicBoolean();
   }
 
   public static Builder builder() {
@@ -177,18 +201,33 @@ public final class HttpTransport {
             requestTimeout != null && requestTimeout.compareTo(Duration.ZERO) > 0
                 ? requestTimeout
                 : configFetchTimeout);
-    return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
-        .thenCompose(
-            resp -> {
+    return http.sendAsync(req, CappedBody.HANDLER)
+        .handle(
+            (resp, t) -> {
+              if (t != null) {
+                Throwable cause = t.getCause() != null ? t.getCause() : t;
+                if (cause instanceof BodyTooLargeException) {
+                  int status = ((BodyTooLargeException) cause).statusCode();
+                  noteOversized(legIndex, target);
+                  return CompletableFuture.<HttpResponse<String>>failedFuture(
+                      new HttpTransportException(
+                          status,
+                          "",
+                          "HTTP " + status + " from " + redact(target) + ": " + cause.getMessage(),
+                          cause));
+                }
+                return CompletableFuture.<HttpResponse<String>>failedFuture(t);
+              }
               int sc = resp.statusCode();
               if ((sc >= 200 && sc < 300) || sc == 304) {
+                if (sc != 304) oversizedEpisode[legIndex].set(false);
                 return CompletableFuture.completedFuture(resp);
               }
-              String excerpt = excerpt(resp.body());
-              return CompletableFuture.failedFuture(
+              return CompletableFuture.<HttpResponse<String>>failedFuture(
                   new HttpTransportException(
-                      sc, excerpt, "HTTP " + sc + " from " + redact(target)));
-            });
+                      sc, resp.body(), "HTTP " + sc + " from " + redact(target)));
+            })
+        .thenCompose(f -> f);
   }
 
   /** POSTs {@code body} to {@code url}. Same path/host semantics as {@link #get(URI, String)}. */
@@ -215,12 +254,32 @@ public final class HttpTransport {
       Consumer<Throwable> onLegFailed) {
     URI target = rebase(baseUrls.get(idx), input);
     HttpRequest req = buildRequest(target, method, body, etag);
-    return http.sendAsync(req, HttpResponse.BodyHandlers.ofString())
+    return http.sendAsync(req, CappedBody.HANDLER)
         .handle(
             (resp, t) -> {
               boolean isLast = idx + 1 >= baseUrls.size();
               if (t != null) {
                 Throwable cause = t.getCause() != null ? t.getCause() : t;
+                if (cause instanceof BodyTooLargeException) {
+                  // Over the body cap: a failed leg exactly like a 5xx (size-caps rule). Nothing
+                  // was handed to the caller, so nothing installs and no ETag is kept.
+                  int status = ((BodyTooLargeException) cause).statusCode();
+                  legStatuses[idx] = status;
+                  noteOversized(idx, target);
+                  HttpTransportException ex =
+                      new HttpTransportException(
+                          status,
+                          "",
+                          "HTTP " + status + " from " + redact(target) + ": " + cause.getMessage(),
+                          cause,
+                          legStatuses);
+                  reportLegFailed(onLegFailed, ex);
+                  if (isLast) {
+                    return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
+                  }
+                  return tryFrom(
+                      input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
+                }
                 reportLegFailed(onLegFailed, cause);
                 if (isLast) {
                   HttpTransportException ex =
@@ -256,6 +315,7 @@ public final class HttpTransport {
                       input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
                 }
                 lastResolvedIndex = idx;
+                oversizedEpisode[idx].set(false);
                 return CompletableFuture.completedFuture(resp);
               }
               if ("GET".equals(method) && sc == 304) {
@@ -264,11 +324,7 @@ public final class HttpTransport {
               }
               HttpTransportException ex =
                   new HttpTransportException(
-                      sc,
-                      excerpt(resp.body()),
-                      "HTTP " + sc + " from " + redact(target),
-                      null,
-                      legStatuses);
+                      sc, resp.body(), "HTTP " + sc + " from " + redact(target), null, legStatuses);
               reportLegFailed(onLegFailed, ex);
               if (isLast) {
                 return CompletableFuture.<HttpResponse<String>>failedFuture(ex);
@@ -277,6 +333,22 @@ public final class HttpTransport {
                   input, etag, method, body, idx + 1, acceptBody, legStatuses, onLegFailed);
             })
         .thenCompose(f -> f);
+  }
+
+  /** One WARN per oversized episode on leg {@code idx}; repeats at DEBUG (size-caps rule). */
+  private void noteOversized(int idx, URI target) {
+    if (oversizedEpisode[idx].compareAndSet(false, true)) {
+      log.warn(
+          "[quonfig] config response from {} exceeds the maximum size of {} bytes; failing this"
+              + " leg (nothing installed)",
+          redact(target),
+          MAX_CONFIG_BODY_BYTES);
+    } else {
+      log.debug(
+          "[quonfig] config response from {} still exceeds the maximum size of {} bytes",
+          redact(target),
+          MAX_CONFIG_BODY_BYTES);
+    }
   }
 
   private static void reportLegFailed(Consumer<Throwable> onLegFailed, Throwable cause) {
@@ -367,10 +439,15 @@ public final class HttpTransport {
     }
   }
 
+  /**
+   * A rejected 2xx body is already in memory (under the body cap); keep at most {@link
+   * #MAX_BODY_EXCERPT} UTF-8 bytes of it for {@link HttpTransportException#bodyExcerpt()}.
+   */
   private static String excerpt(String body) {
     if (body == null) return "";
-    if (body.length() <= MAX_BODY_EXCERPT) return body;
-    return body.substring(0, MAX_BODY_EXCERPT);
+    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length <= MAX_BODY_EXCERPT) return body;
+    return CappedBody.decodePrefix(bytes, MAX_BODY_EXCERPT);
   }
 
   /** Builder for {@link HttpTransport}. */
@@ -380,6 +457,7 @@ public final class HttpTransport {
     private Duration timeout;
     private Duration configFetchTimeout;
     private HttpClient httpClient;
+    private Logger logger;
 
     public Builder urls(List<URI> urls) {
       this.urls = urls;
@@ -408,6 +486,12 @@ public final class HttpTransport {
 
     public Builder httpClient(HttpClient httpClient) {
       this.httpClient = httpClient;
+      return this;
+    }
+
+    /** Test seam: where the size-cap WARN goes. Defaults to this class's SLF4J logger. */
+    Builder logger(Logger logger) {
+      this.logger = logger;
       return this;
     }
 

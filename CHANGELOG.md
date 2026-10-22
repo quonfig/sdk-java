@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Changed (size caps, qfg-6vno.20.2)
+
+- **SSE events are capped at 4 MiB (4,194,304 bytes).** The stream reader stops
+  reading at the cap, even for a line with no terminator, and counts every line
+  of an event, so a joined multi-line `data:` is capped too. Before, one huge or
+  unterminated event was buffered whole and could throw `OutOfMemoryError`, and
+  every reconnect re-read it. An event over the cap is dropped and the
+  connection counts as a failed attempt (backoff grows). Later connections that
+  deliver only that event, with or without keepalives, do not report
+  `connected`, so the fallback poller keeps the config fresh over HTTP. The
+  next valid envelope ends the episode. One WARN names the stream host and the
+  cap per episode; repeats log at DEBUG.
+- **Config response bodies are capped at 16 MiB (16,777,216 bytes).** A 2xx
+  whose `Content-Length` is over the cap fails before the body is read;
+  otherwise the read stops at cap + 1. The leg fails exactly like a 5xx: the
+  walk and the init hedge fail over, nothing installs, and
+  `lastSuccessfulRefresh()` does not advance. One WARN per leg per episode;
+  repeats log at DEBUG.
+- **Non-2xx bodies are read at most 1 KiB** (SSE and HTTP) and are never logged
+  or put in an error message. Before, the HTTP transport read the whole body
+  and then kept 8 KiB of it.
+- **UPGRADE:** `HttpTransportException.bodyExcerpt()` now holds at most 1 KiB of
+  the body (was 8 KiB). Code that parsed a longer upstream error body out of
+  the excerpt sees a shorter string.
+- The caps are constants, not options (supervisor contract "Rule — size caps"
+  and Test 10, integration-test-data `v2026.10.22.2`).
+
 ### Fixed
 
 - A boot the secondary delivery leg rescues (the primary refuses, the hedge
