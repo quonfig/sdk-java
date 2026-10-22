@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Changed (callback errors, qfg-6vno.28)
+
+- **A throwing user callback is no longer counted as a worker restart.** The
+  internal `quonfig_sdk_worker_restart_total{layer="1"}` counted every
+  `onConfigUpdate` throw the SDK caught; it now counts only real SSE worker
+  restarts. Caught throws are counted in a new internal
+  `quonfig_sdk_callback_errors_total{callback}` (`on_config_update`,
+  `on_connection_state_change`). Both counters are test seams, not public API
+  (supervisor contract Test 5, integration-test-data `v2026.10.22.2`).
+- **An `onSseConnectionStateChange` listener that throws is now logged** at
+  ERROR with its stack trace (`quonfig: onConnectionStateChange callback threw;
+  SDK continuing`). Before, the throw was swallowed silently. The other
+  listeners still run, as before.
+- Both callback paths now catch `Exception`, not only `RuntimeException`, so a
+  sneaky-thrown checked exception is isolated too. An `Error` still propagates.
+
 ### Changed (size caps, qfg-6vno.20.2)
 
 - **SSE events are capped at 4 MiB (4,194,304 bytes).** The stream reader stops

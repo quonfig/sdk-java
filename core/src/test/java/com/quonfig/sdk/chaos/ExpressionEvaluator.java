@@ -64,7 +64,7 @@ final class ExpressionEvaluator {
           "^client\\.lastSuccessfulRefresh\\(\\)\\s*(>=|>|<=|<|==)\\s*\\(now\\(\\)\\s*-\\s*(\\d+)\\)$");
   private static final Pattern RE_SDK_METRIC =
       Pattern.compile(
-          "^client\\.sdkMetric\\(\\s*'([^']+)'\\s*(?:,\\s*layer=\\s*'([^']+)'\\s*)?\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
+          "^client\\.sdkMetric\\(\\s*'([^']+)'\\s*(?:,\\s*(layer|callback)=\\s*'([^']+)'\\s*)?\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
   private static final Pattern RE_SERVER_METRIC =
       Pattern.compile("^server_metric\\(\\s*'([^']+)'\\s*\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
   // The regex literal takes an optional trailing i flag: f01/f04's /\[quonfig\] init/ has none.
@@ -238,13 +238,22 @@ final class ExpressionEvaluator {
     }
     if ((m = RE_SDK_METRIC.matcher(expr)).matches()) {
       String metric = m.group(1);
-      String layer = m.group(2);
-      double got = probe.sdkMetric(metric, layer);
-      double want = Double.parseDouble(m.group(4));
-      boolean ok = compareDouble(m.group(3), got, want);
+      String labelKey = m.group(2);
+      String labelValue = m.group(3);
+      double got = probe.sdkMetric(metric, labelKey, labelValue);
+      double want = Double.parseDouble(m.group(5));
+      boolean ok = compareDouble(m.group(4), got, want);
       return new Result(
           ok,
-          "sdkMetric(" + metric + ",layer=" + layer + ")=" + got + " " + m.group(3) + " " + want);
+          "sdkMetric("
+              + metric
+              + (labelKey == null ? "" : "," + labelKey + "=" + labelValue)
+              + ")="
+              + got
+              + " "
+              + m.group(4)
+              + " "
+              + want);
     }
     return new Result(false, "unrecognized expression: " + expr);
   }

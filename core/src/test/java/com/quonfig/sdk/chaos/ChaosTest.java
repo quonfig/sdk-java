@@ -439,11 +439,12 @@ final class ChaosTest {
       return "no client object, initState=" + probe.initState();
     }
     return String.format(
-        "state=%s, restartL1=%.0f, restartL2=%.0f, sseAttempts=%.0f, fallback=%b, lastRefreshMs=%d,"
-            + " alive=%b",
+        "state=%s, restartL1=%.0f, restartL2=%.0f, callbackErrors=%.0f, sseAttempts=%.0f,"
+            + " fallback=%b, lastRefreshMs=%d, alive=%b",
         probe.connectionState(),
         probe.sdkMetric("quonfig_sdk_worker_restart_total", "1"),
         probe.sdkMetric("quonfig_sdk_worker_restart_total", "2"),
+        probe.sdkMetric("quonfig_sdk_callback_errors_total", null),
         probe.sdkMetric("quonfig_sse_connect_attempts_total", null),
         probe.fallbackPollerActive(),
         probe.lastSuccessfulRefreshMs(),
@@ -510,9 +511,10 @@ final class ChaosTest {
             // (e.g. scenario 10's exp[3] looking for /callback|onConfigUpdate/i) can fire.
             .logger(new ProbeBridgeLogger(probe));
     if (throwingCallback) {
-      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches it and
-      // keeps running (inline recovery), counting it under worker_restart_total{layer=1} as
-      // sdk-go does (reason=callback_panic); processStillAlive watches for a real thread death.
+      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches it, logs
+      // it at ERROR and counts it in callback_errors_total{callback=on_config_update}; it is not a
+      // worker restart (contract Test 5, qfg-6vno.28). processStillAlive watches for a real thread
+      // death.
       ob =
           ob.onConfigUpdate(
               () -> {

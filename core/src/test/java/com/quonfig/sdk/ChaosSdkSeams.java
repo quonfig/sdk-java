@@ -23,6 +23,14 @@ public final class ChaosSdkSeams {
     return client.workerRestartTotalForTest(layer);
   }
 
+  /**
+   * {@code quonfig_sdk_callback_errors_total{callback}} as the SDK counts it ("on_config_update" or
+   * "on_connection_state_change"; qfg-6vno.28).
+   */
+  public static long callbackErrorsTotal(Quonfig client, String callback) {
+    return client.callbackErrorsTotalForTest(callback);
+  }
+
   /** {@code quonfig_sse_connect_attempts_total}: every SSE dial, failed ones included. */
   public static long sseConnectAttempts(Quonfig client) {
     return client.sseConnectAttemptsForTest();
