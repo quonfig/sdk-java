@@ -5,8 +5,10 @@ package com.quonfig.sdk.transport;
  * than 304 on a GET) on every URL the transport tried, or when the underlying socket fails on every
  * URL.
  *
- * <p>{@link #bodyExcerpt()} is capped (see {@link HttpTransport#MAX_BODY_EXCERPT}) so a runaway
- * server response can't OOM the SDK.
+ * <p>{@link #bodyExcerpt()} is capped at 1 KiB (see {@link HttpTransport#MAX_BODY_EXCERPT}): the
+ * transport never reads more of a non-2xx body than that, so a runaway server response can't OOM
+ * the SDK. The excerpt is never placed in the message. A 2xx body over the 16 MiB body cap also
+ * raises this, with status 200 and an empty excerpt (size-caps rule, qfg-6vno.20.2).
  */
 public final class HttpTransportException extends RuntimeException {
 
@@ -59,7 +61,7 @@ public final class HttpTransportException extends RuntimeException {
     return legStatuses.length > 0 ? legStatuses[0] : 0;
   }
 
-  /** First few KB of the response body — never the full body, never null. */
+  /** At most the first 1 KiB of the response body — never the full body, never null. */
   public String bodyExcerpt() {
     return bodyExcerpt;
   }
