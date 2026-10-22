@@ -187,6 +187,44 @@ class InitConformanceTest {
     return l.entries.stream().anyMatch(e -> e.level == level && e.format.contains(fragment));
   }
 
+  // --- D9: a boot the secondary rescues is a healthy boot ---------------------------------
+
+  /**
+   * Design section C / D case 9 (chaos f01): the primary refuses, the hedge fires the secondary at
+   * once and it installs well inside initTimeout. That is a healthy boot: no init WARN or ERROR.
+   * The install wakes the constructor, which marks init decided before the winning leg reaches its
+   * readiness latch; the latch used to read that as "decided on failure" and log a spurious "init
+   * recovered" WARN (qfg-6vno.3, surfaced by f01 at ITD v2026.10.21.1). Several boots, since the
+   * window is a thread race.
+   */
+  @Test
+  void d9_secondaryRescuedBoot_logsNoInitWarnOrError() throws Exception {
+    HttpServer secondary = server(new AtomicInteger(0));
+    int refused;
+    try (java.net.ServerSocket ss = new java.net.ServerSocket(0)) {
+      refused = ss.getLocalPort();
+    }
+    String primary = "http://127.0.0.1:" + refused;
+    for (int i = 0; i < 5; i++) {
+      RecordingLogger logger = new RecordingLogger();
+      Quonfig q =
+          new Quonfig(
+              options(primary, primary, logger, Duration.ofSeconds(5))
+                  .apiUrls(List.of(primary, base(secondary)))
+                  .build());
+      clients.add(q);
+      assertTrue(q.ready(), "the secondary rescued the boot");
+      // Let the hedge's legs and the latch settle.
+      Thread.sleep(300);
+      for (RecordingLogger.Entry en : logger.entries) {
+        boolean loud = en.level == Level.WARN || en.level == Level.ERROR;
+        assertFalse(
+            loud && en.format.contains("[quonfig] init"),
+            "boot " + i + ": a rescued boot logged " + en.level + " " + en.format);
+      }
+    }
+  }
+
   // --- D1: auth class is {401, 403, 404, 410} from every leg -------------------------------
 
   private void assertAuthFastFail(int status) throws Exception {

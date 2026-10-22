@@ -65,6 +65,9 @@ final class ChaosYamlLoader {
     s.userCallback = asString(m.get("user_callback"));
     s.topology = asString(m.get("topology"));
     s.upstreams = parseUpstreams(m.get("upstreams"));
+    s.onInitFailure = asString(m.get("on_init_failure"));
+    s.initTimeoutMs = asInt(m.get("init_timeout_ms"), 0);
+    s.catchInitFailure = Boolean.TRUE.equals(m.get("catch_init_failure"));
     return s;
   }
 

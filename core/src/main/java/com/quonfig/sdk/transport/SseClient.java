@@ -26,6 +26,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -100,6 +101,13 @@ public final class SseClient {
   private final Duration headerTimeout;
   private final HttpClient http;
   private final BiFunction<String, Duration, Duration> waitHook;
+  // Internal counters (qfg-6vno.3), read by the chaos harness through a package-private Quonfig
+  // test seam. connectAttempts counts every dial; workerRestarts counts Layer 1 worker restarts:
+  // a session that connected (delivered a frame) and then ended, or an unexpected Throwable out
+  // of a connection, each followed by a fresh attempt. A dial that never connected is an attempt,
+  // not a restart. The owner may share them across SseClient instances (Builder#counters).
+  private final AtomicLong connectAttempts;
+  private final AtomicLong workerRestarts;
   // Single-thread scheduler that fires the SSE stall watchdog. Daemon-threaded so it
   // never holds the JVM alive; shut down by stop().
   private final ScheduledExecutorService watchdogExecutor;
@@ -145,6 +153,8 @@ public final class SseClient {
     // Independent of readWatchdog on purpose (qfg-rriw); see awaitHeaders.
     this.headerTimeout = b.headerTimeout != null ? b.headerTimeout : DEFAULT_HEADER_TIMEOUT;
     this.waitHook = b.waitHook;
+    this.connectAttempts = b.connectAttempts != null ? b.connectAttempts : new AtomicLong();
+    this.workerRestarts = b.workerRestarts != null ? b.workerRestarts : new AtomicLong();
     this.watchdogExecutor =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -179,6 +189,22 @@ public final class SseClient {
    */
   public void onConnectionStateChange(Consumer<Boolean> handler) {
     this.stateHandler = handler;
+  }
+
+  /**
+   * Internal, not a customer surface: SSE dials so far, failed ones included. Read by the chaos
+   * harness via {@code Quonfig}'s package-private test seam (qfg-6vno.3).
+   */
+  public long connectAttemptsTotal() {
+    return connectAttempts.get();
+  }
+
+  /**
+   * Internal, not a customer surface: Layer 1 worker restarts so far (see the field comment). Read
+   * by the chaos harness via {@code Quonfig}'s package-private test seam (qfg-6vno.3).
+   */
+  public long workerRestartTotal() {
+    return workerRestarts.get();
   }
 
   /**
@@ -249,9 +275,12 @@ public final class SseClient {
     try {
       while (!stopped.get() && !Thread.currentThread().isInterrupted()) {
         boolean connectedOK; // true iff the connection delivered at least one valid frame
+        boolean crashed = false;
+        connectAttempts.incrementAndGet();
         try {
           connectedOK = connectOnce(primary);
         } catch (Throwable t) {
+          crashed = true;
           // Catch Throwable, not just RuntimeException: an Error (for example an
           // OutOfMemoryError from an unterminated event, or one thrown by a handler) used to end
           // this loop and the SSE thread for good, leaving freshness to the fallback poller
@@ -261,6 +290,9 @@ public final class SseClient {
         }
         if (stopped.get() || Thread.currentThread().isInterrupted()) {
           return;
+        }
+        if (connectedOK || crashed) {
+          workerRestarts.incrementAndGet();
         }
 
         if (connectedOK) {
@@ -607,6 +639,8 @@ public final class SseClient {
     private Duration headerTimeout;
     private HttpClient httpClient;
     private BiFunction<String, Duration, Duration> waitHook;
+    private AtomicLong connectAttempts;
+    private AtomicLong workerRestarts;
 
     /**
      * Primary stream URL first. Only the first entry is ever dialed — the stream is pinned to the
@@ -676,6 +710,16 @@ public final class SseClient {
      */
     public Builder waitHook(BiFunction<String, Duration, Duration> waitHook) {
       this.waitHook = waitHook;
+      return this;
+    }
+
+    /**
+     * Internal, not a customer option: counters to increment instead of fresh per-instance ones, so
+     * an owner that replaces its SseClient (leaving auth-failed) keeps one running total.
+     */
+    public Builder counters(AtomicLong connectAttempts, AtomicLong workerRestarts) {
+      this.connectAttempts = connectAttempts;
+      this.workerRestarts = workerRestarts;
       return this;
     }
 

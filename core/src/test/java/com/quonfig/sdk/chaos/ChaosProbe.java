@@ -1,168 +1,229 @@
 package com.quonfig.sdk.chaos;
 
+import com.quonfig.sdk.ChaosSdkSeams;
+import com.quonfig.sdk.ConnectionState;
 import com.quonfig.sdk.Quonfig;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
- * Test-only probe over an sdk-java {@code Quonfig} client. Derives the observation surface the
- * chaos scenarios reference ({@code connectionState}, {@code worker_restart_total}, {@code
- * lastSuccessfulRefresh}, {@code fallbackPollerActive}) from existing SDK callbacks. The probe does
- * NOT add metrics to the SDK itself — the missing surface area is the *point* of this harness.
- * Scenarios that depend on signals sdk-java doesn't expose today are expected to fail (red
- * baseline).
+ * Test-only probe over an sdk-java {@code Quonfig} client. It keeps NO model of its own
+ * (qfg-6vno.3): every value a chaos expression asserts on is read from the SDK, through {@link
+ * SdkView}, whose production binding ({@link #bindClient}) reads the client's public getters
+ * ({@code connectionState()}, {@code lastSuccessfulRefresh()}, {@code ready()}, {@code
+ * getString()}) and the package-private SDK test seams behind {@link ChaosSdkSeams} (worker
+ * restarts, SSE dial attempts, fallback-poller state). The only things the probe records itself are
+ * what the SDK hands it: log lines (its logger hook), ready events (its {@code onConfigUpdate}
+ * hook) and uncaught thread deaths (the JVM's uncaught-exception hook), plus the runner's own
+ * init-call outcome.
+ *
+ * <p>Until a client is bound (the constructor has not returned), {@link #hasClient()} is false and
+ * the evaluator fails every client-backed leaf rather than answering for the SDK.
  */
-final class ChaosProbe {
+final class ChaosProbe implements AutoCloseable {
 
-  /** Connection state vocabulary from supervisor-test-contract.md. */
-  enum State {
-    INITIALIZING,
-    CONNECTED,
-    RECONNECTING,
-    FALLING_BACK,
-    DISCONNECTED;
+  /**
+   * What the probe reads from the SDK. Tests may inject a fake; {@link #bindClient} binds a real
+   * client.
+   */
+  interface SdkView {
+    ConnectionState connectionState();
 
-    String text() {
-      switch (this) {
-        case INITIALIZING:
-          return "initializing";
-        case CONNECTED:
-          return "connected";
-        case RECONNECTING:
-          return "reconnecting";
-        case FALLING_BACK:
-          return "falling_back";
-        case DISCONNECTED:
-        default:
-          return "disconnected";
-      }
+    boolean fallbackPollerActive();
+
+    long workerRestartTotal(String layer);
+
+    long sseConnectAttempts();
+
+    Instant lastSuccessfulRefresh();
+
+    boolean ready();
+
+    String getString(String key, String def);
+  }
+
+  private volatile SdkView view;
+  private final Object lock = new Object();
+  private final List<LogLine> logs = new ArrayList<>();
+  private final AtomicInteger readyEvents = new AtomicInteger();
+  // Runner-owned: the outcome of the init call in init_failure scenarios (00-*); null otherwise.
+  private volatile String initState;
+
+  // processStillAlive (qfg-6vno.3): a JVM does not exit when a background thread dies, so "the
+  // process survived" means "no thread died from an uncaught exception while this probe watched".
+  // The default handler sees every thread without its own handler, SDK threads included (the SDK
+  // installs none). Harness threads ("chaos-*") are excluded: their failures are recorded by the
+  // runner as scenario failures instead.
+  private final AtomicBoolean processCrashed = new AtomicBoolean(false);
+  private volatile String crashDetail;
+  private final Thread.UncaughtExceptionHandler previousHandler;
+  private final Thread.UncaughtExceptionHandler handler;
+
+  ChaosProbe() {
+    previousHandler = Thread.getDefaultUncaughtExceptionHandler();
+    handler =
+        (t, e) -> {
+          if (!t.getName().startsWith("chaos-")) {
+            crashDetail = t.getName() + ": " + e;
+            processCrashed.set(true);
+            System.err.println("chaos probe: thread " + crashDetail + " died uncaught");
+          }
+          if (previousHandler != null) previousHandler.uncaughtException(t, e);
+        };
+    Thread.setDefaultUncaughtExceptionHandler(handler);
+  }
+
+  /** Restores the JVM's previous default uncaught-exception handler. Idempotent. */
+  @Override
+  public void close() {
+    if (Thread.getDefaultUncaughtExceptionHandler() == handler) {
+      Thread.setDefaultUncaughtExceptionHandler(previousHandler);
     }
   }
 
-  private final Object lock = new Object();
-  private State state = State.INITIALIZING;
-  // The client's own liveness stamp (qfg-goi1.7 plan sec 2): it advances on every ANSWERED fetch,
-  // 304s and same-generation answers included. null until bindClient.
-  private volatile Supplier<Instant> refreshSource;
-  private long connectAttempts;
-  private long restartLayer1;
-  private long restartLayer2;
-  private boolean fallbackActive;
-  private final AtomicBoolean processCrashed = new AtomicBoolean(false);
-  private final List<LogLine> logs = new ArrayList<>();
+  /** Reads every SDK-sourced value from {@code client} from now on. */
+  void bindClient(Quonfig client) {
+    bindView(
+        new SdkView() {
+          @Override
+          public ConnectionState connectionState() {
+            return client.connectionState();
+          }
 
+          @Override
+          public boolean fallbackPollerActive() {
+            return ChaosSdkSeams.fallbackPollerActive(client);
+          }
+
+          @Override
+          public long workerRestartTotal(String layer) {
+            return ChaosSdkSeams.workerRestartTotal(client, layer);
+          }
+
+          @Override
+          public long sseConnectAttempts() {
+            return ChaosSdkSeams.sseConnectAttempts(client);
+          }
+
+          @Override
+          public Instant lastSuccessfulRefresh() {
+            return client.lastSuccessfulRefresh();
+          }
+
+          @Override
+          public boolean ready() {
+            return client.ready();
+          }
+
+          @Override
+          public String getString(String key, String def) {
+            return client.getString(key, def);
+          }
+        });
+  }
+
+  /** Test seam: binds an arbitrary view (unit tests of the evaluator). */
+  void bindView(SdkView v) {
+    this.view = v;
+  }
+
+  boolean hasClient() {
+    return view != null;
+  }
+
+  private SdkView view() {
+    SdkView v = view;
+    if (v == null) throw new IllegalStateException("no client object bound to the probe");
+    return v;
+  }
+
+  /** The SDK's {@code connectionState()} in the contract's spelling. */
   String connectionState() {
-    synchronized (lock) {
-      return state.text();
+    switch (view().connectionState()) {
+      case INITIALIZING:
+        return "initializing";
+      case CONNECTED:
+        return "connected";
+      case DISCONNECTED:
+        return "disconnected";
+      case FALLING_BACK:
+        return "falling_back";
+      default:
+        throw new IllegalStateException("unmapped ConnectionState " + view().connectionState());
     }
   }
 
   boolean fallbackPollerActive() {
-    synchronized (lock) {
-      return fallbackActive;
-    }
+    return view().fallbackPollerActive();
   }
 
-  /** Reads {@code lastSuccessfulRefresh} from {@code client} from now on. */
-  void bindClient(Quonfig client) {
-    refreshSource = client::lastSuccessfulRefresh;
-  }
-
-  /** Wall-clock millis of the client's last successful refresh; 0 == never (or no client). */
+  /** Wall-clock millis of the client's last successful refresh; 0 == never. */
   long lastSuccessfulRefreshMs() {
-    Supplier<Instant> src = refreshSource;
-    Instant at = src == null ? null : src.get();
+    Instant at = view().lastSuccessfulRefresh();
     return at == null ? 0 : at.toEpochMilli();
+  }
+
+  boolean ready() {
+    return view().ready();
+  }
+
+  String getString(String key, String def) {
+    return view().getString(key, def);
   }
 
   boolean processStillAlive() {
     return !processCrashed.get();
   }
 
-  void markProcessCrashed() {
-    processCrashed.set(true);
+  String crashDetail() {
+    return crashDetail;
   }
 
   double sdkMetric(String name, String layer) {
-    synchronized (lock) {
-      switch (name) {
-        case "quonfig_sdk_worker_restart_total":
-          if ("1".equals(layer)) return restartLayer1;
-          if ("2".equals(layer)) return restartLayer2;
-          return restartLayer1 + restartLayer2;
-        case "quonfig_sse_connect_attempts_total":
-          return connectAttempts;
-        default:
-          // Fail loudly (qfg-goi1.1.6): a silent 0 would make `== 0` / `< N` expectations on a
-          // metric this probe does not observe pass vacuously.
-          throw new IllegalArgumentException(
-              "unknown sdkMetric name '"
-                  + name
-                  + "': ChaosProbe observes only quonfig_sdk_worker_restart_total and"
-                  + " quonfig_sse_connect_attempts_total");
-      }
-    }
-  }
-
-  /** Hook for the SDK's onSseConnectionStateChange callback. */
-  void onSseState(boolean connected) {
-    synchronized (lock) {
-      if (connected) {
-        // Transitioning into CONNECTED counts as a successful attempt.
-        connectAttempts++;
-        state = State.CONNECTED;
-      } else {
-        // Map false → reconnecting (sdk-java's SSE loop always retries until stop()). A drop
-        // from CONNECTED counts as a Layer 1 worker restart: the read loop ended unexpectedly
-        // and the reconnect path is starting a fresh attempt. Initial-connect failures
-        // (INITIALIZING → RECONNECTING) are not counted as restarts.
-        if (state == State.CONNECTED) {
-          restartLayer1++;
+    switch (name) {
+      case "quonfig_sdk_worker_restart_total":
+        if (layer == null || layer.isEmpty()) {
+          return view().workerRestartTotal("1") + view().workerRestartTotal("2");
         }
-        // Preserve FALLING_BACK if the Layer 2 poller has already engaged. The SSE callback
-        // can fire repeatedly during a long partition (retry/backoff), and we don't want each
-        // attempt to flicker us between FALLING_BACK and RECONNECTING.
-        if (!fallbackActive) {
-          state = State.RECONNECTING;
-        }
-      }
+        return view().workerRestartTotal(layer);
+      case "quonfig_sse_connect_attempts_total":
+        return view().sseConnectAttempts();
+      default:
+        // Fail loudly (qfg-goi1.1.6): a silent 0 would make `== 0` / `< N` expectations on a
+        // metric this probe does not observe pass vacuously.
+        throw new IllegalArgumentException(
+            "unknown sdkMetric name '"
+                + name
+                + "': ChaosProbe observes only quonfig_sdk_worker_restart_total and"
+                + " quonfig_sse_connect_attempts_total");
     }
   }
 
-  /**
-   * Hook for the SDK's onFallbackPollerStateChange callback (qfg-47c2.21). Drives the probe's
-   * {@code fallbackPollerActive} and FALLING_BACK state — both of which scenarios 5 and 6 assert.
-   */
-  void onFallbackState(boolean engaged) {
-    synchronized (lock) {
-      fallbackActive = engaged;
-      if (engaged) {
-        state = State.FALLING_BACK;
-      } else if (state == State.FALLING_BACK) {
-        // Disengaged but SSE hasn't fired a connect edge yet — treat as reconnecting until
-        // the next SSE event lands.
-        state = State.RECONNECTING;
-      }
-    }
+  // ---- init_failure scenarios (00-*) ----
+
+  /** Runner-owned: 'pending' | 'returned' | 'raised' for the init call; null outside 00-*. */
+  void setInitState(String s) {
+    this.initState = s;
   }
 
-  /**
-   * Records a Layer 1 worker-restart-equivalent WITHOUT a connection-state edge. sdk-java catches
-   * user-callback throws at the SDK boundary ({@code fireConfigUpdate} logs at ERROR and continues,
-   * qfg-srj8) rather than crashing and restarting a worker, so the chaos metric counts each caught
-   * throw as a recovery — scenario 10's {@code worker_restart_total >= 1} observes "the SDK
-   * survived the throw", exactly like sdk-net's probe (qfg-41nh.15). Healthy scenarios never log
-   * the signal, so 01/11's {@code == 0} asserts are unaffected.
-   */
-  void incRestartLayer1() {
-    synchronized (lock) {
-      restartLayer1++;
-    }
+  String initState() {
+    return initState;
   }
+
+  /** Hook for the SDK's onConfigUpdate callback, registered once the init call has returned. */
+  void onReadyEvent() {
+    readyEvents.incrementAndGet();
+  }
+
+  int readyEventCount() {
+    return readyEvents.get();
+  }
+
+  // ---- SDK log hook ----
 
   void log(String level, String message) {
     synchronized (lock) {
@@ -170,6 +231,7 @@ final class ChaosProbe {
     }
   }
 
+  /** Lines at exactly {@code level} (case-insensitive level name) matching {@code re}. */
   int sdkLogMatches(String level, Pattern re) {
     synchronized (lock) {
       int n = 0;

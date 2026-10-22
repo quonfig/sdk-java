@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.quonfig.sdk.ConnectionState;
+import java.time.Instant;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -49,10 +52,12 @@ class ExpressionEvaluatorTest {
     ChaosProbe probe = new ChaosProbe();
     ExpressionEvaluator eval = new ExpressionEvaluator(probe);
 
+    FakeView view = new FakeView();
+    probe.bindView(view);
     ExpressionEvaluator.Result notYet = eval.evaluate(expr);
     assertFalse(notYet.passed, "initializing client must fail the observable leaf");
 
-    probe.onSseState(true);
+    view.state = ConnectionState.CONNECTED;
     ExpressionEvaluator.Result ok = eval.evaluate(expr);
     assertTrue(ok.passed, "connected client should pass: " + ok.reason);
     assertFalse(ok.skipped, "an observable leaf means the expression is not skipped");
@@ -63,6 +68,7 @@ class ExpressionEvaluatorTest {
   @Test
   void unknownSdkMetricFailsLoudly() {
     ChaosProbe probe = new ChaosProbe();
+    probe.bindView(new FakeView());
     IllegalArgumentException ex =
         assertThrows(
             IllegalArgumentException.class, () -> probe.sdkMetric("quonfig_no_such_metric", null));
@@ -71,9 +77,113 @@ class ExpressionEvaluatorTest {
 
   @Test
   void unknownSdkMetricInAnExpressionDoesNotPass() {
-    ExpressionEvaluator eval = new ExpressionEvaluator(new ChaosProbe());
+    ChaosProbe probe = new ChaosProbe();
+    probe.bindView(new FakeView());
+    ExpressionEvaluator eval = new ExpressionEvaluator(probe);
     assertThrows(
         IllegalArgumentException.class,
         () -> eval.evaluate("client.sdkMetric('quonfig_no_such_metric') == 0"));
+  }
+
+  @Test
+  void sdkLogWithoutTheIFlagIsCaseSensitive() {
+    // f01/f04 (ITD v2026.10.21.1): /\[quonfig\] init/ carries no i flag.
+    ChaosProbe probe = new ChaosProbe();
+    ExpressionEvaluator eval = new ExpressionEvaluator(probe);
+    String expr = "client.sdkLog('warn', /\\[quonfig\\] init/) == 0";
+    ExpressionEvaluator.Result clean = eval.evaluate(expr);
+    assertTrue(clean.passed, "no init warn logged yet: " + clean.reason);
+    probe.log("warn", "[QUONFIG] INIT shouting");
+    assertTrue(eval.evaluate(expr).passed, "no i flag: a different-case line must not match");
+    probe.log("warn", "[quonfig] init: still waiting for config");
+    assertFalse(eval.evaluate(expr).passed, "a matching warn line must count");
+    assertTrue(eval.evaluate("client.sdkLog('error', /\\[quonfig\\] init/) == 0").passed);
+    assertEquals(2, probe.sdkLogMatches("warn", Pattern.compile("init", Pattern.CASE_INSENSITIVE)));
+  }
+
+  @Test
+  void clientLeavesFailWhileNoClientObjectExists() {
+    // The probe never answers for an SDK it does not have (00: the init call is still pending).
+    ExpressionEvaluator eval = new ExpressionEvaluator(new ChaosProbe());
+    for (String expr :
+        List.of(
+            "client.connectionState() == 'initializing'",
+            "client.ready() == false",
+            "client.sdkMetric('quonfig_sdk_worker_restart_total', layer='1') == 0",
+            "client.getString('k', 'D') == 'D'")) {
+      ExpressionEvaluator.Result r = eval.evaluate(expr);
+      assertFalse(r.passed, expr + " must fail with no client: " + r.reason);
+      assertTrue(r.reason.contains("no client object"), r.reason);
+    }
+  }
+
+  @Test
+  void initFailureVocabulary() {
+    ChaosProbe probe = new ChaosProbe();
+    ExpressionEvaluator eval = new ExpressionEvaluator(probe);
+    assertFalse(
+        eval.evaluate("client.initState() == 'pending'").passed,
+        "initState outside an init_failure scenario must fail, not pass");
+    probe.setInitState("pending");
+    assertTrue(eval.evaluate("client.initState() == 'pending'").passed);
+    probe.setInitState("returned");
+    FakeView view = new FakeView();
+    probe.bindView(view);
+    String expr =
+        "client.initState() == 'returned' AND client.getString('config.with.only.default.env.row',"
+            + " 'CODE-DEFAULT') == 'CODE-DEFAULT'";
+    assertTrue(eval.evaluate(expr).passed, eval.evaluate(expr).reason);
+    view.strings = java.util.Map.of("config.with.only.default.env.row", "hello from no env row");
+    assertFalse(eval.evaluate(expr).passed, "the live value must replace the default");
+    view.ready = true;
+    String heal =
+        "client.ready() == true AND client.readyEventCount() >= 1 AND"
+            + " client.getString('config.with.only.default.env.row', 'CODE-DEFAULT') =="
+            + " 'hello from no env row'";
+    assertFalse(eval.evaluate(heal).passed, "no ready event yet");
+    probe.onReadyEvent();
+    assertTrue(eval.evaluate(heal).passed, eval.evaluate(heal).reason);
+  }
+
+  /** A hand-set SDK view: lets the evaluator tests drive each value without a live client. */
+  static final class FakeView implements ChaosProbe.SdkView {
+    ConnectionState state = ConnectionState.INITIALIZING;
+    boolean ready;
+    java.util.Map<String, String> strings = java.util.Map.of();
+
+    @Override
+    public ConnectionState connectionState() {
+      return state;
+    }
+
+    @Override
+    public boolean fallbackPollerActive() {
+      return false;
+    }
+
+    @Override
+    public long workerRestartTotal(String layer) {
+      return 0;
+    }
+
+    @Override
+    public long sseConnectAttempts() {
+      return 0;
+    }
+
+    @Override
+    public Instant lastSuccessfulRefresh() {
+      return null;
+    }
+
+    @Override
+    public boolean ready() {
+      return ready;
+    }
+
+    @Override
+    public String getString(String key, String def) {
+      return strings.getOrDefault(key, def);
+    }
   }
 }

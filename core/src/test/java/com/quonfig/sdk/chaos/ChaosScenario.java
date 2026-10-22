@@ -31,6 +31,11 @@ final class ChaosScenario {
     // Meta.generation for the ordering rig.
     String topology;
     List<Upstream> upstreams;
+    // Init-failure scenarios (00-*): canonical onInitFailure spelling (fail|wait|continue), the
+    // initTimeout in ms (0 = unset), and whether the runner keeps the client a raised fail carries.
+    String onInitFailure;
+    int initTimeoutMs;
+    boolean catchInitFailure;
   }
 
   /**
