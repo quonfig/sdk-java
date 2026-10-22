@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.slf4j.event.Level;
@@ -158,6 +159,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private volatile boolean closed;
   private volatile SseClient sseClient;
   private volatile Supervisor supervisor;
+
+  // Internal Layer 1 counters (qfg-6vno.3), shared by every SseClient this client builds and read
+  // only through the package-private *ForTest seams below. See SseClient for what they count.
+  private final AtomicLong sseConnectAttempts = new AtomicLong();
+  private final AtomicLong sseWorkerRestarts = new AtomicLong();
+  // User onConfigUpdate throws the SDK caught and recovered from inline (fireConfigUpdate).
+  private final AtomicLong callbackPanics = new AtomicLong();
   private volatile FallbackPoller fallbackPoller;
   private volatile HttpTransport httpTransport;
   private volatile DatadirWatcher datadirWatcher;
@@ -1593,6 +1601,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       sseBuilder.readWatchdog(options.sseReadWatchdog());
     }
     sseBuilder.waitHook(options.waitHookForTest());
+    sseBuilder.counters(sseConnectAttempts, sseWorkerRestarts);
     SseClient sse = sseBuilder.build();
     sse.onEnvelope(
         env -> {
@@ -1912,6 +1921,27 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   boolean fallbackPollerActiveForTest() {
     FallbackPoller fp = this.fallbackPoller;
     return fp != null && fp.active();
+  }
+
+  /**
+   * Test seam (package-private, qfg-6vno.3): {@code quonfig_sdk_worker_restart_total{layer}}. Layer
+   * {@code "2"} is the {@link Supervisor}'s own restart count for the fallback poller. Layer {@code
+   * "1"} is the SSE worker: SseClient restarts (a connected session that ended, or an unexpected
+   * error) plus user onConfigUpdate throws the SDK recovered from inline, which sdk-go counts as
+   * {@code layer="1",reason="callback_panic"} too (contract Test 5 allows either).
+   */
+  long workerRestartTotalForTest(String layer) {
+    if ("1".equals(layer)) return sseWorkerRestarts.get() + callbackPanics.get();
+    if ("2".equals(layer)) {
+      Supervisor sup = this.supervisor;
+      return sup == null ? 0L : sup.workerRestartTotal("2");
+    }
+    throw new IllegalArgumentException("unknown worker layer '" + layer + "' (want 1 or 2)");
+  }
+
+  /** Test seam (package-private, qfg-6vno.3): SSE dials so far, failed ones included. */
+  long sseConnectAttemptsForTest() {
+    return sseConnectAttempts.get();
   }
 
   public Instant lastSuccessfulRefresh() {
@@ -2869,6 +2899,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         // listeners are user code; never let one tear down the client. Mirror sdk-go's
         // invokeOnConfigUpdate / sdk-node's invokeOnConfigUpdate by logging at ERROR so
         // operators (and chaos scenario 10) can observe that the callback panicked.
+        callbackPanics.incrementAndGet();
         options.logger().error("quonfig: onConfigUpdate callback threw; SDK continuing", ex);
       }
     }

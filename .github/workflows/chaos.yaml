@@ -86,8 +86,11 @@ jobs:
           # are deliberately rev'd. Kept equal to the unit pin in test.yaml
           # and to failover-chaos.yaml (one ITD tag per repo, qfg-goi1.1.6).
           # v2026.10.16.2 adds after_ms + the timeline rules (qfg-goi1.7);
-          # the harness implements them (qfg-goi1.10.36).
-          ref: v2026.10.16.2
+          # the harness implements them (qfg-goi1.10.36). v2026.10.21.1 adds
+          # 00-boot-both-down-then-restore (init-failure vocabulary) and moves
+          # 02's state row to 'disconnected' (qfg-6vno.3). scripts/check-itd-refs.sh
+          # (run by test.yaml) fails CI when the three pins differ (qfg-6vno.7).
+          ref: v2026.10.21.1
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it.

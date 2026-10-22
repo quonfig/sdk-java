@@ -67,9 +67,20 @@ final class ExpressionEvaluator {
           "^client\\.sdkMetric\\(\\s*'([^']+)'\\s*(?:,\\s*layer=\\s*'([^']+)'\\s*)?\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
   private static final Pattern RE_SERVER_METRIC =
       Pattern.compile("^server_metric\\(\\s*'([^']+)'\\s*\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
+  // The regex literal takes an optional trailing i flag: f01/f04's /\[quonfig\] init/ has none.
   private static final Pattern RE_SDK_LOG =
       Pattern.compile(
-          "^client\\.sdkLog\\(\\s*'([^']+)'\\s*,\\s*/(.+)/i\\s*\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
+          "^client\\.sdkLog\\(\\s*'([^']+)'\\s*,\\s*/(.+)/(i?)\\s*\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
+  // Init-failure vocabulary (00-boot-both-down-then-restore, chaos README).
+  private static final Pattern RE_INIT_STATE =
+      Pattern.compile("^client\\.initState\\(\\)\\s*(==|!=)\\s*'([^']+)'$");
+  private static final Pattern RE_READY =
+      Pattern.compile("^client\\.ready\\(\\)\\s*==\\s*(true|false)$");
+  private static final Pattern RE_READY_EVENTS =
+      Pattern.compile("^client\\.readyEventCount\\(\\)\\s*(>=|<=|==|!=|<|>)\\s*(\\d+)$");
+  private static final Pattern RE_GET_STRING =
+      Pattern.compile(
+          "^client\\.getString\\(\\s*'([^']*)'\\s*,\\s*'([^']*)'\\s*\\)\\s*(==|!=)\\s*'([^']*)'$");
 
   private final ChaosProbe probe;
 
@@ -136,6 +147,77 @@ final class ExpressionEvaluator {
 
   private Result leaf(String expr) {
     Matcher m;
+    // Leaves the probe answers without a client object: the runner's init-call outcome, the
+    // SDK's log lines, ready events and uncaught thread deaths.
+    if ((m = RE_INIT_STATE.matcher(expr)).matches()) {
+      String got = probe.initState();
+      if (got == null) {
+        return new Result(false, "initState(): not an init_failure scenario (no on_init_failure)");
+      }
+      String want = m.group(2);
+      boolean ok = "==".equals(m.group(1)) ? got.equals(want) : !got.equals(want);
+      return new Result(ok, "initState=" + got + " " + m.group(1) + " " + want);
+    }
+    if ((m = RE_READY_EVENTS.matcher(expr)).matches()) {
+      int got = probe.readyEventCount();
+      int want = Integer.parseInt(m.group(2));
+      return new Result(
+          compareLong(m.group(1), got, want),
+          "readyEventCount=" + got + " " + m.group(1) + " " + want);
+    }
+    if ((m = RE_PROC_ALIVE.matcher(expr)).matches()) {
+      boolean want = Boolean.parseBoolean(m.group(1));
+      boolean got = probe.processStillAlive();
+      String why = got ? "" : " (" + probe.crashDetail() + ")";
+      return new Result(got == want, "processStillAlive=" + got + " want " + want + why);
+    }
+    if ((m = RE_SDK_LOG.matcher(expr)).matches()) {
+      String level = m.group(1);
+      Pattern re =
+          "i".equals(m.group(3))
+              ? Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE)
+              : Pattern.compile(m.group(2));
+      int n = probe.sdkLogMatches(level, re);
+      int want = Integer.parseInt(m.group(5));
+      boolean ok = compareLong(m.group(4), n, want);
+      return new Result(
+          ok,
+          "sdkLog("
+              + level
+              + ",/"
+              + m.group(2)
+              + "/"
+              + m.group(3)
+              + ")="
+              + n
+              + " "
+              + m.group(4)
+              + " "
+              + want);
+    }
+    if (RE_SERVER_METRIC.matcher(expr).matches()) {
+      // Not observable from the SDK rig: skip explicitly, never evaluate against a stubbed value.
+      return Result.skip(expr, SERVER_METRIC_SKIP_REASON);
+    }
+    // Every other leaf reads the SDK. With no client object (the init call has not returned, or
+    // it raised and the scenario does not keep the client) the probe has nothing to answer with,
+    // so the leaf fails instead of reporting a value the SDK never produced.
+    if (expr.startsWith("client.") && !probe.hasClient()) {
+      return new Result(false, "no client object yet (init call has not returned): " + expr);
+    }
+    if ((m = RE_READY.matcher(expr)).matches()) {
+      boolean want = Boolean.parseBoolean(m.group(1));
+      boolean got = probe.ready();
+      return new Result(got == want, "ready=" + got + " want " + want);
+    }
+    if ((m = RE_GET_STRING.matcher(expr)).matches()) {
+      String got = probe.getString(m.group(1), m.group(2));
+      String want = m.group(4);
+      boolean eq = want.equals(got);
+      boolean ok = "==".equals(m.group(3)) ? eq : !eq;
+      return new Result(
+          ok, "getString('" + m.group(1) + "')=" + got + " " + m.group(3) + " " + want);
+    }
     if ((m = RE_CONN_STATE.matcher(expr)).matches()) {
       String got = probe.connectionState();
       String want = m.group(2);
@@ -146,11 +228,6 @@ final class ExpressionEvaluator {
       boolean want = Boolean.parseBoolean(m.group(1));
       boolean got = probe.fallbackPollerActive();
       return new Result(got == want, "fallbackPollerActive=" + got + " want " + want);
-    }
-    if ((m = RE_PROC_ALIVE.matcher(expr)).matches()) {
-      boolean want = Boolean.parseBoolean(m.group(1));
-      boolean got = probe.processStillAlive();
-      return new Result(got == want, "processStillAlive=" + got + " want " + want);
     }
     if ((m = RE_LAST_REFRESH.matcher(expr)).matches()) {
       long ago = Long.parseLong(m.group(2));
@@ -168,19 +245,6 @@ final class ExpressionEvaluator {
       return new Result(
           ok,
           "sdkMetric(" + metric + ",layer=" + layer + ")=" + got + " " + m.group(3) + " " + want);
-    }
-    if (RE_SERVER_METRIC.matcher(expr).matches()) {
-      // Not observable from the SDK rig: skip explicitly, never evaluate against a stubbed value.
-      return Result.skip(expr, SERVER_METRIC_SKIP_REASON);
-    }
-    if ((m = RE_SDK_LOG.matcher(expr)).matches()) {
-      String level = m.group(1);
-      Pattern re = Pattern.compile(m.group(2), Pattern.CASE_INSENSITIVE);
-      int n = probe.sdkLogMatches(level, re);
-      int want = Integer.parseInt(m.group(4));
-      boolean ok = compareLong(m.group(3), n, want);
-      return new Result(
-          ok, "sdkLog(" + level + ",/" + m.group(2) + "/i)=" + n + " " + m.group(3) + " " + want);
     }
     return new Result(false, "unrecognized expression: " + expr);
   }

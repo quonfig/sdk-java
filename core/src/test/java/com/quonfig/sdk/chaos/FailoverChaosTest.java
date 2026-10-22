@@ -176,7 +176,14 @@ final class FailoverChaosTest {
     List<ChaosScenario.Event> scheduled = new ArrayList<>();
     if (run.chaos != null) {
       for (ChaosScenario.Event ev : run.chaos) {
-        if (ev.inject == null) continue;
+        if (ev.inject == null) {
+          // The failover/ordering aliases are self-restoring; a clear or process step here is
+          // not a shape this rig implements. Fail rather than skip it (qfg-6vno.3).
+          throw new IllegalArgumentException(
+              "failover rig: chaos step at "
+                  + ev.atMs
+                  + "ms has no inject (clear/process unsupported)");
+        }
         if (ev.atMs <= 0) preInit.add(ev);
         else scheduled.add(ev);
       }
@@ -190,9 +197,13 @@ final class FailoverChaosTest {
     // Timeline rule 2: t=0 is taken BEFORE the constructor, which blocks until the first config
     // loads since 2.0.0 (qfg-9p4i.9), so the initial fetch sits inside the window.
     long baselineMs = System.currentTimeMillis();
+    // The probe only carries the SDK's log lines here (its logger hook), for sdkLog leaves.
+    ChaosProbe logProbe = new ChaosProbe();
+    List<String> chaosErrors = java.util.Collections.synchronizedList(new ArrayList<>());
     Quonfig client =
         new Quonfig(
             Options.builder()
+                .logger(new ChaosTest.ProbeBridgeLogger(logProbe))
                 .sdkKey(FIXTURE_SDK_KEY)
                 .apiUrls(List.of(primaryUrl, secondaryUrl))
                 .streamUrls(List.of(streamUrl, secondaryUrl))
@@ -220,6 +231,7 @@ final class FailoverChaosTest {
                   System.err.printf("[%6dms] inject %s%n", ev.atMs, describeInject(ev.inject));
                 } catch (Exception e) {
                   System.err.printf("[%6dms] inject failed: %s%n", ev.atMs, e.getMessage());
+                  chaosErrors.add("[" + ev.atMs + "ms] " + e.getMessage());
                 }
               },
               "chaos-event-" + ev.atMs);
@@ -252,15 +264,21 @@ final class FailoverChaosTest {
     }
 
     try {
-      evalExpectations(run, baselineMs, client);
+      evalExpectations(run, baselineMs, client, logProbe, chaosErrors);
     } finally {
       for (Thread t : bg) t.interrupt();
       client.close();
+      logProbe.close();
     }
   }
 
   /** Polls each expectation until it passes (and holds for must_hold_for_ms) or its deadline. */
-  private void evalExpectations(ChaosScenario.Run run, long baselineMs, Quonfig client) {
+  private void evalExpectations(
+      ChaosScenario.Run run,
+      long baselineMs,
+      Quonfig client,
+      ChaosProbe logProbe,
+      List<String> chaosErrors) {
     int wallClockS =
         run.setup != null && run.setup.wallClockSeconds > 0 ? run.setup.wallClockSeconds : 30;
     long deadline = baselineMs + wallClockS * 1000L;
@@ -278,7 +296,7 @@ final class FailoverChaosTest {
             s.tl,
             elapsed,
             () -> {
-              Result r = evalExpr(s.exp.assertExpr, client);
+              Result r = evalExpr(s.exp.assertExpr, client, logProbe);
               s.lastReason = r.reason;
               return r.ok ? ExpectationTimeline.Sample.TRUE : ExpectationTimeline.Sample.FALSE;
             });
@@ -324,6 +342,11 @@ final class FailoverChaosTest {
         failures.add(msg);
       }
     }
+    for (String err : chaosErrors) {
+      String msg = "FAIL  chaos event: " + err;
+      System.err.println(msg);
+      failures.add(msg);
+    }
     System.err.printf(
         "scenario summary: ready=%b resolvedFrom=%s heldGeneration=%d installs=%d sseFailedOverToSecondary=%b%n",
         client.ready(),
@@ -363,7 +386,7 @@ final class FailoverChaosTest {
       tp.setEnabled("sse", false);
       restoreAfter(inj.sseDownMs, () -> tp.setEnabled("sse", true));
     } else {
-      System.err.println("applyFailoverInject: unhandled inject shape — no-op");
+      throw new IllegalArgumentException("failover rig: unknown inject shape — " + name);
     }
   }
 
@@ -420,12 +443,12 @@ final class FailoverChaosTest {
     }
   }
 
-  private static Result evalExpr(String expr, Quonfig client) {
+  private static Result evalExpr(String expr, Quonfig client, ChaosProbe logProbe) {
     String e = expr == null ? "" : expr.trim();
     if (e.isEmpty()) return new Result(true, "");
     if (e.contains(" AND ")) {
       for (String part : e.split(" AND ")) {
-        Result r = evalExpr(part.trim(), client);
+        Result r = evalExpr(part.trim(), client, logProbe);
         if (!r.ok) return new Result(false, "AND: " + r.reason);
       }
       return new Result(true, "");
@@ -433,17 +456,22 @@ final class FailoverChaosTest {
     if (e.contains(" OR ")) {
       List<String> reasons = new ArrayList<>();
       for (String part : e.split(" OR ")) {
-        Result r = evalExpr(part.trim(), client);
+        Result r = evalExpr(part.trim(), client, logProbe);
         if (r.ok) return new Result(true, "");
         reasons.add(r.reason);
       }
       return new Result(false, "OR: " + String.join(" | ", reasons));
     }
-    return evalLeaf(e, client);
+    return evalLeaf(e, client, logProbe);
   }
 
-  private static Result evalLeaf(String expr, Quonfig client) {
+  private static Result evalLeaf(String expr, Quonfig client, ChaosProbe logProbe) {
     Matcher m;
+    if (expr.startsWith("client.sdkLog(")) {
+      // Same leaf as the sse_resilience runner: SDK log lines at exactly that level.
+      ExpressionEvaluator.Result r = new ExpressionEvaluator(logProbe).evaluate(expr);
+      return new Result(r.passed, r.reason);
+    }
     if ((m = RE_READY.matcher(expr)).matches()) {
       boolean want = Boolean.parseBoolean(m.group(1));
       boolean got = client.ready();

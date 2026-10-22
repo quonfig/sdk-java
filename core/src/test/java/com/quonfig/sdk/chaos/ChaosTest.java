@@ -1,7 +1,9 @@
 package com.quonfig.sdk.chaos;
 
+import com.quonfig.sdk.OnInitFailure;
 import com.quonfig.sdk.Options;
 import com.quonfig.sdk.Quonfig;
+import com.quonfig.sdk.exceptions.QuonfigInitException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -158,7 +160,20 @@ final class ChaosTest {
     tp.setEnabled("sse", true);
     tp.setEnabled("http", true);
 
-    ChaosProbe probe = new ChaosProbe();
+    try (ChaosProbe probe = new ChaosProbe()) {
+      runScenario(tp, run, probe, sseProxyPort, httpProxyPort, poll, wallClockCapS);
+    }
+  }
+
+  private void runScenario(
+      ToxiproxyClient tp,
+      ChaosScenario.Run run,
+      ChaosProbe probe,
+      int sseProxyPort,
+      int httpProxyPort,
+      Duration poll,
+      int wallClockCapS)
+      throws Exception {
     ExpressionEvaluator eval = new ExpressionEvaluator(probe);
 
     String sdkKey = envOr("CHAOS_FIXTURE_SDK_KEY", "test-backend-key");
@@ -180,66 +195,116 @@ final class ChaosTest {
             // they detect on the closed connection, not the watchdog.
             .sseReadWatchdog(Duration.ofSeconds(10));
 
-    // Timeline rule 2: t=0 is taken BEFORE the constructor, which blocks until the first config
-    // loads since 2.0.0 (qfg-9p4i.9), so the initial fetch sits inside the window.
-    long baselineMs = System.currentTimeMillis();
-    Quonfig client = null;
-    try {
-      client =
-          newProbedClient(
-              ob, probe, "throw".equals(run.setup != null ? run.setup.userCallback : null));
-    } catch (RuntimeException e) {
-      System.err.println("client construction failed: " + e.getMessage());
-      probe.log("error", e.getMessage());
+    // Init-failure scenarios (00-*, chaos README "Init-failure vocabulary"): the SDK's
+    // onInitFailure + initTimeout come from setup, the at_ms<=0 outage is applied BEFORE the init
+    // call, and the init call runs on its own thread so the tick loop can observe it pending.
+    ChaosScenario.Setup setup = run.setup != null ? run.setup : new ChaosScenario.Setup();
+    boolean initFailure = setup.onInitFailure != null;
+    if (initFailure) {
+      ob.onInitFailure(parseInitFailure(setup.onInitFailure));
+      if (setup.initTimeoutMs > 0) ob.initTimeout(Duration.ofMillis(setup.initTimeoutMs));
+      if (setup.catchInitFailure && !"fail".equals(setup.onInitFailure)) {
+        throw new IllegalArgumentException(
+            "catch_init_failure is only valid with on_init_failure: fail");
+      }
+    } else if (setup.initTimeoutMs > 0 || setup.catchInitFailure) {
+      throw new IllegalArgumentException(
+          "init_timeout_ms / catch_init_failure need on_init_failure");
     }
-    Quonfig finalClient = client;
 
-    // Schedule chaos events.
+    // Chaos-event failures (an unknown inject shape or process action, a toxiproxy error) fail
+    // the scenario: a step that silently did nothing would let the expectations run against a
+    // healthy network.
+    List<String> chaosErrors = Collections.synchronizedList(new ArrayList<>());
     Map<String, InjectionState> injections = new ConcurrentHashMap<>();
-    List<Thread> chaosThreads = new ArrayList<>();
+    List<ChaosScenario.Event> scheduled = new ArrayList<>();
     if (run.chaos != null) {
       for (ChaosScenario.Event ev : run.chaos) {
-        long fireAt = baselineMs + ev.atMs;
-        Thread t =
-            new Thread(
-                () -> {
-                  long delay = fireAt - System.currentTimeMillis();
-                  if (delay > 0) {
-                    try {
-                      Thread.sleep(delay);
-                    } catch (InterruptedException ignored) {
-                      Thread.currentThread().interrupt();
-                      return;
-                    }
-                  }
-                  try {
-                    if (ev.inject != null) {
-                      InjectionState st = applyInject(tp, ev.inject);
-                      if (ev.inject.name != null && !ev.inject.name.isEmpty() && st != null) {
-                        injections.put(ev.inject.name, st);
-                      }
-                      System.err.printf("[%6dms] inject %s%n", ev.atMs, describeInject(ev.inject));
-                    } else if (ev.clear != null && !ev.clear.isEmpty()) {
-                      clearInject(tp, injections.remove(ev.clear));
-                      System.err.printf("[%6dms] clear %s%n", ev.atMs, ev.clear);
-                    } else if (ev.process != null) {
-                      applyProcess(tp, ev.process);
-                      System.err.printf(
-                          "[%6dms] process %s/%d%n", ev.atMs, ev.process.action, ev.process.count);
-                    }
-                  } catch (Exception ex) {
-                    System.err.printf("[%6dms] chaos event failed: %s%n", ev.atMs, ex.getMessage());
-                  }
-                },
-                "chaos-event-" + ev.atMs);
-        t.setDaemon(true);
-        t.start();
-        chaosThreads.add(t);
+        if (initFailure && ev.atMs <= 0) {
+          // Confirmed applied before the init call (Timeline rule 2).
+          fireEvent(tp, ev, injections, chaosErrors);
+        } else {
+          scheduled.add(ev);
+        }
       }
     }
 
-    int wallClockS =
-        run.setup != null && run.setup.wallClockSeconds > 0 ? run.setup.wallClockSeconds : 30;
+    boolean throwingCallback = "throw".equals(setup.userCallback);
+    // Timeline rule 2: t=0 is taken BEFORE the constructor, which blocks until the first config
+    // loads since 2.0.0 (qfg-9p4i.9), so the initial fetch sits inside the window.
+    long baselineMs = System.currentTimeMillis();
+    Quonfig[] clientBox = new Quonfig[1];
+    Thread initThread = null;
+    if (initFailure) {
+      probe.setInitState("pending");
+      boolean keepRaised = setup.catchInitFailure;
+      Options.Builder initOb = ob;
+      initThread =
+          new Thread(
+              () -> {
+                try {
+                  Quonfig c = newProbedClient(initOb, probe, throwingCallback);
+                  synchronized (clientBox) {
+                    clientBox[0] = c;
+                  }
+                  c.onConfigUpdate(probe::onReadyEvent);
+                  probe.setInitState("returned");
+                } catch (QuonfigInitException e) {
+                  System.err.println("init raised: " + e.getMessage());
+                  Quonfig c = e.client();
+                  if (c != null) {
+                    synchronized (clientBox) {
+                      clientBox[0] = c;
+                    }
+                    if (keepRaised) {
+                      // The runner catches the error and keeps the object (no dead clients).
+                      probe.bindClient(c);
+                      c.onConfigUpdate(probe::onReadyEvent);
+                    }
+                  }
+                  probe.setInitState("raised");
+                } catch (RuntimeException e) {
+                  System.err.println("init raised (no client object): " + e);
+                  probe.setInitState("raised");
+                }
+              },
+              "chaos-init");
+      initThread.setDaemon(true);
+      initThread.start();
+    } else {
+      try {
+        clientBox[0] = newProbedClient(ob, probe, throwingCallback);
+      } catch (RuntimeException e) {
+        System.err.println("client construction failed: " + e.getMessage());
+        probe.log("error", e.getMessage());
+      }
+    }
+
+    // Schedule chaos events.
+    List<Thread> chaosThreads = new ArrayList<>();
+    for (ChaosScenario.Event ev : scheduled) {
+      long fireAt = baselineMs + ev.atMs;
+      Thread t =
+          new Thread(
+              () -> {
+                long delay = fireAt - System.currentTimeMillis();
+                if (delay > 0) {
+                  try {
+                    Thread.sleep(delay);
+                  } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                  }
+                }
+                fireEvent(tp, ev, injections, chaosErrors);
+              },
+              "chaos-event-" + ev.atMs);
+      t.setDaemon(true);
+      t.start();
+      chaosThreads.add(t);
+    }
+
+    int wallClockS = setup.wallClockSeconds > 0 ? setup.wallClockSeconds : 30;
     if (wallClockCapS > 0 && wallClockS > wallClockCapS) {
       System.err.printf(
           "scenario \"%s\" wall_clock_seconds=%d capped to %d via CHAOS_WALL_CLOCK_CAP_S%n",
@@ -295,7 +360,17 @@ final class ChaosTest {
           Thread.currentThread().interrupt();
         }
       }
-      if (finalClient != null) finalClient.close();
+      if (initThread != null && initThread.isAlive()) {
+        // A wait-mode init still blocked at the wall clock: interrupt it so it does not outlive
+        // the scenario.
+        initThread.interrupt();
+        initThread.join(2000);
+      }
+      Quonfig c;
+      synchronized (clientBox) {
+        c = clientBox[0];
+      }
+      if (c != null) c.close();
     }
 
     int pass = 0;
@@ -338,41 +413,103 @@ final class ChaosTest {
         failures.add(msg);
       }
     }
+    for (String err : chaosErrors) {
+      String msg = "FAIL  chaos event: " + err;
+      System.err.println(msg);
+      failures.add(msg);
+    }
     System.err.printf(
-        "scenario summary: %d passed, %d failed, %d skipped (state=%s, restartL1=%.0f, fallback=%b, lastRefreshMs=%d)%n",
-        pass,
-        fail,
-        skipped,
-        probe.connectionState(),
-        probe.sdkMetric("quonfig_sdk_worker_restart_total", "1"),
-        probe.fallbackPollerActive(),
-        probe.lastSuccessfulRefreshMs());
+        "scenario summary: %d passed, %d failed, %d skipped, %d chaos-event errors (%s)%n",
+        pass, fail, skipped, chaosErrors.size(), summarize(probe));
 
     if (!failures.isEmpty()) {
       throw new AssertionError(
           String.format(
-              "scenario \"%s\" — %d/%d expectations failed:%n%s",
-              run.name, fail, states.size(), String.join("\n", failures)));
+              "scenario \"%s\" — %d/%d expectations failed, %d chaos-event errors:%n%s",
+              run.name, fail, states.size(), chaosErrors.size(), String.join("\n", failures)));
+    }
+  }
+
+  /** End-of-scenario SDK snapshot for the log; every value read from the SDK. */
+  private static String summarize(ChaosProbe probe) {
+    if (!probe.hasClient()) {
+      return "no client object, initState=" + probe.initState();
+    }
+    return String.format(
+        "state=%s, restartL1=%.0f, restartL2=%.0f, sseAttempts=%.0f, fallback=%b, lastRefreshMs=%d,"
+            + " alive=%b",
+        probe.connectionState(),
+        probe.sdkMetric("quonfig_sdk_worker_restart_total", "1"),
+        probe.sdkMetric("quonfig_sdk_worker_restart_total", "2"),
+        probe.sdkMetric("quonfig_sse_connect_attempts_total", null),
+        probe.fallbackPollerActive(),
+        probe.lastSuccessfulRefreshMs(),
+        probe.processStillAlive());
+  }
+
+  /** Applies one chaos step now; any failure is recorded in {@code errors} (fails the scenario). */
+  private static void fireEvent(
+      ToxiproxyClient tp,
+      ChaosScenario.Event ev,
+      Map<String, InjectionState> injections,
+      List<String> errors) {
+    try {
+      if (ev.inject != null) {
+        InjectionState st = applyInject(tp, ev.inject);
+        if (ev.inject.name != null && !ev.inject.name.isEmpty()) {
+          injections.put(ev.inject.name, st);
+        }
+        System.err.printf("[%6dms] inject %s%n", ev.atMs, describeInject(ev.inject));
+      } else if (ev.clear != null && !ev.clear.isEmpty()) {
+        InjectionState st = injections.remove(ev.clear);
+        if (st == null) {
+          throw new IllegalArgumentException("clear '" + ev.clear + "': no such active inject");
+        }
+        clearInject(tp, st);
+        System.err.printf("[%6dms] clear %s%n", ev.atMs, ev.clear);
+      } else if (ev.process != null) {
+        applyProcess(tp, ev.process, errors);
+        System.err.printf("[%6dms] process %s/%d%n", ev.atMs, ev.process.action, ev.process.count);
+      } else {
+        throw new IllegalArgumentException("chaos step has no inject, clear or process");
+      }
+    } catch (Exception ex) {
+      String msg = String.format("[%dms] %s", ev.atMs, ex.getMessage());
+      System.err.println("chaos event failed: " + msg);
+      errors.add(msg);
+    }
+  }
+
+  private static OnInitFailure parseInitFailure(String s) {
+    switch (s) {
+      case "fail":
+        return OnInitFailure.FAIL;
+      case "wait":
+        return OnInitFailure.WAIT;
+      case "continue":
+        return OnInitFailure.CONTINUE;
+      default:
+        throw new IllegalArgumentException(
+            "on_init_failure '" + s + "': want fail | wait | continue (canonical spellings)");
     }
   }
 
   /**
-   * Wires {@code probe} into the client options (logger, SSE / fallback-poller state callbacks,
-   * user callback), constructs the client and binds the probe's freshness to it. {@code
-   * throwingCallback} installs scenario 10's user callback that throws on every config update.
+   * Wires {@code probe} into the client options (the SDK logger hook, and scenario 10's user
+   * callback), constructs the client and binds the probe to it: from then on every value the probe
+   * reports is read from this client (qfg-6vno.3). {@code throwingCallback} installs scenario 10's
+   * user callback that throws on every config update.
    */
   static Quonfig newProbedClient(Options.Builder ob, ChaosProbe probe, boolean throwingCallback) {
     ob =
         ob
             // Route SDK SLF4J output into the probe so log-matching expectations
             // (e.g. scenario 10's exp[3] looking for /callback|onConfigUpdate/i) can fire.
-            .logger(new ProbeBridgeLogger(probe))
-            .onSseConnectionStateChange(probe::onSseState)
-            .onFallbackPollerStateChange(probe::onFallbackState);
+            .logger(new ProbeBridgeLogger(probe));
     if (throwingCallback) {
-      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches
-      // RuntimeException so the SDK keeps running; processCrashed stays false. The asserted
-      // `worker_restart_total` increment relies on supervisor visibility we don't have today.
+      // Scenario 10 — user callback throws. sdk-java's Quonfig.fireConfigUpdate catches it and
+      // keeps running (inline recovery), counting it under worker_restart_total{layer=1} as
+      // sdk-go does (reason=callback_panic); processStillAlive watches for a real thread death.
       ob =
           ob.onConfigUpdate(
               () -> {
@@ -380,16 +517,13 @@ final class ChaosTest {
               });
     }
     Quonfig client = new Quonfig(ob.build());
-    // Freshness comes from the client's own stamp, not an install callback: a 304 or
-    // same-generation poll never fires onConfigUpdate (qfg-goi1.7 plan sec 2).
     probe.bindClient(client);
     return client;
   }
 
   // ---- chaos injection translation ----
 
-  private static InjectionState applyInject(ToxiproxyClient tp, ChaosScenario.Inject inj)
-      throws Exception {
+  static InjectionState applyInject(ToxiproxyClient tp, ChaosScenario.Inject inj) throws Exception {
     String name = (inj.name == null || inj.name.isEmpty()) ? "anon" : inj.name;
     if (inj.sseSilentStallAfterMs != null) {
       Map<String, Object> attrs = new LinkedHashMap<>();
@@ -431,13 +565,10 @@ final class ChaosTest {
       return new InjectionState(null, null, List.of("sse"));
     }
     if (inj.sseHttpStatus != null) {
-      // Toxiproxy is TCP-only; HTTP-status injection is not supported. Scenario 8 will not
-      // exercise the 401 path here. Log and no-op.
-      System.err.println(
-          "inject: sse_http_status="
-              + inj.sseHttpStatus
-              + " — toxiproxy is TCP-only, not implemented (scenario will be partial/unsupported)");
-      return new InjectionState(null, null, Collections.emptyList());
+      // Toxiproxy is TCP-only and cannot return an HTTP status. Fail rather than run the
+      // scenario against a healthy stream (qfg-6vno.3).
+      throw new IllegalArgumentException(
+          "inject sse_http_status=" + inj.sseHttpStatus + ": not supported by the TCP-only rig");
     }
     if (inj.proxy != null && !inj.proxy.isEmpty() && inj.toxic != null) {
       String type = String.valueOf(inj.toxic.get("type"));
@@ -447,8 +578,7 @@ final class ChaosTest {
       tp.addToxic(inj.proxy, name, type, "downstream", attrs);
       return new InjectionState(inj.proxy, name, Collections.emptyList());
     }
-    System.err.println("inject: unknown shape — no-op");
-    return null;
+    throw new IllegalArgumentException("inject: unknown shape (no recognized key) — " + name);
   }
 
   private static void clearInject(ToxiproxyClient tp, InjectionState st) throws Exception {
@@ -461,7 +591,7 @@ final class ChaosTest {
     }
   }
 
-  private static void applyProcess(ToxiproxyClient tp, ChaosScenario.Process p) {
+  static void applyProcess(ToxiproxyClient tp, ChaosScenario.Process p, List<String> errors) {
     if ("kill_sse_proxy".equals(p.action)) {
       int count = Math.max(1, p.count);
       long interval = p.intervalMs > 0 ? p.intervalMs : 1000L;
@@ -475,15 +605,17 @@ final class ChaosTest {
                     tp.setEnabled("sse", true);
                     if (i < count - 1) Thread.sleep(Math.max(0, interval - 200));
                   }
-                } catch (Exception ignored) {
-                  // best-effort
+                } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                  errors.add("process kill_sse_proxy: " + e.getMessage());
                 }
               },
               "chaos-kill-sse");
       t.setDaemon(true);
       t.start();
     } else {
-      System.err.println("process: unknown action " + p.action + " — no-op");
+      throw new IllegalArgumentException("process: unknown action '" + p.action + "'");
     }
   }
 
@@ -592,7 +724,7 @@ final class ChaosTest {
    * but pulling it in would mean a runtime dep on slf4j-impl in this test path — string-join keeps
    * the bridge self-contained.
    */
-  private static final class ProbeBridgeLogger extends org.slf4j.helpers.AbstractLogger {
+  static final class ProbeBridgeLogger extends org.slf4j.helpers.AbstractLogger {
 
     private final ChaosProbe probe;
 
@@ -617,12 +749,6 @@ final class ChaosTest {
         msg = msg + " | " + throwable;
       }
       probe.log(level.name().toLowerCase(), msg);
-      // A caught user-callback throw is sdk-java's worker-restart-equivalent: the SDK logs and
-      // continues instead of crashing a worker, so scenario 10's worker_restart_total assert
-      // observes the recovery through this log signal (sdk-net probe parity, qfg-41nh.15).
-      if (msg != null && msg.contains("onConfigUpdate callback threw")) {
-        probe.incRestartLayer1();
-      }
     }
 
     @Override

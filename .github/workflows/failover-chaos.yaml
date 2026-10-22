@@ -66,8 +66,10 @@ jobs:
           # (v2026.06.19.1): reframed o01 (fast primary wins; secondary never
           # contacted), o05 (slow older primary loses to fast newer secondary) and
           # o03 (heal forward). v2026.10.16.2 adds after_ms + the timeline rules
-          # (qfg-goi1.7, harness: qfg-goi1.10.36).
-          ref: v2026.10.16.2
+          # (qfg-goi1.7, harness: qfg-goi1.10.36). v2026.10.21.1 adds the f01/f04
+          # no-init-WARN/ERROR sdkLog rows (qfg-9p4i.6). scripts/check-itd-refs.sh
+          # (run by test.yaml) fails CI when the three pins differ (qfg-6vno.7).
+          ref: v2026.10.21.1
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT

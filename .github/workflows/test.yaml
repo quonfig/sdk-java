@@ -31,6 +31,12 @@ jobs:
           # adopting new test cases. See integration-test-data/RELEASING.md.
           ref: v2026.10.21.1
 
+      - name: Check integration-test-data pins match
+        # test.yaml, chaos.yaml and failover-chaos.yaml must pin ONE ITD tag
+        # (qfg-6vno.7); a stale chaos pin runs older scenarios than this suite.
+        working-directory: sdk-java
+        run: ./scripts/check-itd-refs.sh
+
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v4
         with:
           distribution: temurin
