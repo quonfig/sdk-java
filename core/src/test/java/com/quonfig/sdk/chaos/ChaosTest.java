@@ -320,6 +320,7 @@ final class ChaosTest {
       }
     }
 
+    String summary = "";
     try {
       while (System.currentTimeMillis() < deadline) {
         long elapsed = System.currentTimeMillis() - baselineMs;
@@ -350,6 +351,8 @@ final class ChaosTest {
           if (!s.tl.evaluated) s.lastReason = "never evaluated: wall clock ended before after_ms";
         }
       }
+      // Snapshot before close(): a closed client reports disconnected.
+      summary = summarize(probe);
     } finally {
       // Wait for any in-flight chaos threads to finish (so subsequent scenarios start clean).
       for (Thread t : chaosThreads) {
@@ -420,7 +423,7 @@ final class ChaosTest {
     }
     System.err.printf(
         "scenario summary: %d passed, %d failed, %d skipped, %d chaos-event errors (%s)%n",
-        pass, fail, skipped, chaosErrors.size(), summarize(probe));
+        pass, fail, skipped, chaosErrors.size(), summary);
 
     if (!failures.isEmpty()) {
       throw new AssertionError(
