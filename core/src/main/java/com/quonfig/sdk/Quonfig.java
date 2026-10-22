@@ -588,8 +588,9 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
 
     // Nothing installed. Preserve the init-failure contract: surface the failure so getters apply
-    // OnInitFailure (init-throw). If legErrors is empty the legs all 304'd (no change) — still a
-    // successful, ready client; complete normally.
+    // OnInitFailure (init-throw). A 304 with no store installed is a leg error (qfg-6vno.11), so
+    // legErrors is empty only when every leg 304'd over an already-installed store (no change) —
+    // still a successful, ready client; complete normally.
     if (!legErrors.isEmpty()) {
       StringBuilder errs = new StringBuilder();
       int authStatus = legErrorByIndex.size() == http.legCount() ? 0 : -1;
@@ -645,6 +646,17 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         .thenAccept(
             resp -> {
               boolean installed;
+              if (resp.statusCode() == 304 && store == null) {
+                // Init sends no If-None-Match, so a 304 here is a protocol violation (a misbehaving
+                // proxy/middlebox). With nothing installed it must be a leg error, not an answered
+                // leg: latching readiness on it would complete initFuture with no store and stop
+                // the init retry loop, wedging the client on code defaults (qfg-6vno.11).
+                throw new java.util.concurrent.CompletionException(
+                    new HttpTransportException(
+                        304,
+                        "",
+                        "304 Not Modified with no config installed (no If-None-Match sent)"));
+              }
               try {
                 installed = resp.statusCode() != 304 && installDeliveryBody(resp.body(), legIndex);
               } catch (IOException e) {
