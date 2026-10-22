@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A boot the secondary delivery leg rescues (the primary refuses, the hedge
+  installs off the secondary inside `initTimeout`) no longer logs a spurious
+  `[quonfig] init recovered` WARN. The winning leg read "init decided" (also
+  true on success) instead of "init decided on failure", so a healthy boot
+  could log the heal line. Surfaced by chaos scenario f01 (qfg-6vno.3).
+
 ## 2.0.0 - 2026-10-21
 
 ### BREAKING (2.0.0)

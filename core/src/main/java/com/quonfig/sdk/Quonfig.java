@@ -660,9 +660,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
               // a real install.
               if (readyLatched.compareAndSet(false, true)) {
                 completeInitFuture();
-                if (initDecided && initHealed.compareAndSet(false, true)) {
-                  // The constructor already gave up (CONTINUE at initTimeout) while this first
-                  // attempt was still in flight: this is the heal (section C).
+                if (initDecidedOnFailure && initHealed.compareAndSet(false, true)) {
+                  // The constructor already gave up (CONTINUE at initTimeout, or a caught FAIL)
+                  // while this first attempt was still in flight: this is the heal (section C).
+                  // Not initDecided: this leg's install wakes the constructor, which marks init
+                  // decided on SUCCESS before we get here, and a rescued boot must log no init
+                  // WARN (section C, D case 9; chaos f01).
                   logRecovered(initStartNanos, legIndex);
                 }
                 startSse();
