@@ -37,6 +37,8 @@ final class ChaosProbe implements AutoCloseable {
 
     long workerRestartTotal(String layer);
 
+    long callbackErrorsTotal(String callback);
+
     long sseConnectAttempts();
 
     Instant lastSuccessfulRefresh();
@@ -102,6 +104,11 @@ final class ChaosProbe implements AutoCloseable {
           @Override
           public long workerRestartTotal(String layer) {
             return ChaosSdkSeams.workerRestartTotal(client, layer);
+          }
+
+          @Override
+          public long callbackErrorsTotal(String callback) {
+            return ChaosSdkSeams.callbackErrorsTotal(client, callback);
           }
 
           @Override
@@ -184,13 +191,33 @@ final class ChaosProbe implements AutoCloseable {
   }
 
   double sdkMetric(String name, String layer) {
+    return sdkMetric(name, layer == null ? null : "layer", layer);
+  }
+
+  /**
+   * {@code name} filtered by one label ({@code labelKey}={@code labelValue}), or summed over every
+   * value when {@code labelKey} is null. A label the metric does not carry fails loudly.
+   */
+  double sdkMetric(String name, String labelKey, String labelValue) {
+    boolean unlabeled = labelKey == null || labelValue == null || labelValue.isEmpty();
     switch (name) {
       case "quonfig_sdk_worker_restart_total":
-        if (layer == null || layer.isEmpty()) {
+        if (unlabeled) {
           return view().workerRestartTotal("1") + view().workerRestartTotal("2");
         }
-        return view().workerRestartTotal(layer);
+        requireLabel(name, "layer", labelKey);
+        return view().workerRestartTotal(labelValue);
+      case "quonfig_sdk_callback_errors_total":
+        if (unlabeled) {
+          return view().callbackErrorsTotal("on_config_update")
+              + view().callbackErrorsTotal("on_connection_state_change");
+        }
+        requireLabel(name, "callback", labelKey);
+        return view().callbackErrorsTotal(labelValue);
       case "quonfig_sse_connect_attempts_total":
+        if (!unlabeled) {
+          throw new IllegalArgumentException(name + " carries no label (got " + labelKey + ")");
+        }
         return view().sseConnectAttempts();
       default:
         // Fail loudly (qfg-goi1.1.6): a silent 0 would make `== 0` / `< N` expectations on a
@@ -198,8 +225,14 @@ final class ChaosProbe implements AutoCloseable {
         throw new IllegalArgumentException(
             "unknown sdkMetric name '"
                 + name
-                + "': ChaosProbe observes only quonfig_sdk_worker_restart_total and"
-                + " quonfig_sse_connect_attempts_total");
+                + "': ChaosProbe observes only quonfig_sdk_worker_restart_total,"
+                + " quonfig_sdk_callback_errors_total and quonfig_sse_connect_attempts_total");
+    }
+  }
+
+  private static void requireLabel(String name, String want, String got) {
+    if (!want.equals(got)) {
+      throw new IllegalArgumentException(name + " is labeled by " + want + ", not " + got);
     }
   }
 

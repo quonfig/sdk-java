@@ -76,6 +76,37 @@ class ExpressionEvaluatorTest {
   }
 
   @Test
+  void callbackErrorsTotalReadsTheSdkCounterByCallbackLabel() {
+    // Scenario 10 exp[0] (ITD v2026.10.22.2, qfg-6vno.28).
+    ChaosProbe probe = new ChaosProbe();
+    FakeView view = new FakeView();
+    view.callbackErrors = java.util.Map.of("on_config_update", 2L);
+    probe.bindView(view);
+    ExpressionEvaluator eval = new ExpressionEvaluator(probe);
+    String expr =
+        "client.sdkMetric('quonfig_sdk_callback_errors_total', callback='on_config_update') >= 1";
+    ExpressionEvaluator.Result r = eval.evaluate(expr);
+    assertTrue(r.passed, r.reason);
+    assertTrue(r.reason.contains("callback=on_config_update"), r.reason);
+    assertFalse(
+        eval.evaluate(
+                "client.sdkMetric('quonfig_sdk_callback_errors_total',"
+                    + " callback='on_connection_state_change') >= 1")
+            .passed);
+    assertEquals(2.0, probe.sdkMetric("quonfig_sdk_callback_errors_total", null));
+    // A label the metric does not carry fails loudly rather than reading a wrong counter.
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            eval.evaluate("client.sdkMetric('quonfig_sdk_callback_errors_total', layer='1') >= 1"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            eval.evaluate(
+                "client.sdkMetric('quonfig_sdk_worker_restart_total', callback='x') >= 1"));
+  }
+
+  @Test
   void unknownSdkMetricInAnExpressionDoesNotPass() {
     ChaosProbe probe = new ChaosProbe();
     probe.bindView(new FakeView());
@@ -150,6 +181,7 @@ class ExpressionEvaluatorTest {
     ConnectionState state = ConnectionState.INITIALIZING;
     boolean ready;
     java.util.Map<String, String> strings = java.util.Map.of();
+    java.util.Map<String, Long> callbackErrors = java.util.Map.of();
 
     @Override
     public ConnectionState connectionState() {
@@ -164,6 +196,11 @@ class ExpressionEvaluatorTest {
     @Override
     public long workerRestartTotal(String layer) {
       return 0;
+    }
+
+    @Override
+    public long callbackErrorsTotal(String callback) {
+      return callbackErrors.getOrDefault(callback, 0L);
     }
 
     @Override

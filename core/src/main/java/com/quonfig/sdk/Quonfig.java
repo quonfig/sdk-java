@@ -164,8 +164,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   // only through the package-private *ForTest seams below. See SseClient for what they count.
   private final AtomicLong sseConnectAttempts = new AtomicLong();
   private final AtomicLong sseWorkerRestarts = new AtomicLong();
-  // User onConfigUpdate throws the SDK caught and recovered from inline (fireConfigUpdate).
-  private final AtomicLong callbackPanics = new AtomicLong();
+  // quonfig_sdk_callback_errors_total{callback} (qfg-6vno.28): user callback invocations that threw
+  // and were caught. Not worker restarts; read through callbackErrorsTotalForTest.
+  private final AtomicLong configUpdateCallbackErrors = new AtomicLong();
+  private final AtomicLong connectionStateCallbackErrors = new AtomicLong();
   private volatile FallbackPoller fallbackPoller;
   private volatile HttpTransport httpTransport;
   private volatile DatadirWatcher datadirWatcher;
@@ -1665,8 +1667,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           for (Consumer<Boolean> l : sseListeners) {
             try {
               l.accept(connected);
-            } catch (RuntimeException ignored) {
-              // user code; never tear down the client
+            } catch (Exception ex) {
+              // User code; never tear down the client. Counted and logged, not a worker restart
+              // (contract Test 5, qfg-6vno.28). Remaining listeners still run.
+              connectionStateCallbackErrors.incrementAndGet();
+              options
+                  .logger()
+                  .error("quonfig: onConnectionStateChange callback threw; SDK continuing", ex);
             }
           }
         });
@@ -1942,16 +1949,30 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * Test seam (package-private, qfg-6vno.3): {@code quonfig_sdk_worker_restart_total{layer}}. Layer
    * {@code "2"} is the {@link Supervisor}'s own restart count for the fallback poller. Layer {@code
    * "1"} is the SSE worker: SseClient restarts (a connected session that ended, or an unexpected
-   * error) plus user onConfigUpdate throws the SDK recovered from inline, which sdk-go counts as
-   * {@code layer="1",reason="callback_panic"} too (contract Test 5 allows either).
+   * error). Only real restarts count; a user callback throw is counted in {@link
+   * #callbackErrorsTotalForTest} instead (contract Test 5, qfg-6vno.28).
    */
   long workerRestartTotalForTest(String layer) {
-    if ("1".equals(layer)) return sseWorkerRestarts.get() + callbackPanics.get();
+    if ("1".equals(layer)) return sseWorkerRestarts.get();
     if ("2".equals(layer)) {
       Supervisor sup = this.supervisor;
       return sup == null ? 0L : sup.workerRestartTotal("2");
     }
     throw new IllegalArgumentException("unknown worker layer '" + layer + "' (want 1 or 2)");
+  }
+
+  /**
+   * Test seam (package-private, qfg-6vno.28): {@code quonfig_sdk_callback_errors_total{callback}},
+   * user callback invocations that threw and were caught: {@code "on_config_update"} or {@code
+   * "on_connection_state_change"}. A callback throw is never a worker restart (contract Test 5).
+   */
+  long callbackErrorsTotalForTest(String callback) {
+    if ("on_config_update".equals(callback)) return configUpdateCallbackErrors.get();
+    if ("on_connection_state_change".equals(callback)) return connectionStateCallbackErrors.get();
+    throw new IllegalArgumentException(
+        "unknown callback '"
+            + callback
+            + "' (want on_config_update or on_connection_state_change)");
   }
 
   /** Test seam (package-private, qfg-6vno.3): SSE dials so far, failed ones included. */
@@ -2910,11 +2931,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     for (Runnable r : configUpdateListeners) {
       try {
         r.run();
-      } catch (RuntimeException ex) {
-        // listeners are user code; never let one tear down the client. Mirror sdk-go's
-        // invokeOnConfigUpdate / sdk-node's invokeOnConfigUpdate by logging at ERROR so
-        // operators (and chaos scenario 10) can observe that the callback panicked.
-        callbackPanics.incrementAndGet();
+      } catch (Exception ex) {
+        // Listeners are user code; never let one tear down the client. Logged at ERROR with the
+        // stack and counted in callback_errors_total{callback=on_config_update}; not a worker
+        // restart (contract Test 5, chaos scenario 10; qfg-6vno.28).
+        configUpdateCallbackErrors.incrementAndGet();
         options.logger().error("quonfig: onConfigUpdate callback threw; SDK continuing", ex);
       }
     }
