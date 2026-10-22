@@ -823,6 +823,170 @@ class EnabledTest {
   }
 
   @Test
+  @DisplayName(
+      "returns true for PROP_MATCHES when the regex matches part of the prop (unanchored search)")
+  void returnsTrueForPropMatchesWhenTheRegexMatchesPartOfThePropUnanchoredSearch()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "xaab"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.matches"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_DOES_NOT_MATCH when the regex matches part of the prop (unanchored search)")
+  void returnsFalseForPropDoesNotMatchWhenTheRegexMatchesPartOfThePropUnanchoredSearch()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "xaab"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.does-not-match"));
+  }
+
+  @Test
+  @DisplayName("returns true for PROP_MATCHES with an anchored regex when the whole prop matches")
+  void returnsTrueForPropMatchesWithAnAnchoredRegexWhenTheWholePropMatches() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "123"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.matches.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_MATCHES with an anchored regex when the prop is too long")
+  void returnsFalseForPropMatchesWithAnAnchoredRegexWhenThePropIsTooLong() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "1234"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.matches.anchored"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_MATCHES with an anchored regex when the prop has a non-matching character")
+  void returnsFalseForPropMatchesWithAnAnchoredRegexWhenThePropHasANonMatchingCharacter()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "12a"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.matches.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_MATCHES when the prop is not a string")
+  void returnsFalseForPropMatchesWhenThePropIsNotAString() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", 123L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.matches.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_MATCHES when the prop is missing")
+  void returnsFalseForPropMatchesWhenThePropIsMissing() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("key", "michael"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.matches.anchored"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_DOES_NOT_MATCH with an anchored regex when the prop is too long")
+  void returnsTrueForPropDoesNotMatchWithAnAnchoredRegexWhenThePropIsTooLong() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "1234"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.does-not-match.anchored"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns true for PROP_DOES_NOT_MATCH with an anchored regex when the prop has a non-matching character")
+  void returnsTrueForPropDoesNotMatchWithAnAnchoredRegexWhenThePropHasANonMatchingCharacter()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "12a"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.does-not-match.anchored"));
+  }
+
+  @Test
+  @DisplayName(
+      "returns false for PROP_DOES_NOT_MATCH with an anchored regex when the whole prop matches")
+  void returnsFalseForPropDoesNotMatchWithAnAnchoredRegexWhenTheWholePropMatches()
+      throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "123"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.does-not-match.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_DOES_NOT_MATCH when the prop is not a string")
+  void returnsFalseForPropDoesNotMatchWhenThePropIsNotAString() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", 123L))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.does-not-match.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_DOES_NOT_MATCH when the prop is missing")
+  void returnsFalseForPropDoesNotMatchWhenThePropIsMissing() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("key", "michael"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.does-not-match.anchored"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_MATCHES when the stored regex is invalid")
+  void returnsFalseForPropMatchesWhenTheStoredRegexIsInvalid() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "("))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.matches.invalid-pattern"));
+  }
+
+  @Test
+  @DisplayName("returns false for PROP_DOES_NOT_MATCH when the stored regex is invalid")
+  void returnsFalseForPropDoesNotMatchWhenTheStoredRegexIsInvalid() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "abc"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.does-not-match.invalid-pattern"));
+  }
+
+  @Test
+  @DisplayName("returns true for IN_SEG when the segment's PROP_DOES_NOT_MATCH criterion holds")
+  void returnsTrueForInSegWhenTheSegmentSPropDoesNotMatchCriterionHolds() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "abc"))));
+    assertEquals(true, scoped.featureIsOn("feature-flag.in-segment.does-not-match"));
+  }
+
+  @Test
+  @DisplayName("returns false for IN_SEG when the segment's PROP_DOES_NOT_MATCH regex matches")
+  void returnsFalseForInSegWhenTheSegmentSPropDoesNotMatchRegexMatches() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("code", "123"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.in-segment.does-not-match"));
+  }
+
+  @Test
+  @DisplayName("returns false for IN_SEG when the segment's PROP_DOES_NOT_MATCH prop is missing")
+  void returnsFalseForInSegWhenTheSegmentSPropDoesNotMatchPropIsMissing() throws Exception {
+    Quonfig client = TestSetup.client();
+    BoundQuonfig scoped =
+        client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("key", "michael"))));
+    assertEquals(false, scoped.featureIsOn("feature-flag.in-segment.does-not-match"));
+  }
+
+  @Test
   @DisplayName("returns true for IS_PRESENT rule when the given prop is a non-empty string")
   void returnsTrueForIsPresentRuleWhenTheGivenPropIsANonEmptyString() throws Exception {
     Quonfig client = TestSetup.client();
