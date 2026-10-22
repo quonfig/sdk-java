@@ -248,4 +248,47 @@ class InitFailureModeTest {
                         && e.format.contains("[quonfig] init")),
         "a healthy boot never logs init above DEBUG; got " + logger.entries);
   }
+
+  /**
+   * qfg-6vno.11: init sends no If-None-Match, so a 304 to the first fetch is a protocol violation
+   * (a misbehaving proxy). It must be a leg error while nothing is installed — not a "ready" client
+   * with no store whose getters NPE.
+   */
+  @Test
+  void continue_firstFetch304_isALegError_gettersReturnDefaultNotNpe_andHeals() throws Exception {
+    AtomicInteger status = new AtomicInteger(304);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(server(status, new AtomicInteger()), logger, Duration.ofMillis(500))
+            .onInitFailure(OnInitFailure.CONTINUE)
+            .build();
+    Quonfig q = new Quonfig(o);
+    clients.add(q);
+    assertFalse(q.isReady(), "a 304 with nothing installed must not latch readiness");
+    assertFalse(
+        q.initFuture().isDone() && !q.initFuture().isCompletedExceptionally(),
+        "a 304 with nothing installed must not complete initFuture successfully");
+
+    assertEquals(false, q.getBool("my.flag", false));
+    EvaluationDetails<Boolean> d = q.getBoolDetails("my.flag", false);
+    assertEquals(false, d.value());
+    assertEquals(ErrorCode.PROVIDER_NOT_READY, d.errorCode());
+
+    status.set(0);
+    assertTrue(q.awaitReady(Duration.ofSeconds(5)), "client keeps retrying and heals");
+    assertTrue(q.getBool("my.flag", false));
+  }
+
+  @Test
+  void fail_firstFetch304OnEveryLeg_throwsQuonfigInitException() throws Exception {
+    AtomicInteger status = new AtomicInteger(304);
+    RecordingLogger logger = new RecordingLogger();
+    Options o =
+        options(server(status, new AtomicInteger()), logger, Duration.ofMillis(500))
+            .onInitFailure(OnInitFailure.FAIL)
+            .build();
+    QuonfigInitException e = assertThrows(QuonfigInitException.class, () -> new Quonfig(o));
+    clients.add(e.client());
+    assertFalse(e.client().isReady());
+  }
 }

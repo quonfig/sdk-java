@@ -9,6 +9,12 @@
   `[quonfig] init recovered` WARN. The winning leg read "init decided" (also
   true on success) instead of "init decided on failure", so a healthy boot
   could log the heal line. Surfaced by chaos scenario f01 (qfg-6vno.3).
+- An HTTP 304 to the first config fetch, with no config installed yet, is now
+  a failed delivery leg. Init sends no `If-None-Match`, so only a misbehaving
+  proxy answers 304 there. Before, the 304 completed `initFuture()`
+  successfully and stopped the init retry loop with nothing loaded, so a
+  `CONTINUE` client stayed on code defaults until SSE delivered a config. Now
+  init retries and heals like any other failed attempt (qfg-6vno.11).
 
 ## 2.0.0 - 2026-10-21
 
