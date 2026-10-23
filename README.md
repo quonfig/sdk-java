@@ -19,12 +19,12 @@ Replace the version below with the latest from [Maven Central](https://central.s
 
 ```kotlin
 dependencies {
-    implementation("com.quonfig:sdk-java:2.0.0")
+    implementation("com.quonfig:sdk-java:2.1.0")
     // optional, depending on which logging library you use:
-    runtimeOnly("com.quonfig:sdk-java-logback:2.0.0")
-    runtimeOnly("com.quonfig:sdk-java-log4j2:2.0.0")
+    runtimeOnly("com.quonfig:sdk-java-logback:2.1.0")
+    runtimeOnly("com.quonfig:sdk-java-log4j2:2.1.0")
     // optional, for Micronaut apps:
-    implementation("com.quonfig:sdk-java-micronaut:2.0.0")
+    implementation("com.quonfig:sdk-java-micronaut:2.1.0")
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
     <groupId>com.quonfig</groupId>
     <artifactId>sdk-java</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 

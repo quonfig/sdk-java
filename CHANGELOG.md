@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 - 2026-10-23
+
+### Upgrade notes
+
+> **UPGRADE: `HttpTransportException.bodyExcerpt()` holds at most 1 KiB (qfg-6vno.20.2, minor).**
+> The SDK now reads at most 1 KiB of a non-2xx response body, so `bodyExcerpt()` holds at most
+> 1 KiB of it (was 8 KiB). Code that parsed a longer upstream error body out of the excerpt sees a
+> shorter string. The body is never logged or put in an error message.
 
 ### Changed (callback errors, qfg-6vno.28)
 
@@ -39,9 +46,8 @@
 - **Non-2xx bodies are read at most 1 KiB** (SSE and HTTP) and are never logged
   or put in an error message. Before, the HTTP transport read the whole body
   and then kept 8 KiB of it.
-- **UPGRADE:** `HttpTransportException.bodyExcerpt()` now holds at most 1 KiB of
-  the body (was 8 KiB). Code that parsed a longer upstream error body out of
-  the excerpt sees a shorter string.
+- `HttpTransportException.bodyExcerpt()` now holds at most 1 KiB of the body
+  (was 8 KiB). See the UPGRADE note above.
 - The caps are constants, not options (supervisor contract "Rule — size caps"
   and Test 10, integration-test-data `v2026.10.22.2`).
 
