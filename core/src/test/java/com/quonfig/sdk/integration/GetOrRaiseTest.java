@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.quonfig.sdk.Quonfig;
+import com.quonfig.sdk.exceptions.QuonfigCoercionException;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
 import com.quonfig.sdk.exceptions.QuonfigInitException;
@@ -590,7 +591,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAnEnvVarProvidedConfigCannotBeCoercedToConfiguredType() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class, () -> client.getLongOrThrow("provided.not.a.number"));
+        QuonfigCoercionException.class, () -> client.getLongOrThrow("provided.not.a.number"));
   }
 
   @Test
@@ -600,9 +601,9 @@ class GetOrRaiseTest {
         TestSetup.map("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db"),
         () -> {
           Quonfig client = TestSetup.client();
-          QuonfigKeyNotFoundException raised =
+          QuonfigCoercionException raised =
               assertThrows(
-                  QuonfigKeyNotFoundException.class,
+                  QuonfigCoercionException.class,
                   () -> client.getLongOrThrow("provided.secret.not.an.int"));
           String raisedMessage = String.valueOf(raised.getMessage());
           assertTrue(
@@ -629,9 +630,9 @@ class GetOrRaiseTest {
         TestSetup.map("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db"),
         () -> {
           Quonfig client = TestSetup.client();
-          QuonfigKeyNotFoundException raised =
+          QuonfigCoercionException raised =
               assertThrows(
-                  QuonfigKeyNotFoundException.class,
+                  QuonfigCoercionException.class,
                   () -> client.getDoubleOrThrow("provided.secret.not.a.double"));
           String raisedMessage = String.valueOf(raised.getMessage());
           assertTrue(
@@ -667,7 +668,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getDurationOrThrow("provided.duration.malformed.30s"));
         });
   }
@@ -680,7 +681,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getDurationOrThrow("provided.duration.malformed.PT0.5H"));
         });
   }
@@ -693,7 +694,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getDurationOrThrow("provided.duration.malformed.P1DT"));
         });
   }
@@ -706,7 +707,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getDurationOrThrow("provided.duration.malformed.garbage"));
         });
   }
@@ -716,7 +717,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAStoredDuration30sCannotBeCoerced() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.30s"));
   }
 
@@ -725,7 +726,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAStoredDurationPt05hCannotBeCoerced() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.PT0.5H"));
   }
 
@@ -734,7 +735,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAStoredDurationP1dtCannotBeCoerced() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.P1DT"));
   }
 
@@ -743,7 +744,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAStoredDurationGarbageCannotBeCoerced() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.garbage"));
   }
 
@@ -752,7 +753,7 @@ class GetOrRaiseTest {
   void raisesAnErrorIfAStoredDurationEmptyCannotBeCoerced() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.empty"));
   }
 
@@ -1191,7 +1192,7 @@ class GetOrRaiseTest {
   void intGetOrRaiseOnStoredMalformedIntTwelveRaisesUnableToCoerceEnvVar() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getLongOrThrow("getter.contract.int.malformed"));
   }
 
@@ -1201,7 +1202,7 @@ class GetOrRaiseTest {
   void doubleGetOrRaiseOnStoredMalformedDoubleAbcRaisesUnableToCoerceEnvVar() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigKeyNotFoundException.class,
+        QuonfigCoercionException.class,
         () -> client.getDoubleOrThrow("getter.contract.double.malformed"));
   }
 
@@ -1215,7 +1216,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getLongOrThrow("getter.contract.provided.int.malformed"));
         });
   }
@@ -1230,7 +1231,7 @@ class GetOrRaiseTest {
         () -> {
           Quonfig client = TestSetup.client();
           assertThrows(
-              QuonfigKeyNotFoundException.class,
+              QuonfigCoercionException.class,
               () -> client.getDoubleOrThrow("getter.contract.provided.double.malformed"));
         });
   }

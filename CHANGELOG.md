@@ -52,7 +52,7 @@ the getters accept; the edge cases below change.
 - `*Details` getters report `ErrorCode.TYPE_MISMATCH` (was `GENERAL`) for a
   malformed stored or ENV_VAR value, duration included.
 - The malformed-duration WARN is now the shared read-failure WARN above.
-- CI runs integration-test-data `v2026.10.23`.
+- CI runs integration-test-data `v2026.10.26` (the contract matrix plus the generator mapping that expects `QuonfigCoercionException`, qfg-koj9).
 
 ## 2.1.0 - 2026-10-23
 
