@@ -44,10 +44,10 @@ public final class ValueDecoder {
         payload = raw.asBoolean();
         break;
       case INT:
-        payload = raw.asLong();
+        payload = decodeInt(raw);
         break;
       case DOUBLE:
-        payload = raw.asDouble();
+        payload = decodeDouble(raw);
         break;
       case STRING:
       case LOG_LEVEL:
@@ -73,6 +73,60 @@ public final class ValueDecoder {
     boolean confidential = v.hasNonNull("confidential") && v.get("confidential").asBoolean();
     String decryptWith = v.hasNonNull("decryptWith") ? v.get("decryptWith").asText() : null;
     return new Value(vt, payload, confidential, decryptWith);
+  }
+
+  /**
+   * A stored int: a JSON integer, or a string holding one ({@code "12"}). Anything else that does
+   * not parse ({@code "twelve"}, {@code 3.5}) is kept as its raw text instead of becoming 0, so the
+   * typed getters report it as a coercion failure and the caller's default applies (qfg-zvyy,
+   * qfg-zqoh; sdk-go config.go keeps the raw string the same way).
+   */
+  private static Object decodeInt(JsonNode raw) {
+    if (raw.isIntegralNumber()) {
+      if (raw.canConvertToLong()) return raw.asLong();
+      return raw.asText();
+    }
+    if (raw.isTextual()) {
+      String s = raw.asText();
+      try {
+        return Long.parseLong(s);
+      } catch (NumberFormatException e) {
+        return s;
+      }
+    }
+    if (raw.isNull() || raw.isMissingNode()) return null;
+    return raw.asText();
+  }
+
+  /**
+   * A stored double: a JSON number, or a string holding one ({@code "2.5"}). A string that does not
+   * parse ({@code "abc"}) is kept as its raw text instead of becoming 0.0 (see {@link #decodeInt}).
+   */
+  private static Object decodeDouble(JsonNode raw) {
+    if (raw.isNumber()) return raw.asDouble();
+    if (raw.isTextual()) {
+      String s = raw.asText();
+      Double d = parseDoubleStrict(s);
+      return d != null ? d : s;
+    }
+    if (raw.isNull() || raw.isMissingNode()) return null;
+    return raw.asText();
+  }
+
+  /**
+   * {@link Double#parseDouble} without its Java-only leniencies: it trims whitespace and accepts a
+   * trailing type suffix ({@code "1.5d"}, {@code "2f"}), which no other Quonfig SDK reads as a
+   * number.
+   */
+  private static Double parseDoubleStrict(String s) {
+    if (s.isEmpty() || !s.equals(s.trim())) return null;
+    char last = s.charAt(s.length() - 1);
+    if (last == 'd' || last == 'D' || last == 'f' || last == 'F') return null;
+    try {
+      return Double.parseDouble(s);
+    } catch (NumberFormatException e) {
+      return null;
+    }
   }
 
   private static ProvidedValue parseProvided(JsonNode raw) {

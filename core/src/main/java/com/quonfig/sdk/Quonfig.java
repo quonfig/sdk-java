@@ -13,11 +13,13 @@ import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.eval.ResolverException;
 import com.quonfig.sdk.eval.Value;
 import com.quonfig.sdk.eval.ValueType;
+import com.quonfig.sdk.exceptions.QuonfigCoercionException;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
 import com.quonfig.sdk.exceptions.QuonfigInitException;
 import com.quonfig.sdk.exceptions.QuonfigInitTimeoutException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
+import com.quonfig.sdk.exceptions.QuonfigTypeMismatchException;
 import com.quonfig.sdk.supervisor.FallbackPoller;
 import com.quonfig.sdk.supervisor.Supervisor;
 import com.quonfig.sdk.telemetry.ContextShapeCollector;
@@ -136,8 +138,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   private final CopyOnWriteArrayList<Consumer<Boolean>> sseListeners = new CopyOnWriteArrayList<>();
   // Config keys already warned about a weighted rollout hashing on a missing property (qfg-9dxb.8).
   private final Set<String> warnedMissingHashProperty = ConcurrentHashMap.newKeySet();
-  // Config keys already warned about a malformed duration value (qfg-2agi.8).
-  private final Set<String> warnedMalformedDuration = ConcurrentHashMap.newKeySet();
+  // Config keys already warned about a typed read or featureIsOn that returned no value: a type
+  // mismatch, a malformed value, an unset ENV_VAR or a decryption failure, so each key logs once
+  // per client (qfg-zvyy; generalizes the qfg-2agi.8 malformed-duration warning).
+  private final Set<String> warnedReadFailure = ConcurrentHashMap.newKeySet();
 
   /**
    * Environment used for evaluation and emitted in metadata.
@@ -1824,8 +1828,25 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return initialized && s != null ? s.keys() : Set.of();
   }
 
+  /**
+   * Reports whether a feature flag is on. Never throws: a missing key, a flag with no matching
+   * rule, a non-boolean value (including a stored string {@code "true"}) or any resolution error
+   * returns {@code false} and logs a warning once per key per client (qfg-zvyy). Before the first
+   * config loads, and on a closed client, it returns {@code false} without logging.
+   */
   public boolean featureIsOn(String key, ContextSet ctx) {
-    EvaluationDetails<Boolean> d = getBoolDetails(key, Boolean.FALSE, ctx);
+    EvaluationDetails<Boolean> d;
+    try {
+      d = getBoolDetails(key, Boolean.FALSE, ctx);
+    } catch (RuntimeException e) {
+      warnReadFailure(key, "featureIsOn failed (" + e.getClass().getSimpleName() + ")");
+      return false;
+    }
+    if (d.errorCode() == ErrorCode.FLAG_NOT_FOUND) {
+      warnReadFailure(key, "the key does not exist; featureIsOn returns false");
+    } else if (d.reason() == Reason.DEFAULT) {
+      warnReadFailure(key, "no rule matched; featureIsOn returns false");
+    }
     return Boolean.TRUE.equals(d.value());
   }
 
@@ -2456,15 +2477,22 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    *
    * <ul>
    *   <li>{@link QuonfigKeyNotFoundException} when the key does not exist or no rule produced a
-   *       value (including before the first config loads, on a client that is not ready), and when
-   *       the value cannot be coerced to the requested type (an ENV_VAR value such as {@code
-   *       "not_a_number"} for an INT, or a malformed duration, stored or ENV_VAR).
+   *       value (including before the first config loads, on a client that is not ready).
+   *   <li>{@link QuonfigCoercionException} (a {@link QuonfigKeyNotFoundException}) when the value
+   *       cannot be converted to the requested type: an ENV_VAR value such as {@code
+   *       "not_a_number"} for an INT, or a malformed int, double or duration, stored or ENV_VAR.
    *   <li>{@link QuonfigEnvVarNotSetException} when an ENV_VAR-provided value's variable is unset.
    *   <li>{@link QuonfigDecryptionException} when a confidential value cannot be decrypted.
-   *   <li>{@link IllegalArgumentException} when the config's value type does not match the getter
-   *       (for example {@code getLongOrThrow} on a STRING config).
+   *   <li>{@link QuonfigTypeMismatchException} (an {@link IllegalArgumentException}) when the
+   *       config's value is not of the getter's type, for example {@code getLongOrThrow} on a
+   *       STRING config or {@code getBoolOrThrow} on a stored string {@code "false"}. Strings are
+   *       never coerced; INT reads a whole DOUBLE within +/-(2^53-1) and DOUBLE reads an INT.
    *   <li>{@link IllegalStateException} when the client is closed.
    * </ul>
+   *
+   * <p>The plain typed getters ({@link #getString(String, String)} and friends) never throw for
+   * these cases: they return the caller's default (or {@code null}) and log one WARN per key. Use
+   * this family when a broken config, such as a wrong decryption key in production, must fail hard.
    */
   public String getStringOrThrow(String key) {
     return getStringOrThrow(key, null);
@@ -2560,6 +2588,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       case UNABLE_TO_DECRYPT:
         return new QuonfigDecryptionException(msg, e);
       case UNABLE_TO_COERCE:
+        return new QuonfigCoercionException(msg, e);
       case MISSING_DEFAULT:
       default:
         return new QuonfigKeyNotFoundException(msg, e);
@@ -2618,10 +2647,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (exampleCollector != null) exampleCollector.push(effective);
 
     if (!isCompatible(cfg.valueType(), expectedType)) {
-      if (raise) {
-        throw new IllegalArgumentException(
-            "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType);
-      }
+      String msg =
+          "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType;
+      if (raise) throw new QuonfigTypeMismatchException(msg);
+      warnReadFailure(key, msg);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2640,6 +2669,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         if (e instanceof ResolverException) throw resolverFailure(key, (ResolverException) e);
         throw e;
       }
+      warnReadFailure(key, "evaluation failed (" + e.getClass().getSimpleName() + ")");
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2667,16 +2697,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       resolvedVal = resolver.resolve(match.value(), cfg, effectiveEnvironment, effective);
     } catch (ResolverException e) {
       if (raise) throw resolverFailure(key, e);
-      if (expectedType == ValueType.DURATION
-          && e.kind() == ResolverException.Kind.UNABLE_TO_COERCE) {
-        warnMalformedDuration(key);
-      }
+      warnReadFailure(key, e.getMessage());
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
           variantFor(Reason.ERROR, -1, -1),
           null,
-          ErrorCode.GENERAL,
+          e.kind() == ResolverException.Kind.UNABLE_TO_COERCE
+              ? ErrorCode.TYPE_MISMATCH
+              : ErrorCode.GENERAL,
           "resolve failed for \"" + key + "\": " + e.getMessage(),
           metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     }
@@ -2687,28 +2716,27 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     T typed;
     try {
       typed = (T) coerceToJavaType(payload, expectedType, javaType);
-    } catch (DateTimeException | ArithmeticException e) {
-      // Malformed duration value (qfg-2agi.8): the same contract as an ENV_VAR value that fails
-      // to coerce — caller's default, Reason.ERROR, one WARN per key, never a throw. The
-      // get*OrThrow family raises the same coercion error as an ENV_VAR value instead.
-      if (raise) {
-        throw new QuonfigKeyNotFoundException(
-            "cannot convert \"" + key + "\" to " + expectedType + ": " + e.getMessage(), e);
-      }
-      warnMalformedDuration(key);
+    } catch (DateTimeException | ArithmeticException | MalformedValueException e) {
+      // Malformed stored value: a duration that does not parse (qfg-2agi.8) or an int/double that
+      // does not parse (qfg-zvyy, qfg-zqoh). The same contract as an ENV_VAR value that fails to
+      // coerce: caller's default, Reason.ERROR, one WARN per key, never a throw. The get*OrThrow
+      // family raises the same coercion error as an ENV_VAR value instead. The message names the
+      // key, never the value (a DateTimeParseException message quotes the text).
+      String msg = "config \"" + key + "\" has a malformed " + expectedType + " value";
+      if (raise) throw new QuonfigCoercionException(msg);
+      warnReadFailure(key, msg);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
           variantFor(Reason.ERROR, -1, -1),
           null,
-          ErrorCode.GENERAL,
-          "cannot convert \"" + key + "\" to " + expectedType + ": " + e.getMessage(),
+          ErrorCode.TYPE_MISMATCH,
+          msg,
           metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     } catch (ClassCastException | IllegalArgumentException e) {
-      if (raise) {
-        throw new IllegalArgumentException(
-            "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage(), e);
-      }
+      String msg = "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage();
+      if (raise) throw new QuonfigTypeMismatchException(msg, e);
+      warnReadFailure(key, msg);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2764,16 +2792,31 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         metadata);
   }
 
-  private void warnMalformedDuration(String key) {
-    if (warnedMalformedDuration.add(key)) {
+  /**
+   * Logs once per config key per client that a read returned no value, so a broken config is not
+   * mistaken for "using the default" (qfg-zvyy, sdk-go warnReadFailure parity). {@code reason}
+   * names the key and the failure, never the value.
+   */
+  private void warnReadFailure(String key, String reason) {
+    if (warnedReadFailure.add(key)) {
       options
           .logger()
           .warn(
-              "quonfig: \"{}\" holds a malformed duration (expected ISO 8601, e.g. PT30S);"
-                  + " returning the default",
-              key);
+              "quonfig: read of \"{}\" returned no value; the caller's default applies: {}",
+              key,
+              reason);
     }
   }
+
+  /** A stored int or double that did not parse (kept as its raw text by ValueDecoder). */
+  private static final class MalformedValueException extends RuntimeException {
+    MalformedValueException() {
+      super(null, null, false, false);
+    }
+  }
+
+  /** Largest integer a double holds exactly, 2^53-1; matches {@code qfg verify}'s int grammar. */
+  private static final double MAX_SAFE_INT = 9007199254740991.0;
 
   private static int reasonNumber(Reason r) {
     switch (r) {
@@ -2813,11 +2856,18 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
   }
 
+  /**
+   * Which stored value types a typed getter accepts (qfg-zvyy). Strings are never coerced: a stored
+   * {@code "false"} is not a BOOL and a DURATION is not a STRING. The only cross-type reads are
+   * STRING on LOG_LEVEL, DOUBLE on INT (always exact) and INT on DOUBLE (checked per value in
+   * {@link #coerceToJavaType}: whole and within +/-(2^53-1), never truncated).
+   */
   private static boolean isCompatible(ValueType actual, ValueType requested) {
     if (actual == requested) return true;
     // log_level is stored as STRING-style enum; allow string getters to read it.
     if (requested == ValueType.STRING && actual == ValueType.LOG_LEVEL) return true;
-    if (requested == ValueType.STRING && actual == ValueType.DURATION) return true;
+    if (requested == ValueType.DOUBLE && actual == ValueType.INT) return true;
+    if (requested == ValueType.INT && actual == ValueType.DOUBLE) return true;
     return false;
   }
 
@@ -2828,12 +2878,25 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       if (payload instanceof String) return roundHalfUpToMillis(Duration.parse((String) payload));
     }
     if (vt == ValueType.INT) {
-      if (payload instanceof Long) return payload;
-      if (payload instanceof Number) return ((Number) payload).longValue();
+      if (payload instanceof Long || payload instanceof Integer) {
+        return ((Number) payload).longValue();
+      }
+      if (payload instanceof Double || payload instanceof Float) {
+        double d = ((Number) payload).doubleValue();
+        if (Double.isNaN(d) || d != Math.rint(d) || Math.abs(d) > MAX_SAFE_INT) {
+          throw new IllegalArgumentException(
+              "DOUBLE value is not a whole number within +/-(2^53-1)");
+        }
+        return (long) d;
+      }
+      if (payload instanceof String) throw new MalformedValueException();
     }
     if (vt == ValueType.DOUBLE) {
       if (payload instanceof Double) return payload;
-      if (payload instanceof Number) return ((Number) payload).doubleValue();
+      if (payload instanceof Long || payload instanceof Integer || payload instanceof Float) {
+        return ((Number) payload).doubleValue();
+      }
+      if (payload instanceof String) throw new MalformedValueException();
     }
     // Copy-on-return (qfg-goi1.10.8, sdk-go 543ee9c parity): the payload is the cache's own
     // object, so hand back a deep copy a caller can mutate without changing what later reads see.

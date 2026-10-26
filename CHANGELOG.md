@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.2.0 - 2026-10-26
+
+The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by
+the integration-test-data matrix (`getter.contract.*`, tag `v2026.10.23`). A
+typed read that cannot return a value of the getter's type returns your default
+and logs once, instead of a made-up value. For sdk-java this mostly widens what
+the getters accept; the edge cases below change.
+
+### UPGRADE to 2.2.0
+
+1. **Numbers convert when exact.** `getDouble` now reads an int config
+   (`30` -> `30.0`), and `getLong` reads a double config holding a whole number
+   within +/-(2^53-1) (`3.0` -> `3`). Before, both returned your default with
+   `ErrorCode.TYPE_MISMATCH`. `3.9`, `1e300` and `2^53` are still type
+   mismatches; nothing is truncated.
+2. **Malformed stored ints and doubles return your default.** A stored int or
+   double that does not parse (for example `"twelve"` or `"abc"`) used to read
+   as `0` / `0.0`. It now returns your default (or `null`) with
+   `Reason.ERROR` / `ErrorCode.TYPE_MISMATCH`, and `getLongOrThrow` /
+   `getDoubleOrThrow` throw `QuonfigCoercionException`, the same as a malformed
+   ENV_VAR value or duration.
+3. **`getString` no longer reads a duration config.** It returned the ISO-8601
+   text (`"PT30S"`); it now returns your default and logs a type mismatch, like
+   every other cross-type read. Read durations with `getDuration`.
+4. **One WARN per key.** A type mismatch, a malformed value, an unset ENV_VAR or
+   a decryption failure logs one WARN per key per client
+   (`quonfig: read of "<key>" returned no value; the caller's default applies: ...`).
+   It names the key, never the value. `featureIsOn` also logs once per key when
+   it returns `false` because the key is missing, no rule matched, the value is
+   not a bool, or resolution failed. It never throws. A wrong decryption key in
+   production therefore degrades to your defaults with these WARNs; if that must
+   be fatal, read the secret with `get*OrThrow`, which throws
+   `QuonfigDecryptionException`.
+5. **New exception subclasses (source and binary compatible).** `get*OrThrow`
+   now throws `QuonfigTypeMismatchException` (extends
+   `IllegalArgumentException`, which it threw before) for a wrong-type value,
+   and `QuonfigCoercionException` (extends `QuonfigKeyNotFoundException`, which
+   it threw before) for a value that cannot be converted. Existing `catch`
+   blocks keep working. `QuonfigKeyNotFoundException` is no longer `final`.
+
+### Added
+
+- `com.quonfig.sdk.exceptions.QuonfigTypeMismatchException` and
+  `com.quonfig.sdk.exceptions.QuonfigCoercionException` (qfg-koj9). Before, a
+  coercion failure in `get*OrThrow` threw a plain `QuonfigKeyNotFoundException`
+  reading "no value found", although the key existed.
+
+### Changed
+
+- `*Details` getters report `ErrorCode.TYPE_MISMATCH` (was `GENERAL`) for a
+  malformed stored or ENV_VAR value, duration included.
+- The malformed-duration WARN is now the shared read-failure WARN above.
+- CI runs integration-test-data `v2026.10.23`.
+
 ## 2.1.0 - 2026-10-23
 
 ### Upgrade notes

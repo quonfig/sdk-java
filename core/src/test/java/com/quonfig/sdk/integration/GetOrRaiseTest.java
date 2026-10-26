@@ -16,6 +16,7 @@ import com.quonfig.sdk.exceptions.QuonfigEnvVarNotSetException;
 import com.quonfig.sdk.exceptions.QuonfigInitException;
 import com.quonfig.sdk.exceptions.QuonfigInitTimeoutException;
 import com.quonfig.sdk.exceptions.QuonfigKeyNotFoundException;
+import com.quonfig.sdk.exceptions.QuonfigTypeMismatchException;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -753,5 +754,493 @@ class GetOrRaiseTest {
     assertThrows(
         QuonfigKeyNotFoundException.class,
         () -> client.getDurationOrThrow("test.duration.malformed.empty"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored int raises type_mismatch")
+  void stringGetOrRaiseOnStoredIntRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getStringOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored double raises type_mismatch")
+  void stringGetOrRaiseOnStoredDoubleRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored bool raises type_mismatch")
+  void stringGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getStringOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored string_list raises type_mismatch")
+  void stringGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored json raises type_mismatch")
+  void stringGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getStringOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("STRING get_or_raise on stored duration raises type_mismatch")
+  void stringGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored string raises type_mismatch")
+  void intGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getLongOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored double 3.9 raises type_mismatch")
+  void intGetOrRaiseOnStoredDouble39RaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getLongOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored bool raises type_mismatch")
+  void intGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getLongOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored string_list raises type_mismatch")
+  void intGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getLongOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored json raises type_mismatch")
+  void intGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getLongOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored duration raises type_mismatch")
+  void intGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getLongOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored string raises type_mismatch")
+  void doubleGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDoubleOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored bool raises type_mismatch")
+  void doubleGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getDoubleOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored string_list raises type_mismatch")
+  void doubleGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDoubleOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored json raises type_mismatch")
+  void doubleGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getDoubleOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored duration raises type_mismatch")
+  void doubleGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDoubleOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored string raises type_mismatch")
+  void booleanGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getBoolOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored int raises type_mismatch")
+  void booleanGetOrRaiseOnStoredIntRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getBoolOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored double raises type_mismatch")
+  void booleanGetOrRaiseOnStoredDoubleRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getBoolOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored string_list raises type_mismatch")
+  void booleanGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getBoolOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored json raises type_mismatch")
+  void booleanGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getBoolOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored duration raises type_mismatch")
+  void booleanGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getBoolOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored string raises type_mismatch")
+  void stringListGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored int raises type_mismatch")
+  void stringListGetOrRaiseOnStoredIntRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored double raises type_mismatch")
+  void stringListGetOrRaiseOnStoredDoubleRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored bool raises type_mismatch")
+  void stringListGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored json raises type_mismatch")
+  void stringListGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST get_or_raise on stored duration raises type_mismatch")
+  void stringListGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getStringListOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored string raises type_mismatch")
+  void jsonGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getJsonOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored int raises type_mismatch")
+  void jsonGetOrRaiseOnStoredIntRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getJsonOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored double raises type_mismatch")
+  void jsonGetOrRaiseOnStoredDoubleRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getJsonOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored bool raises type_mismatch")
+  void jsonGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getJsonOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored string_list raises type_mismatch")
+  void jsonGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getJsonOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("JSON get_or_raise on stored duration raises type_mismatch")
+  void jsonGetOrRaiseOnStoredDurationRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getJsonOrThrow("getter.contract.duration"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored string raises type_mismatch")
+  void durationGetOrRaiseOnStoredStringRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.string"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored int raises type_mismatch")
+  void durationGetOrRaiseOnStoredIntRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class, () -> client.getDurationOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored double raises type_mismatch")
+  void durationGetOrRaiseOnStoredDoubleRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.double"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored bool raises type_mismatch")
+  void durationGetOrRaiseOnStoredBoolRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.bool"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored string_list raises type_mismatch")
+  void durationGetOrRaiseOnStoredStringListRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.string_list"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored json raises type_mismatch")
+  void durationGetOrRaiseOnStoredJsonRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.json"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored string \"false\" raises type_mismatch")
+  void booleanGetOrRaiseOnStoredStringFalseRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getBoolOrThrow("getter.contract.string.false"));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on stored string \"true\" raises type_mismatch")
+  void booleanGetOrRaiseOnStoredStringTrueRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getBoolOrThrow("getter.contract.string.true"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored string \"3\" raises type_mismatch")
+  void intGetOrRaiseOnStoredString3RaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getLongOrThrow("getter.contract.string.number"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored string \"3\" raises type_mismatch")
+  void doubleGetOrRaiseOnStoredString3RaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDoubleOrThrow("getter.contract.string.number"));
+  }
+
+  @Test
+  @DisplayName("DURATION get_or_raise on stored string \"PT1S\" raises type_mismatch")
+  void durationGetOrRaiseOnStoredStringPt1sRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getDurationOrThrow("getter.contract.string.duration"));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get_or_raise on stored int 30 returns 30.0")
+  void doubleGetOrRaiseOnStoredInt30Returns300() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(30.0d, client.getDoubleOrThrow("getter.contract.int"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored whole double 3.0 returns 3")
+  void intGetOrRaiseOnStoredWholeDouble30Returns3() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(3L, client.getLongOrThrow("getter.contract.double.whole"));
+  }
+
+  @Test
+  @DisplayName("INT get_or_raise on stored double 1e300 raises type_mismatch")
+  void intGetOrRaiseOnStoredDouble1e300RaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getLongOrThrow("getter.contract.double.huge"));
+  }
+
+  @Test
+  @DisplayName(
+      "INT get_or_raise on stored double 2^53 (outside the safe int range) raises type_mismatch")
+  void intGetOrRaiseOnStoredDouble253OutsideTheSafeIntRangeRaisesTypeMismatch() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigTypeMismatchException.class,
+        () -> client.getLongOrThrow("getter.contract.double.unsafe"));
+  }
+
+  @Test
+  @DisplayName(
+      "INT get_or_raise on stored malformed int \"twelve\" raises unable_to_coerce_env_var")
+  void intGetOrRaiseOnStoredMalformedIntTwelveRaisesUnableToCoerceEnvVar() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigKeyNotFoundException.class,
+        () -> client.getLongOrThrow("getter.contract.int.malformed"));
+  }
+
+  @Test
+  @DisplayName(
+      "DOUBLE get_or_raise on stored malformed double \"abc\" raises unable_to_coerce_env_var")
+  void doubleGetOrRaiseOnStoredMalformedDoubleAbcRaisesUnableToCoerceEnvVar() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigKeyNotFoundException.class,
+        () -> client.getDoubleOrThrow("getter.contract.double.malformed"));
+  }
+
+  @Test
+  @DisplayName(
+      "INT get_or_raise on env-var-provided malformed int \"twelve\" raises unable_to_coerce_env_var")
+  void intGetOrRaiseOnEnvVarProvidedMalformedIntTwelveRaisesUnableToCoerceEnvVar()
+      throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_INT", "twelve"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertThrows(
+              QuonfigKeyNotFoundException.class,
+              () -> client.getLongOrThrow("getter.contract.provided.int.malformed"));
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "DOUBLE get_or_raise on env-var-provided malformed double \"abc\" raises unable_to_coerce_env_var")
+  void doubleGetOrRaiseOnEnvVarProvidedMalformedDoubleAbcRaisesUnableToCoerceEnvVar()
+      throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_DOUBLE", "abc"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertThrows(
+              QuonfigKeyNotFoundException.class,
+              () -> client.getDoubleOrThrow("getter.contract.provided.double.malformed"));
+        });
+  }
+
+  @Test
+  @DisplayName("BOOLEAN get_or_raise on a missing bool env var raises missing_env_var")
+  void booleanGetOrRaiseOnAMissingBoolEnvVarRaisesMissingEnvVar() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigEnvVarNotSetException.class,
+        () -> client.getBoolOrThrow("getter.contract.provided.bool.missing"));
   }
 }
