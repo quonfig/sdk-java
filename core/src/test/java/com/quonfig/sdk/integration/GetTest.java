@@ -609,4 +609,914 @@ class GetTest {
           assertNull(client.getDuration("provided.duration.malformed.garbage", null));
         });
   }
+
+  @Test
+  @DisplayName("STRING getter on stored int returns the default")
+  void stringGetterOnStoredIntReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.int", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored int with no default returns nil")
+  void stringGetterOnStoredIntWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored double returns the default")
+  void stringGetterOnStoredDoubleReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.double", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored double with no default returns nil")
+  void stringGetterOnStoredDoubleWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored bool returns the default")
+  void stringGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.bool", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored bool with no default returns nil")
+  void stringGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored string_list returns the default")
+  void stringGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.string_list", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored string_list with no default returns nil")
+  void stringGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored json returns the default")
+  void stringGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.json", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored json with no default returns nil")
+  void stringGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored duration returns the default")
+  void stringGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("getter.contract.duration", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on stored duration with no default returns nil")
+  void stringGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string returns the default")
+  void intGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.string", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string with no default returns nil")
+  void intGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored double 3.9 returns the default")
+  void intGetterOnStoredDouble39ReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.double", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored double 3.9 with no default returns nil")
+  void intGetterOnStoredDouble39WithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored bool returns the default")
+  void intGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.bool", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored bool with no default returns nil")
+  void intGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string_list returns the default")
+  void intGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.string_list", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string_list with no default returns nil")
+  void intGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored json returns the default")
+  void intGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.json", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored json with no default returns nil")
+  void intGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored duration returns the default")
+  void intGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.duration", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored duration with no default returns nil")
+  void intGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string returns the default")
+  void doubleGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.string", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string with no default returns nil")
+  void doubleGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored bool returns the default")
+  void doubleGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.bool", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored bool with no default returns nil")
+  void doubleGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string_list returns the default")
+  void doubleGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.string_list", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string_list with no default returns nil")
+  void doubleGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored json returns the default")
+  void doubleGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.json", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored json with no default returns nil")
+  void doubleGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored duration returns the default")
+  void doubleGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.duration", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored duration with no default returns nil")
+  void doubleGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string returns the default")
+  void booleanGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.string", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string with no default returns nil")
+  void booleanGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored int returns the default")
+  void booleanGetterOnStoredIntReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.int", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored int with no default returns nil")
+  void booleanGetterOnStoredIntWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored double returns the default")
+  void booleanGetterOnStoredDoubleReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.double", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored double with no default returns nil")
+  void booleanGetterOnStoredDoubleWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string_list returns the default")
+  void booleanGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.string_list", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string_list with no default returns nil")
+  void booleanGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored json returns the default")
+  void booleanGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.json", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored json with no default returns nil")
+  void booleanGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored duration returns the default")
+  void booleanGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.duration", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored duration with no default returns nil")
+  void booleanGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored string returns the default")
+  void stringListGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.string", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored string with no default returns nil")
+  void stringListGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored int returns the default")
+  void stringListGetterOnStoredIntReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.int", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored int with no default returns nil")
+  void stringListGetterOnStoredIntWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored double returns the default")
+  void stringListGetterOnStoredDoubleReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.double", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored double with no default returns nil")
+  void stringListGetterOnStoredDoubleWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored bool returns the default")
+  void stringListGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.bool", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored bool with no default returns nil")
+  void stringListGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored json returns the default")
+  void stringListGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.json", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored json with no default returns nil")
+  void stringListGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored duration returns the default")
+  void stringListGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.list("DEFAULT"),
+        client.getStringList("getter.contract.duration", java.util.List.of("DEFAULT")));
+  }
+
+  @Test
+  @DisplayName("STRING_LIST getter on stored duration with no default returns nil")
+  void stringListGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getStringList("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored string returns the default")
+  void jsonGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.string", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored string with no default returns nil")
+  void jsonGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored int returns the default")
+  void jsonGetterOnStoredIntReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.int", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored int with no default returns nil")
+  void jsonGetterOnStoredIntWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored double returns the default")
+  void jsonGetterOnStoredDoubleReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.double", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored double with no default returns nil")
+  void jsonGetterOnStoredDoubleWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored bool returns the default")
+  void jsonGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.bool", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored bool with no default returns nil")
+  void jsonGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored string_list returns the default")
+  void jsonGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.string_list", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored string_list with no default returns nil")
+  void jsonGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored duration returns the default")
+  void jsonGetterOnStoredDurationReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("default", true),
+        client.getJson("getter.contract.duration", TestSetup.map("default", true)));
+  }
+
+  @Test
+  @DisplayName("JSON getter on stored duration with no default returns nil")
+  void jsonGetterOnStoredDurationWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getJson("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string returns the default")
+  void durationGetterOnStoredStringReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.string", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails("getter.contract.string", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string with no default returns nil")
+  void durationGetterOnStoredStringWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored int returns the default")
+  void durationGetterOnStoredIntReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.int", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails("getter.contract.int", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored int with no default returns nil")
+  void durationGetterOnStoredIntWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored double returns the default")
+  void durationGetterOnStoredDoubleReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.double", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails("getter.contract.double", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored double with no default returns nil")
+  void durationGetterOnStoredDoubleWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored bool returns the default")
+  void durationGetterOnStoredBoolReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.bool", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails("getter.contract.bool", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored bool with no default returns nil")
+  void durationGetterOnStoredBoolWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string_list returns the default")
+  void durationGetterOnStoredStringListReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.string_list", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "getter.contract.string_list", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string_list with no default returns nil")
+  void durationGetterOnStoredStringListWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored json returns the default")
+  void durationGetterOnStoredJsonReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.json", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails("getter.contract.json", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored json with no default returns nil")
+  void durationGetterOnStoredJsonWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string \"false\" returns the default")
+  void booleanGetterOnStoredStringFalseReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.string.false", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string \"false\" with no default returns nil")
+  void booleanGetterOnStoredStringFalseWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.string.false", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string \"false\" returns a true default")
+  void booleanGetterOnStoredStringFalseReturnsATrueDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(true, client.getBool("getter.contract.string.false", Boolean.TRUE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string \"true\" returns the default")
+  void booleanGetterOnStoredStringTrueReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.getBool("getter.contract.string.true", Boolean.FALSE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on stored string \"true\" with no default returns nil")
+  void booleanGetterOnStoredStringTrueWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.string.true", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string \"3\" returns the default")
+  void intGetterOnStoredString3ReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.string.number", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored string \"3\" with no default returns nil")
+  void intGetterOnStoredString3WithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.string.number", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string \"3\" returns the default")
+  void doubleGetterOnStoredString3ReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.string.number", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored string \"3\" with no default returns nil")
+  void doubleGetterOnStoredString3WithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.string.number", null));
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string \"PT1S\" returns the default")
+  void durationGetterOnStoredStringPt1sReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration("getter.contract.string.duration", java.time.Duration.ofMillis(7000L));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(7000L, actual.toMillis());
+    com.quonfig.sdk.EvaluationDetails<java.time.Duration> details =
+        client.getDurationDetails(
+            "getter.contract.string.duration", java.time.Duration.ofMillis(7000L));
+    assertEquals(7000L, details.value().toMillis());
+    assertEquals(com.quonfig.sdk.Reason.ERROR, details.reason());
+  }
+
+  @Test
+  @DisplayName("DURATION getter on stored string \"PT1S\" with no default returns nil")
+  void durationGetterOnStoredStringPt1sWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDuration("getter.contract.string.duration", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE get on stored int 30 returns 30.0")
+  void doubleGetOnStoredInt30Returns300() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(30.0d, client.getDouble("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("INT get on stored whole double 3.0 returns 3")
+  void intGetOnStoredWholeDouble30Returns3() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(3L, client.getLong("getter.contract.double.whole", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored int 30 ignores the default")
+  void doubleGetterOnStoredInt30IgnoresTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(30.0d, client.getDouble("getter.contract.int", 7.5d));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored whole double 3.0 ignores the default")
+  void intGetterOnStoredWholeDouble30IgnoresTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(3L, client.getLong("getter.contract.double.whole", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored double 1e300 returns the default")
+  void intGetterOnStoredDouble1e300ReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.double.huge", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored double 1e300 with no default returns nil")
+  void intGetterOnStoredDouble1e300WithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.double.huge", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored double 2^53 (outside the safe int range) returns the default")
+  void intGetterOnStoredDouble253OutsideTheSafeIntRangeReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.double.unsafe", 7L));
+  }
+
+  @Test
+  @DisplayName(
+      "INT getter on stored double 2^53 (outside the safe int range) with no default returns nil")
+  void intGetterOnStoredDouble253OutsideTheSafeIntRangeWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.double.unsafe", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored malformed int \"twelve\" returns the default")
+  void intGetterOnStoredMalformedIntTwelveReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7L, client.getLong("getter.contract.int.malformed", 7L));
+  }
+
+  @Test
+  @DisplayName("INT getter on stored malformed int \"twelve\" with no default returns nil")
+  void intGetterOnStoredMalformedIntTwelveWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getLong("getter.contract.int.malformed", null));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored malformed double \"abc\" returns the default")
+  void doubleGetterOnStoredMalformedDoubleAbcReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(7.5d, client.getDouble("getter.contract.double.malformed", 7.5d));
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on stored malformed double \"abc\" with no default returns nil")
+  void doubleGetterOnStoredMalformedDoubleAbcWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getDouble("getter.contract.double.malformed", null));
+  }
+
+  @Test
+  @DisplayName("INT getter on env-var-provided malformed int \"twelve\" returns the default")
+  void intGetterOnEnvVarProvidedMalformedIntTwelveReturnsTheDefault() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_INT", "twelve"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(7L, client.getLong("getter.contract.provided.int.malformed", 7L));
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "INT getter on env-var-provided malformed int \"twelve\" with no default returns nil")
+  void intGetterOnEnvVarProvidedMalformedIntTwelveWithNoDefaultReturnsNil() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_INT", "twelve"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertNull(client.getLong("getter.contract.provided.int.malformed", null));
+        });
+  }
+
+  @Test
+  @DisplayName("DOUBLE getter on env-var-provided malformed double \"abc\" returns the default")
+  void doubleGetterOnEnvVarProvidedMalformedDoubleAbcReturnsTheDefault() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_DOUBLE", "abc"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(7.5d, client.getDouble("getter.contract.provided.double.malformed", 7.5d));
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "DOUBLE getter on env-var-provided malformed double \"abc\" with no default returns nil")
+  void doubleGetterOnEnvVarProvidedMalformedDoubleAbcWithNoDefaultReturnsNil() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_DOUBLE", "abc"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertNull(client.getDouble("getter.contract.provided.double.malformed", null));
+        });
+  }
+
+  @Test
+  @DisplayName("STRING getter on a missing env var returns the default")
+  void stringGetterOnAMissingEnvVarReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("provided.by.missing.env.var", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on a missing env var with no default returns nil")
+  void stringGetterOnAMissingEnvVarWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("provided.by.missing.env.var", null));
+  }
+
+  @Test
+  @DisplayName("STRING getter on a decryption failure returns the default")
+  void stringGetterOnADecryptionFailureReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals("DEFAULT", client.getString("a.broken.secret.config", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("STRING getter on a decryption failure with no default returns nil")
+  void stringGetterOnADecryptionFailureWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("a.broken.secret.config", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on a missing bool env var returns the default")
+  void booleanGetterOnAMissingBoolEnvVarReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(true, client.getBool("getter.contract.provided.bool.missing", Boolean.TRUE));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on a missing bool env var with no default returns nil")
+  void booleanGetterOnAMissingBoolEnvVarWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getBool("getter.contract.provided.bool.missing", null));
+  }
+
+  @Test
+  @DisplayName("BOOLEAN getter on env-var-provided bool \"false\" returns false")
+  void booleanGetterOnEnvVarProvidedBoolFalseReturnsFalse() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_BOOL", "false"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(false, client.getBool("getter.contract.provided.bool", null));
+        });
+  }
 }

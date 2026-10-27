@@ -19,12 +19,12 @@ Replace the version below with the latest from [Maven Central](https://central.s
 
 ```kotlin
 dependencies {
-    implementation("com.quonfig:sdk-java:2.1.0")
+    implementation("com.quonfig:sdk-java:2.2.0")
     // optional, depending on which logging library you use:
-    runtimeOnly("com.quonfig:sdk-java-logback:2.1.0")
-    runtimeOnly("com.quonfig:sdk-java-log4j2:2.1.0")
+    runtimeOnly("com.quonfig:sdk-java-logback:2.2.0")
+    runtimeOnly("com.quonfig:sdk-java-log4j2:2.2.0")
     // optional, for Micronaut apps:
-    implementation("com.quonfig:sdk-java-micronaut:2.1.0")
+    implementation("com.quonfig:sdk-java-micronaut:2.2.0")
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
     <groupId>com.quonfig</groupId>
     <artifactId>sdk-java</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0</version>
 </dependency>
 ```
 
@@ -93,6 +93,35 @@ try {
   URL credentials or response bodies. A healthy boot logs nothing above DEBUG.
 
 Datadir and datafile modes load synchronously and do not use `initTimeout` or `onInitFailure`.
+
+## Typed getters
+
+Each typed getter takes the key, your default and an optional `ContextSet`:
+`getString`, `getBool`, `getLong`, `getDouble`, `getStringList`, `getDuration`, `getJson`, plus
+`featureIsOn`, the `*Details` variants (value, `Reason`, `ErrorCode`) and the `*OrThrow` family.
+They share one contract with every Quonfig SDK (2.2.0+):
+
+- **A read that cannot return a value of the getter's type returns your default** (or `null` if you
+  passed `null`) and logs one WARN per key per client. That covers a value of another type, a
+  malformed stored or ENV_VAR value (`"twelve"` in an int config), an unset ENV_VAR and a value
+  that cannot be decrypted. The WARN names the key, never the value. The `*Details` variant
+  reports `Reason.ERROR`, with `ErrorCode.TYPE_MISMATCH` for a wrong-type or malformed value.
+- **No string coercion.** A stored string `"false"` is not a bool, `"3"` is not an int, and a
+  duration config is not a string.
+- **Numbers convert only when exact.** `getDouble` reads an int config (`30` -> `30.0`).
+  `getLong` reads a double config only when the value is whole and within +/-(2^53-1)
+  (`3.0` -> `3`); `3.9` or `1e300` is a type mismatch. Nothing is truncated.
+- **`featureIsOn` never throws.** A missing key, a flag with no matching rule, a non-bool value or
+  any resolution error returns `false` and logs one WARN per key.
+- **`get*OrThrow` fails hard.** It throws `QuonfigKeyNotFoundException` (missing key or no matching
+  rule), `QuonfigCoercionException` (a malformed value; a subclass of
+  `QuonfigKeyNotFoundException`), `QuonfigEnvVarNotSetException`, `QuonfigDecryptionException` or
+  `QuonfigTypeMismatchException` (a subclass of `IllegalArgumentException`). Use it for a config
+  that must not silently fall back, for example a secret whose decryption key may be wrong:
+
+  ```java
+  String dbPassword = quonfig.getStringOrThrow("db.password"); // throws on a bad decryption key
+  ```
 
 ## Dynamic log levels
 

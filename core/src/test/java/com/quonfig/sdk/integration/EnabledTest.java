@@ -1546,4 +1546,92 @@ class EnabledTest {
         client.withContext(TestSetup.ctx(TestSetup.map("user", TestSetup.map("age", "35"))));
     assertEquals(false, scoped.featureIsOn("feature-flag.greater-than"));
   }
+
+  @Test
+  @DisplayName("enabled on stored bool true returns true")
+  void enabledOnStoredBoolTrueReturnsTrue() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(true, client.featureIsOn("getter.contract.bool", null));
+  }
+
+  @Test
+  @DisplayName("enabled on env-var-provided bool \"true\" returns true")
+  void enabledOnEnvVarProvidedBoolTrueReturnsTrue() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map("QUONFIG_ITD_GETTER_BOOL", "true"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(true, client.featureIsOn("getter.contract.provided.bool", null));
+        });
+  }
+
+  @Test
+  @DisplayName("enabled on stored string returns false")
+  void enabledOnStoredStringReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.string", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored int returns false")
+  void enabledOnStoredIntReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.int", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored double returns false")
+  void enabledOnStoredDoubleReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.double", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored string_list returns false")
+  void enabledOnStoredStringListReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.string_list", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored json returns false")
+  void enabledOnStoredJsonReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.json", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored duration returns false")
+  void enabledOnStoredDurationReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.duration", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored string \"true\" returns false")
+  void enabledOnStoredStringTrueReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.string.true", null));
+  }
+
+  @Test
+  @DisplayName("enabled on stored malformed int \"twelve\" returns false")
+  void enabledOnStoredMalformedIntTwelveReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.int.malformed", null));
+  }
+
+  @Test
+  @DisplayName("enabled on a missing bool env var returns false")
+  void enabledOnAMissingBoolEnvVarReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("getter.contract.provided.bool.missing", null));
+  }
+
+  @Test
+  @DisplayName("enabled on a decryption failure returns false")
+  void enabledOnADecryptionFailureReturnsFalse() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(false, client.featureIsOn("a.broken.secret.config", null));
+  }
 }
