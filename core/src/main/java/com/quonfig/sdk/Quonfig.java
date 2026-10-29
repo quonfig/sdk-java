@@ -2484,8 +2484,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
    * returns, an int a {@code Long}, a double a {@code Double}, a bool a {@code Boolean}. A
    * malformed stored value is returned raw with its success reason. An ENV_VAR-provided value is
    * still converted to the config's value type at resolution (as in sdk-go), so an env var that
-   * does not parse as that type is {@link Reason#ERROR} / {@link ErrorCode#TYPE_MISMATCH} with a
-   * null value. Lists and maps are copies the caller may mutate.
+   * does not parse as that type is {@link Reason#ERROR} / {@link ErrorCode#PARSE_ERROR} with a null
+   * value. Lists and maps are copies the caller may mutate.
    *
    * <p>{@link EvaluationDetails#valueType()} carries the config's stored value type (e.g. {@link
    * ValueType#DURATION}) so a caller can interpret the value; it is null when the key is not found.
@@ -2765,7 +2765,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           variantFor(Reason.ERROR, -1, -1),
           null,
           e.kind() == ResolverException.Kind.UNABLE_TO_COERCE
-              ? ErrorCode.TYPE_MISMATCH
+              ? ErrorCode.PARSE_ERROR
               : ErrorCode.GENERAL,
           "resolve failed for \"" + key + "\": " + e.getMessage(),
           metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
@@ -2784,7 +2784,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     } catch (DateTimeException | ArithmeticException | MalformedValueException e) {
       // Malformed stored value: a duration that does not parse (qfg-2agi.8) or an int/double that
       // does not parse (qfg-zvyy, qfg-zqoh). The same contract as an ENV_VAR value that fails to
-      // coerce: caller's default, Reason.ERROR, one WARN per key, never a throw. The get*OrThrow
+      // coerce: caller's default, Reason.ERROR / PARSE_ERROR (qfg-wg1n), one WARN per key, never a
+      // throw. The get*OrThrow
       // family raises the same coercion error as an ENV_VAR value instead. The message names the
       // key, never the value (a DateTimeParseException message quotes the text).
       String msg = "config \"" + key + "\" has a malformed " + expectedType + " value";
@@ -2795,7 +2796,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
           Reason.ERROR,
           variantFor(Reason.ERROR, -1, -1),
           null,
-          ErrorCode.TYPE_MISMATCH,
+          ErrorCode.PARSE_ERROR,
           msg,
           metadataFor(cfg, Reason.ERROR, match.ruleIndex(), match.weightedValueIndex()));
     } catch (ClassCastException | IllegalArgumentException e) {

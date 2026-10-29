@@ -19,12 +19,12 @@ Replace the version below with the latest from [Maven Central](https://central.s
 
 ```kotlin
 dependencies {
-    implementation("com.quonfig:sdk-java:2.3.0")
+    implementation("com.quonfig:sdk-java:2.4.0")
     // optional, depending on which logging library you use:
-    runtimeOnly("com.quonfig:sdk-java-logback:2.3.0")
-    runtimeOnly("com.quonfig:sdk-java-log4j2:2.3.0")
+    runtimeOnly("com.quonfig:sdk-java-logback:2.4.0")
+    runtimeOnly("com.quonfig:sdk-java-log4j2:2.4.0")
     // optional, for Micronaut apps:
-    implementation("com.quonfig:sdk-java-micronaut:2.3.0")
+    implementation("com.quonfig:sdk-java-micronaut:2.4.0")
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
     <groupId>com.quonfig</groupId>
     <artifactId>sdk-java</artifactId>
-    <version>2.3.0</version>
+    <version>2.4.0</version>
 </dependency>
 ```
 
@@ -105,7 +105,8 @@ They share one contract with every Quonfig SDK (2.2.0+):
   passed `null`) and logs one WARN per key per client. That covers a value of another type, a
   malformed stored or ENV_VAR value (`"twelve"` in an int config), an unset ENV_VAR and a value
   that cannot be decrypted. The WARN names the key, never the value. The `*Details` variant
-  reports `Reason.ERROR`, with `ErrorCode.TYPE_MISMATCH` for a wrong-type or malformed value.
+  reports `Reason.ERROR`, with `ErrorCode.TYPE_MISMATCH` for a wrong-type value and `ErrorCode.PARSE_ERROR`
+  (2.4.0+) for a malformed value.
 - **No string coercion.** A stored string `"false"` is not a bool, `"3"` is not an int, and a
   duration config is not a string.
 - **Numbers convert only when exact.** `getDouble` reads an int config (`30` -> `30.0`).
