@@ -21,6 +21,15 @@ subprojects {
         mavenCentral()
     }
 
+    // Gradle dependency locking (qfg-66ko.19): pins this repo's own build, test and
+    // publish classpaths so ssdlc / deps (osv-scanner) can scan them. Lock state is
+    // build-only; it does not change the published POM / Gradle module metadata, so
+    // consumers resolve exactly as before. Regenerate with
+    // `./gradlew resolveAndLockAll --write-locks` after any dependency change.
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+
     extensions.configure<JavaPluginExtension> {
         toolchain {
             languageVersion.set(JavaLanguageVersion.of(17))
@@ -63,5 +72,17 @@ subprojects {
         publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
         signAllPublications()
         configure(JavaLibrary(javadocJar = JavadocJar.Javadoc(), sourcesJar = true))
+    }
+}
+
+tasks.register("resolveAndLockAll") {
+    notCompatibleWithConfigurationCache("Filters configurations at execution time")
+    doFirst {
+        require(gradle.startParameter.isWriteDependencyLocks) { "Run with --write-locks" }
+    }
+    doLast {
+        subprojects.forEach { p ->
+            p.configurations.filter { it.isCanBeResolved }.forEach { it.resolve() }
+        }
     }
 }
