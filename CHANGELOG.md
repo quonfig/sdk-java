@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.3.0 - 2026-10-29
+
+Additive (qfg-177f, sdk-go `Client.EvaluateDetails` parity). No existing getter
+changes.
+
+- **New `evaluateDetails(String key)` and `evaluateDetails(String key, ContextSet ctx)`**
+  on `Quonfig` and `BoundQuonfig`. Returns `EvaluationDetails<Object>` with the
+  resolved value in its stored form (after ENV_VAR provision and decryption) and
+  the same reason, variant, metadata and telemetry as the typed `*Details`
+  getters, with no type check, coercion or parse validation. A duration is its
+  ISO 8601 text exactly as stored (`"PT90S"`), a string_list a `List<String>`,
+  json what `getJsonDetails` returns. A malformed stored value is returned raw
+  with its success reason; an ENV_VAR value that does not parse as the config's
+  type still fails at resolution (`Reason.ERROR`, `TYPE_MISMATCH`, null value),
+  as in sdk-go. A missing key returns a null value with `FLAG_NOT_FOUND`. Never
+  throws.
+- **New `EvaluationDetails.valueType()`** (nullable `ValueType`) and an
+  8-argument constructor. Set by `evaluateDetails` to the config's stored value
+  type (null when the key is not found); null on the typed getters.
+- An ENV_VAR-provided duration is now kept as its validated ISO text inside the
+  resolver (as a stored duration is). `getDuration` still parses and rounds it,
+  so its result is unchanged; evaluation telemetry now reports the env text
+  (`"PT90S"`) instead of `Duration.toString()` (`"PT1M30S"`).
+
 ## 2.2.0 - 2026-10-26
 
 The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by

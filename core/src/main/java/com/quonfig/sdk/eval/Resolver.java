@@ -200,7 +200,11 @@ public final class Resolver {
         case JSON:
           return JSON.readValue(envValue, Object.class);
         case DURATION:
-          return Duration.parse(envValue);
+          // Validated here so a malformed env var fails at resolution like any other uncoercible
+          // value; the ISO text is kept as the payload, as a stored duration is (sdk-go parity), so
+          // the untyped evaluateDetails read returns it unchanged. The typed getter parses it.
+          Duration.parse(envValue);
+          return envValue;
         case STRING:
         case LOG_LEVEL:
         default:

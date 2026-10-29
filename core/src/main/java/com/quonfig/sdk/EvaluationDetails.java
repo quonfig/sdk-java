@@ -1,5 +1,6 @@
 package com.quonfig.sdk;
 
+import com.quonfig.sdk.eval.ValueType;
 import java.util.Map;
 import java.util.Objects;
 
@@ -32,6 +33,10 @@ import java.util.Objects;
  *       {@link Reason#SPLIT}), {@code environment} (omitted when not known), {@code
  *       hashPropertyMissing} ({@code true} only when a weighted rollout's hash property was missing
  *       (or null) in the context and an empty value was hashed instead; omitted otherwise).
+ *   <li>{@link #valueType()} — the config's stored value type (e.g. {@link ValueType#DURATION}).
+ *       Set only by the untyped {@link Quonfig#evaluateDetails(String,
+ *       com.quonfig.sdk.eval.ContextSet)} read, and null there when the key is not found; always
+ *       null on the typed {@code get*Details} getters, whose value type is the getter's own.
  * </ul>
  *
  * @param <T> the typed value's Java type (String, Boolean, Long, Double, List&lt;String&gt;, …).
@@ -44,6 +49,7 @@ public final class EvaluationDetails<T> {
   private final ErrorCode errorCode;
   private final String errorMessage;
   private final Map<String, Object> metadata;
+  private final ValueType valueType;
 
   public EvaluationDetails(
       T value,
@@ -53,6 +59,23 @@ public final class EvaluationDetails<T> {
       ErrorCode errorCode,
       String errorMessage,
       Map<String, Object> metadata) {
+    this(value, reason, variant, variantIndex, errorCode, errorMessage, metadata, null);
+  }
+
+  /**
+   * Full constructor including the stored {@link #valueType()} (qfg-177f).
+   *
+   * @since 2.3.0
+   */
+  public EvaluationDetails(
+      T value,
+      Reason reason,
+      String variant,
+      Integer variantIndex,
+      ErrorCode errorCode,
+      String errorMessage,
+      Map<String, Object> metadata,
+      ValueType valueType) {
     this.value = value;
     this.reason = Objects.requireNonNull(reason, "reason");
     this.variant = Objects.requireNonNull(variant, "variant");
@@ -60,6 +83,7 @@ public final class EvaluationDetails<T> {
     this.errorCode = errorCode;
     this.errorMessage = errorMessage;
     this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+    this.valueType = valueType;
   }
 
   public T value() {
@@ -90,6 +114,15 @@ public final class EvaluationDetails<T> {
     return metadata;
   }
 
+  /**
+   * The config's stored value type; see the class docs. Null on the typed getters.
+   *
+   * @since 2.3.0
+   */
+  public ValueType valueType() {
+    return valueType;
+  }
+
   @Override
   public String toString() {
     return "EvaluationDetails{value="
@@ -106,6 +139,7 @@ public final class EvaluationDetails<T> {
         + errorMessage
         + ", metadata="
         + metadata
+        + (valueType == null ? "" : ", valueType=" + valueType)
         + '}';
   }
 }
