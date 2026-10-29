@@ -2465,6 +2465,66 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return typedDetails(key, def, ctx, ValueType.JSON, Object.class);
   }
 
+  // ---- untyped details read (qfg-177f) ----
+
+  /** See {@link #evaluateDetails(String, ContextSet)}; evaluated with no per-call context. */
+  public EvaluationDetails<Object> evaluateDetails(String key) {
+    return evaluateDetails(key, null);
+  }
+
+  /**
+   * Untyped details read, the Java form of sdk-go's {@code Client.EvaluateDetails}: evaluates
+   * {@code key} and returns the resolved value in its stored / wire form, with the same reason,
+   * variant, metadata and telemetry as the typed {@code get*Details} getters.
+   *
+   * <p>Unlike the typed getters there is no type check, no coercion and no parse validation. The
+   * value is the one the config stores, after ENV_VAR provision and decryption: a duration is its
+   * ISO 8601 text exactly as stored (e.g. {@code "PT90S"}, never re-normalized through {@link
+   * Duration}), a string_list a {@code List<String>}, a json value what {@link #getJsonDetails}
+   * returns, an int a {@code Long}, a double a {@code Double}, a bool a {@code Boolean}. A
+   * malformed stored value is returned raw with its success reason. An ENV_VAR-provided value is
+   * still converted to the config's value type at resolution (as in sdk-go), so an env var that
+   * does not parse as that type is {@link Reason#ERROR} / {@link ErrorCode#TYPE_MISMATCH} with a
+   * null value. Lists and maps are copies the caller may mutate.
+   *
+   * <p>{@link EvaluationDetails#valueType()} carries the config's stored value type (e.g. {@link
+   * ValueType#DURATION}) so a caller can interpret the value; it is null when the key is not found.
+   * {@code metadata.configType} stays the config kind ({@code CONFIG} / {@code FEATURE_FLAG}), as
+   * on the typed getters.
+   *
+   * <p>A missing key, a closed or not-yet-ready client, or an evaluation failure returns a null
+   * value with {@link Reason#ERROR} and the same {@link ErrorCode} the typed getters use. Never
+   * throws.
+   */
+  public EvaluationDetails<Object> evaluateDetails(String key, ContextSet ctx) {
+    EvaluationDetails<Object> d;
+    try {
+      d = evaluateTyped(key, null, ctx, null, Object.class, false);
+    } catch (RuntimeException e) {
+      warnReadFailure(key, "evaluation failed (" + e.getClass().getSimpleName() + ")");
+      return new EvaluationDetails<>(
+          null,
+          Reason.ERROR,
+          variantFor(Reason.ERROR, -1, -1),
+          null,
+          ErrorCode.GENERAL,
+          "evaluation failed for \"" + key + "\": " + e.getMessage(),
+          baseMetadata(null, key, null, Reason.ERROR, -1, -1));
+    }
+    InMemoryConfigStore s = store;
+    ConfigRow cfg = !closed && initialized && s != null ? s.getConfig(key) : null;
+    if (cfg == null) return d;
+    return new EvaluationDetails<>(
+        d.value(),
+        d.reason(),
+        d.variant(),
+        d.variantIndex(),
+        d.errorCode(),
+        d.errorMessage(),
+        d.metadata(),
+        cfg.valueType());
+  }
+
   // ---- throwing variants (get_or_raise) ----
 
   /**
@@ -2646,7 +2706,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (shapeCollector != null) shapeCollector.push(effective);
     if (exampleCollector != null) exampleCollector.push(effective);
 
-    if (!isCompatible(cfg.valueType(), expectedType)) {
+    // expectedType null is the untyped evaluateDetails read: no type check, no coercion.
+    if (expectedType != null && !isCompatible(cfg.valueType(), expectedType)) {
       String msg =
           "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType;
       if (raise) throw new QuonfigTypeMismatchException(msg);
@@ -2715,7 +2776,11 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     Object payload = resolvedVal != null ? resolvedVal.value() : null;
     T typed;
     try {
-      typed = (T) coerceToJavaType(payload, expectedType, javaType);
+      typed =
+          (T)
+              (expectedType == null
+                  ? wireValue(payload)
+                  : coerceToJavaType(payload, expectedType, javaType));
     } catch (DateTimeException | ArithmeticException | MalformedValueException e) {
       // Malformed stored value: a duration that does not parse (qfg-2agi.8) or an int/double that
       // does not parse (qfg-zvyy, qfg-zqoh). The same contract as an ENV_VAR value that fails to
@@ -2904,6 +2969,16 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     if (vt == ValueType.STRING_LIST) return deepCopyJson(payload);
     if (javaType.isInstance(payload)) return payload;
     throw new ClassCastException(payload.getClass() + " is not " + javaType);
+  }
+
+  /**
+   * The untyped read's value: the payload as stored, with lists and maps deep-copied off the cache.
+   * A {@link Duration} payload (not produced by the decoder or resolver today) is reported as its
+   * ISO 8601 text, so the value always stays in wire form.
+   */
+  private static Object wireValue(Object payload) {
+    if (payload instanceof Duration) return payload.toString();
+    return deepCopyJson(payload);
   }
 
   /**

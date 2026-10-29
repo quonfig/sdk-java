@@ -163,6 +163,19 @@ public final class BoundQuonfig {
 
   // ---- throwing variants; see Quonfig#getStringOrThrow(String) ----
 
+  /** See {@link Quonfig#evaluateDetails(String, ContextSet)} — evaluated with the bound context. */
+  public EvaluationDetails<Object> evaluateDetails(String key) {
+    return client.evaluateDetails(key, bound);
+  }
+
+  /**
+   * See {@link Quonfig#evaluateDetails(String, ContextSet)} — bound context merged with {@code
+   * ctx}.
+   */
+  public EvaluationDetails<Object> evaluateDetails(String key, ContextSet ctx) {
+    return client.evaluateDetails(key, Quonfig.merge(bound, ctx));
+  }
+
   /** See {@link Quonfig#getStringOrThrow(String)} — evaluated with the bound context. */
   public String getStringOrThrow(String key) {
     return client.getStringOrThrow(key, bound);

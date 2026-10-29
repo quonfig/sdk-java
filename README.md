@@ -19,12 +19,12 @@ Replace the version below with the latest from [Maven Central](https://central.s
 
 ```kotlin
 dependencies {
-    implementation("com.quonfig:sdk-java:2.2.0")
+    implementation("com.quonfig:sdk-java:2.3.0")
     // optional, depending on which logging library you use:
-    runtimeOnly("com.quonfig:sdk-java-logback:2.2.0")
-    runtimeOnly("com.quonfig:sdk-java-log4j2:2.2.0")
+    runtimeOnly("com.quonfig:sdk-java-logback:2.3.0")
+    runtimeOnly("com.quonfig:sdk-java-log4j2:2.3.0")
     // optional, for Micronaut apps:
-    implementation("com.quonfig:sdk-java-micronaut:2.2.0")
+    implementation("com.quonfig:sdk-java-micronaut:2.3.0")
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
     <groupId>com.quonfig</groupId>
     <artifactId>sdk-java</artifactId>
-    <version>2.2.0</version>
+    <version>2.3.0</version>
 </dependency>
 ```
 
@@ -122,6 +122,23 @@ They share one contract with every Quonfig SDK (2.2.0+):
   ```java
   String dbPassword = quonfig.getStringOrThrow("db.password"); // throws on a bad decryption key
   ```
+
+## Untyped details read
+
+`evaluateDetails(key)` / `evaluateDetails(key, ctx)` (2.3.0+, also on `withContext(...)`) returns
+an `EvaluationDetails<Object>` with the value exactly as stored, no type check and no coercion, plus
+the same `Reason`, variant and metadata as the typed `*Details` getters. `valueType()` names the
+config's stored type. A duration comes back as its ISO 8601 text (`"PT90S"`, not re-normalized to
+`PT1M30S`); a malformed stored value comes back raw with its success reason. A missing key returns
+a `null` value with `Reason.ERROR` / `ErrorCode.FLAG_NOT_FOUND`. It never throws. It is meant for
+adapters such as OpenFeature providers that do their own typing.
+
+```java
+EvaluationDetails<Object> d = quonfig.evaluateDetails("http.timeout");
+if (d.valueType() == ValueType.DURATION) {
+  String iso = (String) d.value(); // "PT90S"
+}
+```
 
 ## Dynamic log levels
 

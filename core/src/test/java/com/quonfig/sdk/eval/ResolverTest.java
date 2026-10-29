@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -190,13 +189,14 @@ class ResolverTest {
   }
 
   @Test
-  void resolve_providedEnvVar_coercesDurationIso8601() {
+  void resolve_providedEnvVar_validatesDurationAndKeepsIsoText() {
     Value provided = new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "MY_DURATION"));
     ConfigRow cfg = rowNoRules("k", ValueType.DURATION);
     Resolver r = new Resolver(new MapStore(), null, key -> Optional.of("PT90S"));
     Value out = r.resolve(provided, cfg, "", new ContextSet());
     assertEquals(ValueType.DURATION, out.type());
-    assertEquals(Duration.ofSeconds(90), out.value());
+    // Validated, but kept as the ISO text a stored duration carries (qfg-177f, sdk-go parity).
+    assertEquals("PT90S", out.value());
   }
 
   @Test
