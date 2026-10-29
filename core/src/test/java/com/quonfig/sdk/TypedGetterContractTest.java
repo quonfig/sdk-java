@@ -151,7 +151,7 @@ class TypedGetterContractTest {
       assertNull(q.getDouble("bad", null));
       EvaluationDetails<Long> d = q.getLongDetails("bad", 7L);
       assertEquals(Reason.ERROR, d.reason());
-      assertEquals(ErrorCode.TYPE_MISMATCH, d.errorCode());
+      assertEquals(ErrorCode.PARSE_ERROR, d.errorCode());
       QuonfigCoercionException e =
           assertThrows(QuonfigCoercionException.class, () -> q.getLongOrThrow("bad"));
       assertInstanceOf(QuonfigKeyNotFoundException.class, e, "backward compatible with 2.1.0");

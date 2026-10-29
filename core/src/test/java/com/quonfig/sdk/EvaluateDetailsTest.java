@@ -201,7 +201,7 @@ class EvaluateDetailsTest {
       EvaluationDetails<Object> d = q.evaluateDetails("p");
       assertNull(d.value(), "details: " + d);
       assertEquals(Reason.ERROR, d.reason());
-      assertEquals(ErrorCode.TYPE_MISMATCH, d.errorCode());
+      assertEquals(ErrorCode.PARSE_ERROR, d.errorCode());
       assertEquals(ValueType.DURATION, d.valueType());
     }
   }

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.4.0 - 2026-10-29
+
+Edge-case behaviour change on the details API's error path (qfg-wg1n). Only the
+`ErrorCode` on a failed read changes; values, reasons and exceptions do not.
+
+- **New `ErrorCode.PARSE_ERROR`.** The typed `get*Details` getters and
+  `evaluateDetails` now report a value that has the right type but does not
+  parse as `PARSE_ERROR` (was `TYPE_MISMATCH`): an ENV_VAR value that cannot be
+  converted to the config's type (an int env var `"abc"`, a duration env var
+  `"30s"`, a bool `"maybe"`, invalid json) and, on the typed getters, a
+  malformed stored int, double or duration (`"twelve"`, `"30s"`). The reason
+  (`Reason.ERROR`), the value (your default; null on `evaluateDetails`), the
+  variant and the metadata are unchanged. A config of another type
+  (`getStringDetails` on an int config, `getLongDetails` on `3.9`) is still
+  `TYPE_MISMATCH`. `evaluateDetails` still returns a malformed stored value as
+  stored with its success reason. The plain getters and the `get*OrThrow`
+  family (`QuonfigCoercionException`, `QuonfigTypeMismatchException`) are
+  unchanged. Code that compared `errorCode()` to `TYPE_MISMATCH` to detect a
+  malformed value should also accept `PARSE_ERROR`, and an exhaustive `switch`
+  over `ErrorCode` needs the new constant. openfeature-java 3.3.0 already maps
+  `PARSE_ERROR` straight through to OpenFeature's `PARSE_ERROR`. Tests:
+  `ParseErrorCodeTest`.
+
 ## 2.3.0 - 2026-10-29
 
 Additive (qfg-177f, sdk-go `Client.EvaluateDetails` parity). No existing getter
