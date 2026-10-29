@@ -17,6 +17,12 @@ public enum ErrorCode {
    * not healed it (OpenFeature's {@code PROVIDER_NOT_READY}).
    */
   PROVIDER_NOT_READY,
+  /**
+   * The value has the requested type but does not parse as it: an ENV_VAR value that cannot be
+   * converted to the config's type, or a malformed stored int, double or duration (OpenFeature's
+   * {@code PARSE_ERROR}). Added in 2.4.0; earlier versions report these as {@link #TYPE_MISMATCH}.
+   */
+  PARSE_ERROR,
   /** Internal evaluation failure not covered by another code (env var missing, decryption, …). */
   GENERAL;
 }
