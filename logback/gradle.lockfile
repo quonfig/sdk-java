@@ -1,0 +1,31 @@
+# This is a Gradle generated file for dependency locking.
+# Manual edits can break the build and are not advised.
+# This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :logback:dependencies --write-locks
+ch.qos.logback:logback-classic:1.5.18=compileClasspath,testCompileClasspath,testRuntimeClasspath
+ch.qos.logback:logback-core:1.5.18=compileClasspath,testCompileClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-annotations:2.18.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-core:2.18.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson.core:jackson-databind:2.18.2=runtimeClasspath,testRuntimeClasspath
+com.fasterxml.jackson:jackson-bom:2.18.2=runtimeClasspath,testRuntimeClasspath
+com.google.code.findbugs:jsr305:3.0.2=runtimeClasspath,testRuntimeClasspath
+com.google.errorprone:error_prone_annotations:2.36.0=runtimeClasspath,testRuntimeClasspath
+com.google.guava:failureaccess:1.0.2=runtimeClasspath,testRuntimeClasspath
+com.google.guava:guava:33.4.0-jre=runtimeClasspath,testRuntimeClasspath
+com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava=runtimeClasspath,testRuntimeClasspath
+com.google.j2objc:j2objc-annotations:3.0.0=runtimeClasspath,testRuntimeClasspath
+org.apiguardian:apiguardian-api:1.1.2=testCompileClasspath
+org.checkerframework:checker-qual:3.43.0=runtimeClasspath,testRuntimeClasspath
+org.jspecify:jspecify:1.0.0=testCompileClasspath
+org.junit.jupiter:junit-jupiter-api:6.1.3=testCompileClasspath,testRuntimeClasspath
+org.junit.jupiter:junit-jupiter-engine:6.1.3=testRuntimeClasspath
+org.junit.jupiter:junit-jupiter-params:6.1.3=testCompileClasspath,testRuntimeClasspath
+org.junit.jupiter:junit-jupiter:6.1.3=testCompileClasspath,testRuntimeClasspath
+org.junit.platform:junit-platform-commons:6.1.3=testCompileClasspath,testRuntimeClasspath
+org.junit.platform:junit-platform-engine:6.1.3=testRuntimeClasspath
+org.junit.platform:junit-platform-launcher:6.1.3=testRuntimeClasspath
+org.junit:junit-bom:6.1.3=testCompileClasspath,testRuntimeClasspath
+org.opentest4j:opentest4j:1.3.0=testCompileClasspath,testRuntimeClasspath
+org.slf4j:slf4j-api:2.0.16=runtimeClasspath
+org.slf4j:slf4j-api:2.0.17=compileClasspath,testCompileClasspath,testRuntimeClasspath
+empty=annotationProcessor,testAnnotationProcessor
