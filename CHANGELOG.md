@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.4.1 - 2026-10-30
+
+Security patch for runtime dependencies (qfg-66ko.19). No API or behaviour change.
+
+- **jackson-databind 2.18.2 -> 2.18.12** (brings jackson-core 2.18.12). Clears GHSA-7hhh-6rmp-j9qf,
+  GHSA-p6pp-m3f8-5c89, GHSA-r7wm-3cxj-wff9, GHSA-cxp5-3px4-pw24, GHSA-j3rv-43j4-c7qm,
+  GHSA-q4xh-88c3-wmh7, GHSA-rmj7-2vxq-3g9f and GHSA-wv8q-qhhj-9h54.
+- **guava 33.4.0-jre -> 33.7.2-jre.** Clears GHSA-xxph-c9ww-hj94.
+- These raise the minimum jackson and guava versions `sdk-java` asks your build for. Gradle and Maven
+  resolve the newer patch versions unless you pin older ones yourself. Floor raise approved by Jeff
+  (qfg-66ko.19, 2026-10-29).
+- `sdk-java-micronaut` now compiles against Micronaut 4.10.35 (was 4.7.10, GHSA-8hjv-92q9-g4xj).
+  Micronaut stays a provided dependency: your app's Micronaut version is used, and the published POM
+  is unchanged.
+- Build: Gradle dependency locking is on with `gradle.lockfile` committed, so the SSDLC dependency
+  scan sees the resolved tree. It pins only this repo's builds.
+
 ## 2.4.0 - 2026-10-29
 
 Edge-case behaviour change on the details API's error path (qfg-wg1n). Only the
