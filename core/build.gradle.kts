@@ -1,6 +1,6 @@
 dependencies {
-    implementation("com.fasterxml.jackson.core:jackson-databind:2.18.12")
-    implementation("org.slf4j:slf4j-api:2.0.16")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
+    implementation("org.slf4j:slf4j-api:2.0.20")
     implementation("com.google.guava:guava:33.7.2-jre")
 
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
@@ -9,7 +9,7 @@ dependencies {
     // Chaos test runner (com.quonfig.sdk.chaos) — reads scenario YAML files
     // from integration-test-data/chaos/scenarios. Gated on CHAOS_RUN=1, so
     // this is test-only and never pulled into the published artifact.
-    testImplementation("org.yaml:snakeyaml:2.3")
+    testImplementation("org.yaml:snakeyaml:2.7")
 }
 
 // Stamp the artifact version into a classpath resource that Version reads at runtime
