@@ -224,6 +224,52 @@ class TypedGetterContractTest {
     }
   }
 
+  // ---- the WARN says what the read actually did ----
+
+  private String warnLine(String key) {
+    return logger.entries.stream()
+        .filter(e -> e.level == org.slf4j.event.Level.WARN)
+        .filter(e -> e.args.contains("\"" + key + "\"") || e.args.contains(key + ","))
+        .map(Object::toString)
+        .findFirst()
+        .orElseThrow(() -> new AssertionError("no WARN for " + key + ": " + logger.entries));
+  }
+
+  @Test
+  void readFailureWarn_typedGetter_saysCallersDefaultIsReturned() throws Exception {
+    writeProvided("host", "string", "UNSET_HOST");
+    try (Quonfig q = newClient()) {
+      assertEquals("localhost", q.getString("host", "localhost"));
+      String line = warnLine("host");
+      assertTrue(line.contains("failed ("), line);
+      assertTrue(line.contains("returning the caller's default"), line);
+    }
+  }
+
+  @Test
+  void readFailureWarn_evaluateDetails_saysErrorWithNoValue_notCallersDefault() throws Exception {
+    writeProvided("host", "string", "UNSET_HOST");
+    try (Quonfig q = newClient()) {
+      EvaluationDetails<Object> d = q.evaluateDetails("host", null);
+      assertEquals(Reason.ERROR, d.reason());
+      assertNull(d.value());
+      String line = warnLine("host");
+      assertTrue(line.contains("returning reason \"ERROR\" with no value"), line);
+      assertFalse(line.contains("caller's default"), line);
+    }
+  }
+
+  @Test
+  void readFailureWarn_featureIsOn_saysReturningFalse() throws Exception {
+    writeProvided("env-flag", "bool", "UNSET_FLAG");
+    try (Quonfig q = newClient()) {
+      assertFalse(q.featureIsOn("env-flag", null));
+      String line = warnLine("env-flag");
+      assertTrue(line.contains("returning false"), line);
+      assertFalse(line.contains("caller's default"), line);
+    }
+  }
+
   // ---- featureIsOn never throws ----
 
   @Test
