@@ -1837,15 +1837,19 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   public boolean featureIsOn(String key, ContextSet ctx) {
     EvaluationDetails<Boolean> d;
     try {
-      d = getBoolDetails(key, Boolean.FALSE, ctx);
+      // getBoolDetails, with the WARN saying featureIsOn returns false.
+      d =
+          evaluateTyped(
+              key, Boolean.FALSE, ctx, ValueType.BOOL, Boolean.class, false, FEATURE_IS_ON_OUTCOME);
     } catch (RuntimeException e) {
-      warnReadFailure(key, "featureIsOn failed (" + e.getClass().getSimpleName() + ")");
+      warnReadFailure(
+          key, "featureIsOn failed (" + e.getClass().getSimpleName() + ")", FEATURE_IS_ON_OUTCOME);
       return false;
     }
     if (d.errorCode() == ErrorCode.FLAG_NOT_FOUND) {
-      warnReadFailure(key, "the key does not exist; featureIsOn returns false");
+      warnReadFailure(key, "the key does not exist", FEATURE_IS_ON_OUTCOME);
     } else if (d.reason() == Reason.DEFAULT) {
-      warnReadFailure(key, "no rule matched; featureIsOn returns false");
+      warnReadFailure(key, "no rule matched", FEATURE_IS_ON_OUTCOME);
     }
     return Boolean.TRUE.equals(d.value());
   }
@@ -2499,9 +2503,10 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   public EvaluationDetails<Object> evaluateDetails(String key, ContextSet ctx) {
     EvaluationDetails<Object> d;
     try {
-      d = evaluateTyped(key, null, ctx, null, Object.class, false);
+      d = evaluateTyped(key, null, ctx, null, Object.class, false, DETAILS_ERROR_OUTCOME);
     } catch (RuntimeException e) {
-      warnReadFailure(key, "evaluation failed (" + e.getClass().getSimpleName() + ")");
+      warnReadFailure(
+          key, "evaluation failed (" + e.getClass().getSimpleName() + ")", DETAILS_ERROR_OUTCOME);
       return new EvaluationDetails<>(
           null,
           Reason.ERROR,
@@ -2628,12 +2633,12 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
 
   private <T> EvaluationDetails<T> typedDetails(
       String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
-    return evaluateTyped(key, def, ctx, expectedType, javaType, false);
+    return evaluateTyped(key, def, ctx, expectedType, javaType, false, CALLER_DEFAULT_OUTCOME);
   }
 
   private <T> T typedOrThrow(
       String key, ContextSet ctx, ValueType expectedType, Class<T> javaType) {
-    return evaluateTyped(key, null, ctx, expectedType, javaType, true).value();
+    return evaluateTyped(key, null, ctx, expectedType, javaType, true, null).value();
   }
 
   private static String noValueMessage(String key) {
@@ -2658,11 +2663,19 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
   /**
    * Shared evaluation for the typed getters. With {@code raise} false every failure becomes a
    * {@link Reason#ERROR} details carrying {@code def}; with {@code raise} true (the {@code
-   * get*OrThrow} family) every failure, and a missing value, throws instead.
+   * get*OrThrow} family) every failure, and a missing value, throws instead. {@code failureOutcome}
+   * is the read-failure WARN's account of what the caller gets back (unused when {@code raise} is
+   * true).
    */
   @SuppressWarnings("unchecked")
   private <T> EvaluationDetails<T> evaluateTyped(
-      String key, T def, ContextSet ctx, ValueType expectedType, Class<T> javaType, boolean raise) {
+      String key,
+      T def,
+      ContextSet ctx,
+      ValueType expectedType,
+      Class<T> javaType,
+      boolean raise,
+      String failureOutcome) {
     // Getters never block on init (design B.3): the constructor is the only gate.
     if (closed) {
       if (raise) throw new IllegalStateException(CLOSED_MESSAGE);
@@ -2711,7 +2724,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       String msg =
           "config \"" + key + "\" is " + cfg.valueType() + ", caller expected " + expectedType;
       if (raise) throw new QuonfigTypeMismatchException(msg);
-      warnReadFailure(key, msg);
+      warnReadFailure(key, msg, failureOutcome);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2730,7 +2743,8 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         if (e instanceof ResolverException) throw resolverFailure(key, (ResolverException) e);
         throw e;
       }
-      warnReadFailure(key, "evaluation failed (" + e.getClass().getSimpleName() + ")");
+      warnReadFailure(
+          key, "evaluation failed (" + e.getClass().getSimpleName() + ")", failureOutcome);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2758,7 +2772,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       resolvedVal = resolver.resolve(match.value(), cfg, effectiveEnvironment, effective);
     } catch (ResolverException e) {
       if (raise) throw resolverFailure(key, e);
-      warnReadFailure(key, e.getMessage());
+      warnReadFailure(key, e.getMessage(), failureOutcome);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2790,7 +2804,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       // key, never the value (a DateTimeParseException message quotes the text).
       String msg = "config \"" + key + "\" has a malformed " + expectedType + " value";
       if (raise) throw new QuonfigCoercionException(msg);
-      warnReadFailure(key, msg);
+      warnReadFailure(key, msg, failureOutcome);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2802,7 +2816,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     } catch (ClassCastException | IllegalArgumentException e) {
       String msg = "cannot return \"" + key + "\" as " + expectedType + ": " + e.getMessage();
       if (raise) throw new QuonfigTypeMismatchException(msg, e);
-      warnReadFailure(key, msg);
+      warnReadFailure(key, msg, failureOutcome);
       return new EvaluationDetails<>(
           def,
           Reason.ERROR,
@@ -2858,19 +2872,25 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
         metadata);
   }
 
+  /** Outcome text for a read with no caller default that reports {@link Reason#ERROR}. */
+  private static final String DETAILS_ERROR_OUTCOME = "returning reason \"ERROR\" with no value";
+
+  /** Outcome text for a failed typed read that returns the caller's {@code def}. */
+  private static final String CALLER_DEFAULT_OUTCOME = "returning the caller's default";
+
+  /** Outcome text for a failed {@link #featureIsOn}. */
+  private static final String FEATURE_IS_ON_OUTCOME = "returning false";
+
   /**
    * Logs once per config key per client that a read returned no value, so a broken config is not
    * mistaken for "using the default" (qfg-zvyy, sdk-go warnReadFailure parity). {@code reason}
-   * names the key and the failure, never the value.
+   * names the key and the failure, never the value; {@code outcome} says what the read then did
+   * (returned the caller's default, returned false, or returned reason ERROR with no value), so the
+   * line never claims a default applied when there was none.
    */
-  private void warnReadFailure(String key, String reason) {
+  private void warnReadFailure(String key, String reason, String outcome) {
     if (warnedReadFailure.add(key)) {
-      options
-          .logger()
-          .warn(
-              "quonfig: read of \"{}\" returned no value; the caller's default applies: {}",
-              key,
-              reason);
+      options.logger().warn("quonfig: read of \"{}\" failed ({}); {}", key, reason, outcome);
     }
   }
 
