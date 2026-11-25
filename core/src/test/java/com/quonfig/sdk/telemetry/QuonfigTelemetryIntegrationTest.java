@@ -194,7 +194,9 @@ class QuonfigTelemetryIntegrationTest {
   }
 
   @Test
-  void decryptWithWeightedVariantDecryptsAndIsRedactedInTelemetry() throws Exception {
+  void decryptWithWeightedVariantFailsAndNeverReachesTelemetry() throws Exception {
+    // qf1 spec 13.3 R1: a value (here a weighted variant) that still carries decryptWith is no
+    // longer decrypted, even with a valid old key, and is never returned as a value.
     // A throwaway 256-bit key built at runtime (bytes 0x00..0x1f); never a literal.
     byte[] keyBytes = new byte[32];
     for (int i = 0; i < keyBytes.length; i++) keyBytes[i] = (byte) i;
@@ -235,14 +237,13 @@ class QuonfigTelemetryIntegrationTest {
 
     CapturingSender sender = new CapturingSender();
     try (Quonfig q = newClient(sender)) {
-      assertEquals("decrypted-variant", q.getString("weighted-encrypted", "fallback"));
+      assertEquals("fallback", q.getString("weighted-encrypted", "fallback"));
       q.flush();
     }
 
     String wire = sender.sent.toString();
     assertFalse(wire.contains("decrypted-variant"), "decrypted plaintext leaked: " + wire);
-    assertFalse(wire.contains(ciphertext), "ciphertext sent unredacted: " + wire);
-    assertTrue(wire.contains("*****"), "expected redacted prefix in payload: " + wire);
+    assertFalse(wire.contains(ciphertext), "ciphertext sent: " + wire);
   }
 
   @Test

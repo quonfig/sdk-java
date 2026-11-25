@@ -20,18 +20,24 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Reads a workspace directory tree (configs/, feature-flags/, segments/, log-levels/) into a list
- * of {@link ConfigRow} objects suitable for an in-memory store.
+ * Reads a workspace directory tree (configs/, feature-flags/, segments/, log-levels/, secrets/)
+ * into a list of {@link ConfigRow} objects suitable for an in-memory store.
  *
  * <p>Mirrors {@code api-delivery/internal/config/loader.go}: {@code schemas/} is intentionally
  * excluded — those files are raw JSON Schema documents, not configs, and SDKs do not consume them
  * (qfg-uzsl). Walks each subdirectory, parses every {@code *.json} file, skips dotfiles. Feature
  * flags always materialize with {@code sendToClientSdk=true}.
+ *
+ * <p>{@code secrets/} loads LAST (qf1 spec 13.7): the store is a map by key and the last write
+ * wins, so a secret shadows a same-key document in {@code configs/}. A document from {@code
+ * secrets/} is a {@link ConfigType#SECRET} because of its directory, whatever its {@code type}
+ * field says.
  */
 public final class DatadirLoader {
 
+  private static final String SECRETS_DIR = "secrets";
   private static final List<String> SUBDIRS =
-      List.of("configs", "feature-flags", "segments", "log-levels");
+      List.of("configs", "feature-flags", "segments", "log-levels", SECRETS_DIR);
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private DatadirLoader() {}
@@ -40,6 +46,7 @@ public final class DatadirLoader {
     List<ConfigRow> out = new ArrayList<>();
     for (String subdir : SUBDIRS) {
       Path p = datadir.resolve(subdir);
+      ConfigType forced = SECRETS_DIR.equals(subdir) ? ConfigType.SECRET : null;
       if (!Files.isDirectory(p)) continue;
       try (Stream<Path> walk = Files.walk(p)) {
         walk.filter(Files::isRegularFile)
@@ -48,7 +55,7 @@ public final class DatadirLoader {
             .forEach(
                 f -> {
                   try {
-                    out.add(parseConfigFile(f));
+                    out.add(parseConfigFile(f, forced));
                   } catch (IOException e) {
                     throw new UncheckedIOException("parse " + f, e);
                   }
@@ -95,9 +102,9 @@ public final class DatadirLoader {
     return out;
   }
 
-  private static ConfigRow parseConfigFile(Path file) throws IOException {
+  private static ConfigRow parseConfigFile(Path file, ConfigType forcedType) throws IOException {
     JsonNode root = MAPPER.readTree(Files.readAllBytes(file));
-    return parseConfigNode(root);
+    return parseConfigNode(root, forcedType);
   }
 
   /**
@@ -106,9 +113,15 @@ public final class DatadirLoader {
    * from an HTTP/SSE envelope into the in-memory store.
    */
   public static ConfigRow parseConfigNode(JsonNode root) {
+    return parseConfigNode(root, null);
+  }
+
+  /** {@link #parseConfigNode(JsonNode)} with the type decided by the caller when non-null. */
+  private static ConfigRow parseConfigNode(JsonNode root, ConfigType forcedType) {
     String key = requiredText(root, "key", null);
     String id = root.hasNonNull("id") ? root.get("id").asText() : key;
-    ConfigType type = parseConfigType(requiredText(root, "type", key));
+    ConfigType parsedType = parseConfigType(requiredText(root, "type", key));
+    ConfigType type = forcedType != null ? forcedType : parsedType;
     ValueType valueType = ValueDecoder.parseValueType(requiredText(root, "valueType", key));
     boolean sendToClientSdk =
         type == ConfigType.FEATURE_FLAG
@@ -208,6 +221,8 @@ public final class DatadirLoader {
         return ConfigType.LOG_LEVEL;
       case "schema":
         return ConfigType.SCHEMA;
+      case "secret":
+        return ConfigType.SECRET;
       case "config":
       default:
         return ConfigType.CONFIG;

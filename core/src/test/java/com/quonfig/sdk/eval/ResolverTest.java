@@ -16,15 +16,12 @@ import org.junit.jupiter.api.Test;
 
 class ResolverTest {
 
-  // The same fixture used by sdk-go's integration suite — a known-good AES-GCM
-  // pairing that any compliant resolver must decrypt to "hello.world".
-  // Source: integration-test-data/data/integration-tests/configs/a.secret.config.json
-  // and the matching PREFAB_INTEGRATION_TEST_ENCRYPTION_KEY in .env.
+  // An OLD-format (decryptWith) AES-GCM pairing that the old path decrypted to "hello.world".
+  // The SDK no longer reads that format; the tests below prove it fails instead (qf1 R1).
   private static final String FIXTURE_KEY_HEX =
       "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221";
   private static final String FIXTURE_CIPHERTEXT =
       "875247386844c18c58a97c--b307b97a8288ac9da3ce0cf2--7ab0c32e044869e355586ed653a435de";
-  private static final String FIXTURE_PLAINTEXT = "hello.world";
 
   private static class MapStore implements ConfigStore {
     final Map<String, ConfigRow> byKey = new LinkedHashMap<>();
@@ -273,93 +270,81 @@ class ResolverTest {
     }
   }
 
-  // ----- AES-GCM decryption -----
+  // ----- qf1 spec 13.3 R1: a value that still carries decryptWith always fails -----
 
   @Test
-  void resolve_aesGcmDecrypt_withKeyFromEnvVarConfig() {
-    // The encryption key config is itself a PROVIDED value, so the resolver must
-    // recurse to materialize the hex key string.
+  void resolve_decryptWith_failsEvenWhenTheOldKeyWouldDecryptIt() {
+    // The old path would have decrypted this to "hello.world"; the SDK must not read it any more,
+    // and must not return the old ciphertext as a value either.
     ConfigRow keyCfg =
         row(
             "prefab.secrets.encryption.key",
             ValueType.STRING,
             new Value(ValueType.PROVIDED, new ProvidedValue("ENV_VAR", "ENCRYPTION_KEY_HEX")));
     MapStore store = new MapStore().put(keyCfg);
-
     Value secretVal =
         new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "prefab.secrets.encryption.key");
     ConfigRow secretCfg = rowNoRules("a.secret.config", ValueType.STRING);
-
-    Evaluator ev = new Evaluator(store);
     Resolver r =
         new Resolver(
             store,
-            ev,
+            new Evaluator(store),
             key ->
                 "ENCRYPTION_KEY_HEX".equals(key) ? Optional.of(FIXTURE_KEY_HEX) : Optional.empty());
 
-    Value out = r.resolve(secretVal, secretCfg, "", new ContextSet());
-    assertEquals(ValueType.STRING, out.type());
-    assertEquals(FIXTURE_PLAINTEXT, out.value());
-    assertTrue(out.confidential());
-  }
-
-  @Test
-  void resolve_aesGcmDecrypt_throwsWhenKeyConfigMissing() {
-    Value secretVal = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "missing.key");
-    ConfigRow secretCfg = rowNoRules("a.secret.config", ValueType.STRING);
-    Evaluator ev = new Evaluator(new MapStore());
-    Resolver r = new Resolver(new MapStore(), ev, key -> Optional.empty());
     ResolverException ex =
         assertThrows(
             ResolverException.class, () -> r.resolve(secretVal, secretCfg, "", new ContextSet()));
     assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+    assertTrue(ex.getMessage().contains("decryptWith"), ex.getMessage());
+    assertFalse(ex.getMessage().contains(FIXTURE_CIPHERTEXT), ex.getMessage());
+    assertNull(ex.getCause());
   }
 
   @Test
-  void resolve_aesGcmDecrypt_throwsOnMalformedCiphertext() {
-    ConfigRow keyCfg = row("k.key", ValueType.STRING, new Value(ValueType.STRING, FIXTURE_KEY_HEX));
-    MapStore store = new MapStore().put(keyCfg);
-    Value bad = new Value(ValueType.STRING, "not-the-right-format", true, "k.key");
-    ConfigRow cfg = rowNoRules("k", ValueType.STRING);
-    Evaluator ev = new Evaluator(store);
-    Resolver r = new Resolver(store, ev, key -> Optional.empty());
+  void resolve_decryptWith_failsWithoutConfidentialAndWithoutAnyLookup() {
+    Value v = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, false, "k.self");
+    Resolver r =
+        new Resolver(
+            new MapStore(),
+            new Evaluator(new MapStore()),
+            key -> {
+              throw new AssertionError("no env var may be read, got " + key);
+            });
     ResolverException ex =
-        assertThrows(ResolverException.class, () -> r.resolve(bad, cfg, "", new ContextSet()));
+        assertThrows(
+            ResolverException.class,
+            () -> r.resolve(v, rowNoRules("a.secret", ValueType.STRING), "", new ContextSet()));
     assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
   }
 
-  // ----- qfg-9dxb.7: decryptWith cycles are a decryption failure, not a stack overflow -----
-
   @Test
-  void resolve_decryptWithSelfCycle_throwsUnableToDecrypt() {
-    ConfigRow keyCfg =
-        row(
-            "k.self",
+  void resolve_secretWhoseValueIsNotAString_failsAsMalformed() {
+    ConfigRow cfg =
+        new ConfigRow(
+            "s",
+            "s",
+            ConfigType.SECRET,
             ValueType.STRING,
-            new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.self"));
-    MapStore store = new MapStore().put(keyCfg);
-    Value secret = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "k.self");
-    ConfigRow cfg = rowNoRules("a.secret", ValueType.STRING);
-    Resolver r = new Resolver(store, new Evaluator(store), key -> Optional.empty());
+            false,
+            new RuleSet(Collections.emptyList()),
+            Collections.emptyList());
+    Resolver r = new Resolver(null, null, key -> Optional.empty());
     ResolverException ex =
-        assertThrows(ResolverException.class, () -> r.resolve(secret, cfg, "", new ContextSet()));
+        assertThrows(
+            ResolverException.class,
+            () -> r.resolve(new Value(ValueType.INT, 7L), cfg, "", new ContextSet()));
     assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+    assertTrue(ex.getMessage().startsWith("qf1 malformed: "), ex.getMessage());
   }
 
   @Test
-  void resolve_decryptWithTwoHopCycle_throwsUnableToDecrypt() {
-    ConfigRow a =
-        row("k.a", ValueType.STRING, new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.b"));
-    ConfigRow b =
-        row("k.b", ValueType.STRING, new Value(ValueType.STRING, FIXTURE_KEY_HEX, true, "k.a"));
-    MapStore store = new MapStore().put(a).put(b);
-    Value secret = new Value(ValueType.STRING, FIXTURE_CIPHERTEXT, true, "k.a");
-    ConfigRow cfg = rowNoRules("a.secret", ValueType.STRING);
-    Resolver r = new Resolver(store, new Evaluator(store), key -> Optional.empty());
-    ResolverException ex =
-        assertThrows(ResolverException.class, () -> r.resolve(secret, cfg, "", new ContextSet()));
-    assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+  void resolve_qf1StringOutsideTheSecretFamily_isReturnedUnchanged() {
+    String looksLikeQf1 = "qf1:QUONFIG_KEYSET:00000000:AAAA";
+    Value v = new Value(ValueType.STRING, looksLikeQf1, true, null);
+    Resolver r = new Resolver(null, null, key -> Optional.empty());
+    assertEquals(
+        v, r.resolve(v, rowNoRules("plain.config", ValueType.STRING), "", new ContextSet()));
   }
 
   // ----- ReportableValueFor: telemetry redaction -----

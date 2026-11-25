@@ -96,6 +96,23 @@ class DatadirLoaderTest {
     assertEquals("real", env.configs().get(0).path("key").asText());
   }
 
+  @Test
+  void load_secretsDirectoryLoadsLastAndItsDirectoryDecidesTheType(@TempDir Path workspace)
+      throws Exception {
+    Files.writeString(workspace.resolve("quonfig.json"), "{\"environments\":[\"production\"]}");
+    Files.createDirectories(workspace.resolve("configs"));
+    Files.createDirectories(workspace.resolve("secrets"));
+    String doc =
+        "{\"key\":\"k\",\"type\":\"config\",\"valueType\":\"string\",\"default\":{\"rules\":[]}}";
+    Files.writeString(workspace.resolve("secrets/k.json"), doc);
+    Files.writeString(workspace.resolve("configs/k.json"), doc);
+
+    ConfigEnvelope env = DatadirLoader.load(workspace, "production");
+    assertEquals(2, env.configs().size());
+    assertEquals("config", env.configs().get(0).path("type").asText());
+    assertEquals("secret", env.configs().get(1).path("type").asText());
+  }
+
   private static Path locateCorpus() {
     String userDir = System.getProperty("user.dir");
     Path candidate =

@@ -41,9 +41,6 @@ final class TestSetup {
   static final String DATADIR;
   static final String ENV_ID = "Production";
 
-  private static final String ENCRYPTION_KEY =
-      "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221";
-
   // Base env vars (always-on for the entire JVM run).
   private static final Map<String, String> BASE_ENV = new LinkedHashMap<>();
 
@@ -66,7 +63,6 @@ final class TestSetup {
       };
 
   static {
-    BASE_ENV.put("PREFAB_INTEGRATION_TEST_ENCRYPTION_KEY", ENCRYPTION_KEY);
     BASE_ENV.put("IS_A_NUMBER", "1234");
     BASE_ENV.put("NOT_A_NUMBER", "not_a_number");
 

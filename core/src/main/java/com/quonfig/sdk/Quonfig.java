@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.quonfig.sdk.datadir.DatadirWatcher;
 import com.quonfig.sdk.eval.ConfigRow;
 import com.quonfig.sdk.eval.ConfigStore;
+import com.quonfig.sdk.eval.ConfigType;
 import com.quonfig.sdk.eval.ContextSet;
 import com.quonfig.sdk.eval.EvaluationMatch;
 import com.quonfig.sdk.eval.Evaluator;
@@ -70,7 +71,7 @@ import org.slf4j.event.Level;
  *
  * <ul>
  *   <li><b>datadir</b> — load configs synchronously from a workspace directory tree (configs/,
- *       feature-flags/, segments/, log-levels/, schemas/). Typical local-dev mode.
+ *       feature-flags/, segments/, log-levels/, secrets/). Typical local-dev mode.
  *   <li><b>http</b> (default when neither datadir nor datafile is set) — fetch the initial envelope
  *       from {@link Options#apiUrls()} and stream updates over SSE from {@link
  *       Options#streamUrls()}. The constructor blocks until the first config loads, retrying
@@ -2828,7 +2829,13 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     }
 
     if (summaryCollector != null) {
-      String reportable = Resolver.reportableValueFor(match.value()).orElse(null);
+      // A secret is redacted whatever its stored confidential flag says, hashed over the stored
+      // ciphertext (qf1 spec 13.5), never the plaintext.
+      Value stored = match.value();
+      if (cfg.type() == ConfigType.SECRET && stored != null && !stored.confidential()) {
+        stored = new Value(stored.type(), stored.value(), true, stored.decryptWith());
+      }
+      String reportable = Resolver.reportableValueFor(stored).orElse(null);
       // A java.time.Duration is not JSON-serializable and would drop the whole telemetry window
       // (qfg-a996). Report the stored ISO-8601 string, as sdk-go does ({"string": "PT90S"}).
       Object wireValue = typed;

@@ -7,7 +7,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -16,8 +15,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * Post-evaluation value resolution: ENV_VAR provided values, AES-GCM decryption of confidential
- * values, and string→typed coercion for env-var-sourced configs.
+ * Post-evaluation value resolution: ENV_VAR provided values, qf1 decryption of secrets, and
+ * string→typed coercion for env-var-sourced configs.
  *
  * <p>Mirrors the contract in {@code sdk-go/internal/resolver}. Plain (non-provided,
  * non-confidential) values pass through unchanged.
@@ -38,22 +37,28 @@ public final class Resolver {
 
   private static final ObjectMapper JSON = new ObjectMapper();
 
-  private final ConfigStore configStore;
-  private final Evaluator evaluator;
   private final EnvLookup envLookup;
+  private final Qf1Reader qf1;
 
+  /**
+   * @param configStore unused since qf1 secrets replaced {@code decryptWith} key configs; kept so
+   *     the constructor signature does not change
+   * @param evaluator unused, as {@code configStore}
+   * @param envLookup env source for ENV_VAR values and {@code QUONFIG_KEYSET*} keysets; {@code
+   *     null} means {@link #DEFAULT_ENV_LOOKUP}
+   */
   public Resolver(ConfigStore configStore, Evaluator evaluator, EnvLookup envLookup) {
-    this.configStore = configStore;
-    this.evaluator = evaluator;
     this.envLookup = envLookup != null ? envLookup : DEFAULT_ENV_LOOKUP;
+    this.qf1 = new Qf1Reader(this.envLookup);
   }
 
   /**
    * Returns the redacted form of a value for telemetry, or {@link Optional#empty()} if the value is
    * plain (non-confidential and not requiring decryption).
    *
-   * <p>The hash is computed over the raw stored string — ciphertext for {@code decryptWith} values,
-   * plaintext for plain confidentials — so the redaction is stable across evaluations.
+   * <p>The hash is computed over the raw stored string — the qf1 ciphertext for a secret, the
+   * plaintext for a plain confidential — so the redaction is stable across evaluations. Callers
+   * redact every value of a {@link ConfigType#SECRET} config, confidential flag or not.
    */
   public static Optional<String> reportableValueFor(Value val) {
     if (val == null) return Optional.empty();
@@ -74,30 +79,47 @@ public final class Resolver {
 
   /**
    * Resolves a value to its final form. Returns the input unchanged for plain values; materializes
-   * env-var-sourced values; decrypts AES-GCM confidentials.
+   * env-var-sourced values; decrypts qf1 secrets (a value of a {@link ConfigType#SECRET} config).
+   *
+   * <p>A value that still carries {@code decryptWith} (the old secrets format) fails with {@link
+   * ResolverException.Kind#UNABLE_TO_DECRYPT}: this SDK no longer reads it and never returns its
+   * ciphertext as a value (qf1 spec 13.3 R1).
    */
   public Value resolve(Value val, ConfigRow cfg, String envId, ContextSet contexts) {
-    return resolve(val, cfg, envId, contexts, null);
-  }
-
-  /**
-   * {@link #resolve(Value, ConfigRow, String, ContextSet)} plus {@code keyPath}: the config keys
-   * already being resolved above this one through decryptWith. A decryptWith pointing back onto the
-   * path is a cycle and fails with {@link ResolverException.Kind#UNABLE_TO_DECRYPT} instead of
-   * recursing until StackOverflowError (qfg-9dxb.7, mirrors sdk-go qfg-9dxb.4). {@code null} means
-   * empty.
-   */
-  private Value resolve(
-      Value val, ConfigRow cfg, String envId, ContextSet contexts, List<String> keyPath) {
     if (val == null) return null;
 
+    if (val.decryptWith() != null && !val.decryptWith().isEmpty()) {
+      throw new ResolverException(
+          ResolverException.Kind.UNABLE_TO_DECRYPT,
+          "value carries decryptWith (the old secrets format), which this SDK no longer reads;"
+              + " store it in secrets/ as a qf1 value");
+    }
+    if (cfg != null && cfg.type() == ConfigType.SECRET) {
+      return resolveSecret(val);
+    }
     if (val.type() == ValueType.PROVIDED) {
       return resolveProvided(val, cfg);
     }
-    if (val.confidential() && val.decryptWith() != null && !val.decryptWith().isEmpty()) {
-      return resolveDecryption(val, cfg, envId, contexts, keyPath);
-    }
     return val;
+  }
+
+  /**
+   * Decrypts a secret's stored qf1 string (spec 8) through the injected env lookup. A failure fails
+   * only this read: the message is the qf1 error text (spec 9.2), which never contains key
+   * material, the payload or the plaintext, and no cause is chained.
+   */
+  private Value resolveSecret(Value val) {
+    Object payload = val.value();
+    if (!(payload instanceof String)) {
+      throw new ResolverException(
+          ResolverException.Kind.UNABLE_TO_DECRYPT,
+          "qf1 malformed: a secret value must be a qf1 string");
+    }
+    try {
+      return new Value(ValueType.STRING, qf1.decrypt((String) payload), true, null);
+    } catch (Qf1Reader.Qf1Exception e) {
+      throw new ResolverException(ResolverException.Kind.UNABLE_TO_DECRYPT, e.getMessage());
+    }
   }
 
   private Value resolveProvided(Value val, ConfigRow cfg) {
@@ -119,68 +141,6 @@ public final class Resolver {
 
     return new Value(
         cfg.valueType(), coerce(envValue.get(), pv.lookup(), cfg.valueType(), cfg.key()));
-  }
-
-  private Value resolveDecryption(
-      Value val, ConfigRow cfg, String envId, ContextSet contexts, List<String> keyPath) {
-    if (configStore == null || evaluator == null) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "no config store available for decryption key lookup");
-    }
-
-    List<String> path = new ArrayList<>(keyPath == null ? 1 : keyPath.size() + 1);
-    if (keyPath != null) path.addAll(keyPath);
-    path.add(cfg.key());
-    if (path.contains(val.decryptWith())) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "decryption key config \"" + val.decryptWith() + "\" is part of a decryptWith cycle");
-    }
-
-    ConfigRow keyCfg = configStore.getConfig(val.decryptWith());
-    if (keyCfg == null) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "decryption key config \"" + val.decryptWith() + "\" not found");
-    }
-
-    EvaluationMatch keyMatch = evaluator.evaluate(keyCfg, envId, contexts);
-    if (!keyMatch.isMatch() || keyMatch.value() == null) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "decryption key config \"" + val.decryptWith() + "\" did not match");
-    }
-
-    Value resolvedKey;
-    try {
-      resolvedKey = resolve(keyMatch.value(), keyCfg, envId, contexts, path);
-    } catch (ResolverException e) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "failed to resolve decryption key from \"" + val.decryptWith() + "\": " + e.getMessage(),
-          e);
-    }
-
-    String secretKeyHex = stringOf(resolvedKey.value());
-    if (secretKeyHex.isEmpty()) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "decryption key from \"" + val.decryptWith() + "\" is empty");
-    }
-
-    String ciphertext = stringOf(val.value());
-    String decrypted;
-    try {
-      decrypted = Encryption.decrypt(secretKeyHex, ciphertext);
-    } catch (Exception e) {
-      throw new ResolverException(
-          ResolverException.Kind.UNABLE_TO_DECRYPT,
-          "decryption failed for config \"" + cfg.key() + "\": " + e.getMessage(),
-          e);
-    }
-
-    return new Value(ValueType.STRING, decrypted, true, null);
   }
 
   private static Object coerce(

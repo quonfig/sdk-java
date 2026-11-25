@@ -7,12 +7,17 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * AES-GCM ciphertext format used by Quonfig's {@code confidential} values.
+ * AES-GCM ciphertext format of the OLD Quonfig secrets ({@code decryptWith} values).
  *
- * <p>Wire format: {@code DATA--IV--AUTH_TAG}, where each segment is hex-encoded. The key is also a
- * hex string (32 bytes / AES-256 in production). Both segments and the key are hex-decoded
- * case-insensitively, mirroring sdk-go's behavior.
+ * @deprecated The SDK no longer reads {@code decryptWith} values: secrets are qf1 values in the
+ *     workspace's {@code secrets/} directory, decrypted with the {@code QUONFIG_KEYSET*}
+ *     environment variables. Nothing in the SDK calls this class; it is kept only so code that
+ *     called it directly still compiles, and will be removed in a future major version.
+ *     <p>Wire format: {@code DATA--IV--AUTH_TAG}, where each segment is hex-encoded. The key is
+ *     also a hex string (32 bytes / AES-256 in production). Both segments and the key are
+ *     hex-decoded case-insensitively, mirroring sdk-go's behavior.
  */
+@Deprecated
 public final class Encryption {
 
   private static final int GCM_TAG_BITS = 128;
@@ -28,7 +33,9 @@ public final class Encryption {
    * @return decrypted UTF-8 string
    * @throws GeneralSecurityException if the key, IV, ciphertext, or auth tag is invalid
    * @throws IllegalArgumentException if the wire format is malformed
+   * @deprecated see {@link Encryption}
    */
+  @Deprecated
   public static String decrypt(String secretKeyHex, String ciphertext)
       throws GeneralSecurityException {
     String[] parts = ciphertext.split("--", -1);
