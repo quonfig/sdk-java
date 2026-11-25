@@ -2642,6 +2642,15 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
     return evaluateTyped(key, null, ctx, expectedType, javaType, true, null).value();
   }
 
+  /** The qf1 class from a reader message {@code "qf1 <class>: ..."}, else {@code null}. */
+  private static String qf1ErrorClass(String message) {
+    if (message == null || !message.startsWith("qf1 ")) return null;
+    int colon = message.indexOf(':');
+    if (colon <= 4) return null;
+    String cls = message.substring(4, colon);
+    return cls.matches("[a-z_]+") ? cls : null;
+  }
+
   private static String noValueMessage(String key) {
     return "No value found for key '" + key + "'";
   }
@@ -2652,7 +2661,7 @@ public final class Quonfig implements AutoCloseable, LoggerClient {
       case MISSING_ENV_VAR:
         return new QuonfigEnvVarNotSetException(msg, e);
       case UNABLE_TO_DECRYPT:
-        return new QuonfigDecryptionException(msg, e);
+        return new QuonfigDecryptionException(msg, e, qf1ErrorClass(e.getMessage()));
       case UNABLE_TO_COERCE:
         return new QuonfigCoercionException(msg, e);
       case MISSING_DEFAULT:

@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.regex.Pattern;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
@@ -123,6 +124,12 @@ final class Qf1Reader {
   private final Resolver.EnvLookup envLookup;
   private final Map<String, CachedKeyset> cache = new ConcurrentHashMap<>();
 
+  /** Most keyset names cached per reader; names are writer-chosen, so the map is bounded. */
+  static final int MAX_CACHED_KEYSETS = 64;
+
+  /** X25519 operations performed, process-wide (tests only: proves the keyset cache hits). */
+  static final LongAdder KEY_AGREEMENTS = new LongAdder();
+
   Qf1Reader(Resolver.EnvLookup envLookup) {
     if (envLookup == null) throw new IllegalArgumentException("envLookup is required");
     this.envLookup = envLookup;
@@ -146,7 +153,7 @@ final class Qf1Reader {
         throw new Qf1Exception(
             ErrorClass.KEYSET_MISSING,
             "value is encrypted to "
-                + ct.keyset
+                + shown(ct.keyset)
                 + " fingerprint "
                 + ct.fingerprint
                 + "; "
@@ -157,10 +164,10 @@ final class Qf1Reader {
     return ks.open(ct);
   }
 
-  private Keyset keyset(String name) throws Qf1Exception {
+  Keyset keyset(String name) throws Qf1Exception {
     Optional<String> found = envLookup.lookup(name);
     if (found == null || found.isEmpty()) {
-      throw new Qf1Exception(ErrorClass.KEYSET_MISSING, "this runtime has no " + name);
+      throw new Qf1Exception(ErrorClass.KEYSET_MISSING, "this runtime has no " + shown(name));
     }
     String value = found.get();
     byte[] digest = sha256(value.getBytes(StandardCharsets.UTF_8));
@@ -174,7 +181,7 @@ final class Qf1Reader {
     } catch (Qf1Exception e) {
       fresh = new CachedKeyset(digest, null, e.errorClass(), e.detail());
     }
-    cache.put(name, fresh);
+    if (cache.containsKey(name) || cache.size() < MAX_CACHED_KEYSETS) cache.put(name, fresh);
     return fresh.get();
   }
 
@@ -237,9 +244,14 @@ final class Qf1Reader {
     String keyset = fields[1];
     String fp = fields[2];
     if (!KEYSET_NAME.matcher(keyset).matches()) {
+      // Field 2 is writer-controlled and failed the name rule, so it may hold anything (a pasted
+      // key or plaintext): report only its length, never its text.
       throw new Qf1Exception(
           ErrorClass.INVALID_KEYSET_NAME,
-          "keyset name " + quoteName(keyset) + " does not match " + KEYSET_NAME_PATTERN);
+          "keyset field ("
+              + keyset.length()
+              + " characters) does not match "
+              + KEYSET_NAME_PATTERN);
     }
     if (!FINGERPRINT.matcher(fp).matches()) {
       throw new Qf1Exception(
@@ -264,29 +276,21 @@ final class Qf1Reader {
         Arrays.copyOfRange(payload, KEY_LENGTH, payload.length));
   }
 
+  int cachedKeysetCount() {
+    return cache.size();
+  }
+
   /** Spec 2, full-string match. */
   static boolean isValidKeysetName(String name) {
     return name != null && KEYSET_NAME.matcher(name).matches();
   }
 
   /**
-   * A writer-controlled keyset name for an error: at most 64 characters, quoted, with anything
-   * outside printable ASCII (control characters included) escaped as {@code \}{@code uXXXX} (9.2).
+   * A VALID keyset name as echoed in an error: at most 64 characters (9.2). Only names that passed
+   * spec 2 reach this, so they hold only {@code A-Z 0-9 _}.
    */
-  static String quoteName(String name) {
-    String s = name.length() > NAME_QUOTE_LIMIT ? name.substring(0, NAME_QUOTE_LIMIT) : name;
-    StringBuilder b = new StringBuilder(s.length() + 2).append('"');
-    for (int i = 0; i < s.length(); i++) {
-      char c = s.charAt(i);
-      if (c == '"' || c == '\\') {
-        b.append('\\').append(c);
-      } else if (c < 0x20 || c > 0x7e) {
-        b.append(String.format("\\u%04x", (int) c));
-      } else {
-        b.append(c);
-      }
-    }
-    return b.append('"').toString();
+  static String shown(String name) {
+    return name.length() > NAME_QUOTE_LIMIT ? name.substring(0, NAME_QUOTE_LIMIT) + "..." : name;
   }
 
   /**
@@ -376,11 +380,11 @@ final class Qf1Reader {
         throw new Qf1Exception(
             ErrorClass.KEY_NOT_HELD,
             "value is encrypted to "
-                + ct.keyset
+                + shown(ct.keyset)
                 + " fingerprint "
                 + ct.fingerprint
                 + "; this runtime holds "
-                + name
+                + shown(name)
                 + " fingerprints ["
                 + String.join(" ", fingerprints())
                 + "]");
@@ -390,30 +394,20 @@ final class Qf1Reader {
         throw new Qf1Exception(
             ErrorClass.INVALID_EPHEMERAL_KEY,
             "X25519 shared secret for "
-                + ct.keyset
+                + shown(ct.keyset)
                 + " fingerprint "
                 + ct.fingerprint
                 + " is all zero");
       }
       byte[] okm = deriveOkm(shared, ct.ephemeral, held.publicKey);
       Arrays.fill(shared, (byte) 0);
-      byte[] plain = null;
+      byte[] plain;
       try {
-        Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
-        gcm.init(
-            Cipher.DECRYPT_MODE,
-            new SecretKeySpec(okm, 0, AES_KEY_LENGTH, "AES"),
-            new GCMParameterSpec(TAG_BITS, okm, AES_KEY_LENGTH, OKM_LENGTH - AES_KEY_LENGTH));
-        gcm.updateAAD(ct.aad);
-        plain = gcm.doFinal(ct.sealed);
+        plain = gcmOpen(okm, ct.aad, ct.sealed);
       } catch (AEADBadTagException e) {
         throw new Qf1Exception(
             ErrorClass.DECRYPT_FAILED,
-            "authentication failed for " + ct.keyset + " fingerprint " + ct.fingerprint);
-      } catch (GeneralSecurityException e) {
-        // AES-256-GCM is mandatory in every JDK; anything else here is a platform bug.
-        throw new IllegalStateException(
-            "qf1: AES-GCM is unavailable (" + e.getClass().getSimpleName() + ")");
+            "authentication failed for " + shown(ct.keyset) + " fingerprint " + ct.fingerprint);
       } finally {
         Arrays.fill(okm, (byte) 0);
       }
@@ -422,7 +416,11 @@ final class Qf1Reader {
       } catch (CharacterCodingException e) {
         throw new Qf1Exception(
             ErrorClass.DECRYPT_FAILED,
-            "plaintext for " + ct.keyset + " fingerprint " + ct.fingerprint + " is not UTF-8");
+            "plaintext for "
+                + shown(ct.keyset)
+                + " fingerprint "
+                + ct.fingerprint
+                + " is not UTF-8");
       } finally {
         Arrays.fill(plain, (byte) 0);
       }
@@ -437,7 +435,7 @@ final class Qf1Reader {
       if (!p.isEmpty()) entries.add(p);
     }
     if (entries.isEmpty()) {
-      throw new Qf1Exception(ErrorClass.KEYSET_MISSING, name + " is set but holds no keys");
+      throw new Qf1Exception(ErrorClass.KEYSET_MISSING, shown(name) + " is set but holds no keys");
     }
     Map<String, HeldKey> keys = new LinkedHashMap<>();
     for (int i = 0; i < entries.size(); i++) {
@@ -446,7 +444,8 @@ final class Qf1Reader {
         raw = parsePrivateKeyEntry(entries.get(i));
       } catch (Qf1Exception e) {
         throw new Qf1Exception(
-            ErrorClass.KEYSET_INVALID, name + " entry " + (i + 1) + " is not a qf1 private key");
+            ErrorClass.KEYSET_INVALID,
+            shown(name) + " entry " + (i + 1) + " is not a qf1 private key");
       }
       PrivateKey priv;
       byte[] pub;
@@ -465,7 +464,8 @@ final class Qf1Reader {
       if (existing != null) {
         if (MessageDigest.isEqual(existing.publicKey, pub)) continue; // same key, collapse (4)
         throw new Qf1Exception(
-            ErrorClass.KEYSET_INVALID, name + " holds two different keys with fingerprint " + fp);
+            ErrorClass.KEYSET_INVALID,
+            shown(name) + " holds two different keys with fingerprint " + fp);
       }
       keys.put(fp, new HeldKey(priv, pub));
     }
@@ -509,6 +509,7 @@ final class Qf1Reader {
                   new XECPublicKeySpec(NamedParameterSpec.X25519, new BigInteger(1, be)));
       KeyAgreement ka = KeyAgreement.getInstance("X25519");
       ka.init(priv);
+      KEY_AGREEMENTS.increment();
       try {
         ka.doPhase(pub, true);
       } catch (InvalidKeyException smallOrder) {
@@ -524,6 +525,28 @@ final class Qf1Reader {
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(
           "qf1: X25519 failed unexpectedly (" + e.getClass().getSimpleName() + ")");
+    }
+  }
+
+  /**
+   * AES-256-GCM decrypt with key {@code okm[0:32]} and nonce {@code okm[32:44]}. Only a failed tag
+   * ({@link AEADBadTagException}) is a {@code decrypt_failed}; any other JCA error (bad key length,
+   * missing provider) is a bug and surfaces as {@link IllegalStateException}, never as a qf1 class.
+   */
+  static byte[] gcmOpen(byte[] okm, byte[] aad, byte[] sealed) throws AEADBadTagException {
+    try {
+      Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+      gcm.init(
+          Cipher.DECRYPT_MODE,
+          new SecretKeySpec(okm, 0, AES_KEY_LENGTH, "AES"),
+          new GCMParameterSpec(TAG_BITS, okm, AES_KEY_LENGTH, OKM_LENGTH - AES_KEY_LENGTH));
+      gcm.updateAAD(aad);
+      return gcm.doFinal(sealed);
+    } catch (AEADBadTagException e) {
+      throw e;
+    } catch (GeneralSecurityException | IllegalArgumentException e) {
+      throw new IllegalStateException(
+          "qf1: AES-GCM failed unexpectedly (" + e.getClass().getSimpleName() + ")");
     }
   }
 

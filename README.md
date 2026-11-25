@@ -156,9 +156,13 @@ String webhookSecret = quonfig.getStringOrThrow("stripe.webhook.secret");
 - **The old format is no longer read.** A value that still carries `decryptWith` (the old
   `configs/` secrets keyed by `QUONFIG_ENCRYPTION_KEY*` configs) now fails like a value that cannot
   be decrypted, instead of being decrypted. Move it to `secrets/` with the `qfg` CLI.
-- **Older SDK versions** do not read `secrets/`: in datadir mode they never load it, and over the
-  network they return the raw `qf1:` string as the value. Upgrade every backend service that reads a
-  secret before you create it.
+- **Minimum version.** Only this release and later read secrets. An older sdk-java never opens
+  `secrets/` in datadir mode: a key that exists only in `secrets/` is missing, and a key that also
+  has an old copy in `configs/` serves that old copy. Over the network an older SDK returns the raw
+  `qf1:` string as the value. Upgrade every backend service that reads a secret before you create
+  it.
+- **Detecting the failure in code.** `QuonfigDecryptionException#errorClass()` returns the qf1
+  class (`key_not_held`, `keyset_missing`, ...), or `null` for a leftover `decryptWith` value.
 
 ## Untyped details read
 

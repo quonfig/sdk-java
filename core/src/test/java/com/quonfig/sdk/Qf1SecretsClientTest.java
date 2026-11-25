@@ -114,6 +114,7 @@ class Qf1SecretsClientTest {
                     })
                 .enableQuonfigUserContext(false)
                 .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
                 .build())) {
       assertEquals("my-test-value", q.getString("my-test-key", null));
       assertEquals("fallback", q.getString("qf1.secret.short", "fallback"));
@@ -308,6 +309,7 @@ class Qf1SecretsClientTest {
                 .environment("production")
                 .envLookup(k -> Optional.ofNullable(keysetEnv.get(k)))
                 .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
                 .build())) {
       assertEquals(p.get("plaintext").asText(), q.getString("s", null));
       assertEquals("SECRET", q.getStringDetails("s", null).metadata().get("configType"));
@@ -330,6 +332,7 @@ class Qf1SecretsClientTest {
                 .datafileEnvelope(envelope)
                 .envLookup(k -> Optional.ofNullable(keysetEnv.get(k)))
                 .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
                 .build())) {
       assertEquals(p.get("plaintext").asText(), q.getString("w", null));
       // A qf1 string outside the secret family is not decrypted: the type decides.
@@ -364,6 +367,7 @@ class Qf1SecretsClientTest {
                 .telemetryInitialDelay(Duration.ofSeconds(60))
                 .telemetryFlushInterval(Duration.ofSeconds(60))
                 .telemetryMaxInterval(Duration.ofSeconds(600))
+                .enableQuonfigUserContext(false)
                 .build())) {
       assertEquals(p.get("plaintext").asText(), q.getString("s", null));
       q.flush();
@@ -377,6 +381,149 @@ class Qf1SecretsClientTest {
                     .digest(ct.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     assertTrue(json.contains("*****" + md5.substring(0, 5)), json);
     assertFalse(json.contains(p.get("plaintext").asText()), json);
+  }
+
+  @Test
+  void decryptWithOfEveryJsonTypeFailsThatReadOnly(@TempDir Path tmp) throws Exception {
+    Path ws = workspace(tmp);
+    Map<String, String> shapes = new java.util.LinkedHashMap<>();
+    shapes.put("dw.string", "\"some.key\"");
+    shapes.put("dw.number", "5");
+    shapes.put("dw.zero", "0");
+    shapes.put("dw.true", "true");
+    shapes.put("dw.false", "false");
+    shapes.put("dw.array", "[]");
+    shapes.put("dw.object", "{}");
+    shapes.put("dw.object.full", "{\"k\":\"v\"}");
+    // None: JSON null and the empty string are "no decryptWith".
+    shapes.put("dw.null", "null");
+    shapes.put("dw.empty", "\"\"");
+    for (Map.Entry<String, String> e : shapes.entrySet()) {
+      Files.writeString(
+          ws.resolve("configs/" + e.getKey() + ".json"),
+          "{\"key\":\""
+              + e.getKey()
+              + "\",\"type\":\"config\",\"valueType\":\"string\",\"default\":{\"rules\":[{"
+              + "\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"string\","
+              + "\"value\":\"stored-text\",\"confidential\":true,\"decryptWith\":"
+              + e.getValue()
+              + "}}]}}");
+    }
+    Files.writeString(
+        ws.resolve("configs/plain.json"),
+        "{\"key\":\"plain\",\"type\":\"config\",\"valueType\":\"string\",\"default\":{\"rules\":[{"
+            + "\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"string\","
+            + "\"value\":\"ok\"}}]}}");
+    List<String> read = Collections.synchronizedList(new ArrayList<>());
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder()
+                .datadir(ws.toString())
+                .environment("production")
+                .envLookup(
+                    k -> {
+                      read.add(k);
+                      return Optional.empty();
+                    })
+                .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
+                .build())) {
+      assertEquals("ok", q.getString("plain", null));
+      for (String key : shapes.keySet()) {
+        if (key.equals("dw.null") || key.equals("dw.empty")) {
+          assertEquals("stored-text", q.getString(key, "d"), key);
+          continue;
+        }
+        assertEquals("d", q.getString(key, "d"), key);
+        QuonfigDecryptionException ex =
+            assertThrows(QuonfigDecryptionException.class, () -> q.getStringOrThrow(key), key);
+        assertTrue(ex.getMessage().contains("decryptWith"), ex.getMessage());
+        assertNull(ex.errorClass());
+        assertFalse(ex.getMessage().contains("stored-text"), ex.getMessage());
+      }
+    }
+    // Options itself reads QUONFIG_BACKEND_SDK_KEY / QUONFIG_DOMAIN at build time; no keyset and
+    // no other secret-related variable may be read for these values.
+    List<String> keysetReads = new ArrayList<>();
+    for (String k : read)
+      if (k.startsWith("QUONFIG_KEYSET") || k.contains("ENCRYPTION")) keysetReads.add(k);
+    assertEquals(List.of(), keysetReads);
+  }
+
+  @Test
+  void errorClassIsExposedWithoutParsingText() {
+    try (Quonfig q = corpusClient(keysetEnv, null)) {
+      assertEquals(
+          "key_not_held",
+          assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> q.getStringOrThrow("qf1.secret.key.not.held"))
+              .errorClass());
+      assertEquals(
+          "invalid_keyset_name",
+          assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> q.getStringOrThrow("qf1.secret.keyset.name.invalid"))
+              .errorClass());
+      assertEquals(
+          "keyset_missing",
+          assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> q.getStringOrThrow("qf1.secret.keyset.missing"))
+              .errorClass());
+    }
+  }
+
+  @Test
+  void invalidUtf8SecretNeverLeaksItsKnownPrefixThroughTheClient(@TempDir Path tmp)
+      throws Exception {
+    com.quonfig.sdk.eval.Qf1TestSeal.Key key = com.quonfig.sdk.eval.Qf1TestSeal.mint();
+    String sentinel = "SENTINEL-" + java.util.UUID.randomUUID();
+    byte[] sb = sentinel.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    byte[] plain = java.util.Arrays.copyOf(sb, sb.length + 3);
+    plain[sb.length] = (byte) 0xed;
+    plain[sb.length + 1] = (byte) 0xa0;
+    plain[sb.length + 2] = (byte) 0x80;
+    String ct = com.quonfig.sdk.eval.Qf1TestSeal.seal("QUONFIG_KEYSET_HYGIENE", key, plain);
+    Path ws = workspace(tmp);
+    Files.writeString(ws.resolve("secrets/h.json"), secretDoc("h", "secret", ct, true));
+    CaptureLogger log = new CaptureLogger();
+    QuonfigDecryptionException e;
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder()
+                .datadir(ws.toString())
+                .environment("production")
+                .envLookup(
+                    k ->
+                        "QUONFIG_KEYSET_HYGIENE".equals(k)
+                            ? Optional.of(key.privateEntry)
+                            : Optional.empty())
+                .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
+                .logger(log)
+                .build())) {
+      assertEquals("d", q.getString("h", "d"));
+      EvaluationDetails<String> d = q.getStringDetails("h", "d");
+      assertFalse(String.valueOf(d.errorMessage()).contains("SENTINEL"), d.errorMessage());
+      e = assertThrows(QuonfigDecryptionException.class, () -> q.getStringOrThrow("h"));
+    }
+    assertEquals("decrypt_failed", e.errorClass());
+    java.io.StringWriter trace = new java.io.StringWriter();
+    e.printStackTrace(new java.io.PrintWriter(trace));
+    List<String> texts = new ArrayList<>(log.lines());
+    texts.add(trace.toString());
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      texts.add(String.valueOf(t.getMessage()));
+      texts.add(t.toString());
+      for (Throwable sup : t.getSuppressed()) texts.add(sup.toString());
+    }
+    for (String text : texts) {
+      assertFalse(text.contains("SENTINEL"), text);
+      assertFalse(text.contains(key.privateEntry.substring(9, 21)), text);
+      assertFalse(text.contains(ct.substring(ct.length() - 20)), text);
+    }
+    assertFalse(log.lines().isEmpty());
   }
 
   // ---------------------------------------------------------------------------------------------

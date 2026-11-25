@@ -59,6 +59,9 @@ final class TestSetup {
           return v == null ? Optional.empty() : Optional.of(v);
         }
         if (BASE_ENV.containsKey(key)) return Optional.of(BASE_ENV.get(key));
+        // Never fall through to the machine's real keysets: a case without keysets must see them
+        // unset (qfg-8seuf.12).
+        if (key.startsWith("QUONFIG_KEYSET")) return Optional.empty();
         return Optional.ofNullable(System.getenv(key));
       };
 
