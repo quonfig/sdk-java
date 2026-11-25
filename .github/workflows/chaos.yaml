@@ -92,7 +92,7 @@ jobs:
           # scenario 10 exp[0] to callback_errors_total (qfg-6vno.28).
           # scripts/check-itd-refs.sh
           # (run by test.yaml) fails CI when the three pins differ (qfg-6vno.7).
-          ref: v2026.10.26
+          ref: 2e5b948b09f38922824a96bce94b746a8ce3e655  # qf1 vectors commit (qfg-8seuf.3); move to the tag that includes it before merge
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it.

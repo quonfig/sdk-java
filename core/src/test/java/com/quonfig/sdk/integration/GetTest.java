@@ -14,6 +14,23 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class GetTest {
+  private static String qf1TestKeyset(String... labels) {
+    java.util.List<String> entries = new java.util.ArrayList<>();
+    for (String label : labels) {
+      try {
+        byte[] digest =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(
+                    ("qf1 test vector private key: " + label)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        entries.add(
+            "qf1-priv-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest));
+      } catch (java.security.NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+    return String.join(",", entries);
+  }
 
   @Test
   @DisplayName("get returns a found value for key")
@@ -60,10 +77,12 @@ class GetTest {
   @Test
   @DisplayName("can return a value provided by an environment variable")
   void canReturnAValueProvidedByAnEnvironmentVariable() throws Exception {
-    Quonfig client = TestSetup.client();
-    assertEquals(
-        "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221",
-        client.getString("prefab.secrets.encryption.key", null));
+    TestSetup.withEnv(
+        TestSetup.map("GREETING", "hello from the environment"),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("hello from the environment", client.getString("greeting.from.env", null));
+        });
   }
 
   @Test
@@ -74,17 +93,344 @@ class GetTest {
   }
 
   @Test
-  @DisplayName("can decrypt and return a secret value (with decryption key in in env var)")
-  void canDecryptAndReturnASecretValueWithDecryptionKeyInInEnvVar() throws Exception {
-    Quonfig client = TestSetup.client();
-    assertEquals("hello.world", client.getString("a.secret.config", null));
+  @DisplayName("decrypts a qf1 secret")
+  void decryptsAQf1Secret() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("hello", client.getString("qf1.secret.short", null));
+        });
   }
 
   @Test
-  @DisplayName("decrypts a secret whose key config has an environment rule")
-  void decryptsASecretWhoseKeyConfigHasAnEnvironmentRule() throws Exception {
+  @DisplayName("decrypts a qf1 secret whose value is the empty string")
+  void decryptsAQf1SecretWhoseValueIsTheEmptyString() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("", client.getString("qf1.secret.empty", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts a qf1 secret with multi-byte UTF-8")
+  void decryptsAQf1SecretWithMultiByteUtf8() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("pässwörd 日本語 \ud83d\udd11", client.getString("qf1.secret.multibyte", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts a qf1 secret and keeps its leading U+FEFF")
+  void decryptsAQf1SecretAndKeepsItsLeadingUFeff() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("\ufeffbom stays", client.getString("qf1.secret.leading.bom", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts a qf1 secret with quotes, backslash, newline, tab and colons")
+  void decryptsAQf1SecretWithQuotesBackslashNewlineTabAndColons() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(
+              "a\"b\\c\nd\te:f,g qf1:x", client.getString("qf1.secret.json.special", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts a qf1 secret on the bare QUONFIG_KEYSET keyset")
+  void decryptsAQf1SecretOnTheBareQuonfigKeysetKeyset() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(
+              "sk_test_default_keyset_value", client.getString("qf1.secret.default.keyset", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts a qf1 secret encrypted to the second key of a two-key keyset")
+  void decryptsAQf1SecretEncryptedToTheSecondKeyOfATwoKeyKeyset() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("written before rotation", client.getString("qf1.secret.older.key", null));
+        });
+  }
+
+  @Test
+  @DisplayName("decrypts the environment-scoped value of a qf1 secret on a second keyset")
+  void decryptsTheEnvironmentScopedValueOfAQf1SecretOnASecondKeyset() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(
+              "written with the first public key", client.getString("qf1.secret.env.scoped", null));
+        });
+  }
+
+  @Test
+  @DisplayName("a qf1 secret shadows a document with the same key in configs")
+  void aQf1SecretShadowsADocumentWithTheSameKeyInConfigs() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("hello", client.getString("qf1.secret.shadowed", null));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret on a keyset the environment does not hold returns the default")
+  void qf1SecretOnAKeysetTheEnvironmentDoesNotHoldReturnsTheDefault() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.keyset.missing", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret on a keyset the environment does not hold with no default returns nil")
+  void qf1SecretOnAKeysetTheEnvironmentDoesNotHoldWithNoDefaultReturnsNil() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertNull(client.getString("qf1.secret.keyset.missing", null));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret whose fingerprint is not held returns the default")
+  void qf1SecretWhoseFingerprintIsNotHeldReturnsTheDefault() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.key.not.held", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret is looked up by keyset and fingerprint, never in another keyset")
+  void qf1SecretIsLookedUpByKeysetAndFingerprintNeverInAnotherKeyset() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.cross.keyset", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret with a tampered header returns the default")
+  void qf1SecretWithATamperedHeaderReturnsTheDefault() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.tampered.header", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "qf1 secret whose keyset name is invalid is refused even when that env var holds its key")
+  void qf1SecretWhoseKeysetNameIsInvalidIsRefusedEvenWhenThatEnvVarHoldsItsKey() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.keyset.name.invalid", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret with a trailing colon is refused")
+  void qf1SecretWithATrailingColonIsRefused() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.trailing.colon", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("qf1 secret whose ephemeral key gives an all-zero shared secret is refused")
+  void qf1SecretWhoseEphemeralKeyGivesAnAllZeroSharedSecretIsRefused() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.low.order.ephemeral", "DEFAULT"));
+        });
+  }
+
+  @Test
+  @DisplayName("a value that still carries decryptWith returns the default")
+  void aValueThatStillCarriesDecryptwithReturnsTheDefault() throws Exception {
     Quonfig client = TestSetup.client();
-    assertEquals("hello.world", client.getString("env.scoped.secret", null));
+    assertEquals("DEFAULT", client.getString("qf1.legacy.decrypt.with", "DEFAULT"));
+  }
+
+  @Test
+  @DisplayName("a value that still carries decryptWith with no default returns nil")
+  void aValueThatStillCarriesDecryptwithWithNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(client.getString("qf1.legacy.decrypt.with", null));
   }
 
   @Test
@@ -1484,15 +1830,39 @@ class GetTest {
   @Test
   @DisplayName("STRING getter on a decryption failure returns the default")
   void stringGetterOnADecryptionFailureReturnsTheDefault() throws Exception {
-    Quonfig client = TestSetup.client();
-    assertEquals("DEFAULT", client.getString("a.broken.secret.config", "DEFAULT"));
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("DEFAULT", client.getString("qf1.secret.key.not.held", "DEFAULT"));
+        });
   }
 
   @Test
   @DisplayName("STRING getter on a decryption failure with no default returns nil")
   void stringGetterOnADecryptionFailureWithNoDefaultReturnsNil() throws Exception {
-    Quonfig client = TestSetup.client();
-    assertNull(client.getString("a.broken.secret.config", null));
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertNull(client.getString("qf1.secret.key.not.held", null));
+        });
   }
 
   @Test

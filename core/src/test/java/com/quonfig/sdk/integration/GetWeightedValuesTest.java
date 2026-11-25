@@ -6,6 +6,8 @@
 package com.quonfig.sdk.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import com.quonfig.sdk.Quonfig;
 import org.junit.jupiter.api.DisplayName;
@@ -257,5 +259,74 @@ class GetWeightedValuesTest {
                           "key", "same-user-every-time", "tracking_id", "same-tracking-id")))));
     }
     assertEquals(java.util.Set.of(1L, 2L), seen, "values seen over 200 evaluations");
+  }
+
+  @Test
+  @DisplayName("weighted json variant returns the json object")
+  void weightedJsonVariantReturnsTheJsonObject() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        TestSetup.map("variant", "json", "n", 1L),
+        client.getJson(
+            "weighted.variant.json",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
+  }
+
+  @Test
+  @DisplayName("weighted duration variant returns the duration")
+  void weightedDurationVariantReturnsTheDuration() throws Exception {
+    Quonfig client = TestSetup.client();
+    java.time.Duration actual =
+        client.getDuration(
+            "weighted.variant.duration",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2"))));
+    assertNotNull(actual, "getDuration returned null");
+    assertEquals(90000L, actual.toMillis());
+    assertEquals(
+        90000L,
+        client
+            .getDurationDetails(
+                "weighted.variant.duration",
+                null,
+                TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2"))))
+            .value()
+            .toMillis());
+  }
+
+  @Test
+  @DisplayName("weighted ENV_VAR variant reads the env var coerced to int")
+  void weightedEnvVarVariantReadsTheEnvVarCoercedToInt() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        1234L,
+        client.getLong(
+            "weighted.variant.provided.int",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
+  }
+
+  @Test
+  @DisplayName("weighted ENV_VAR variant with a missing env var returns the default")
+  void weightedEnvVarVariantWithAMissingEnvVarReturnsTheDefault() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        "DEFAULT",
+        client.getString(
+            "weighted.variant.provided.missing",
+            "DEFAULT",
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
+  }
+
+  @Test
+  @DisplayName("weighted ENV_VAR variant with a missing env var and no default returns nil")
+  void weightedEnvVarVariantWithAMissingEnvVarAndNoDefaultReturnsNil() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertNull(
+        client.getString(
+            "weighted.variant.provided.missing",
+            null,
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
   }
 }
