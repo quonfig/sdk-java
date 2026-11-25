@@ -347,6 +347,59 @@ class ResolverTest {
         v, r.resolve(v, rowNoRules("plain.config", ValueType.STRING), "", new ContextSet()));
   }
 
+  @Test
+  void resolve_secret_keepsTheConfidentialFlagOnTheDecryptedValue() throws Exception {
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    String ct =
+        Qf1TestSeal.seal(
+            "QUONFIG_KEYSET_C", key, "p".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    ConfigRow cfg =
+        new ConfigRow(
+            "s",
+            "s",
+            ConfigType.SECRET,
+            ValueType.STRING,
+            false,
+            new RuleSet(Collections.emptyList()),
+            Collections.emptyList());
+    Resolver r = new Resolver(null, null, k -> Optional.of(key.privateEntry));
+    for (boolean storedConfidential : new boolean[] {true, false}) {
+      Value out =
+          r.resolve(
+              new Value(ValueType.STRING, ct, storedConfidential, null), cfg, "", new ContextSet());
+      assertEquals("p", out.value());
+      assertTrue(out.confidential());
+      assertNull(out.decryptWith());
+    }
+  }
+
+  @Test
+  void resolve_secretThatAlsoCarriesDecryptWith_failsWithTheDecryptWithError() throws Exception {
+    // R1 beats the secret path: a valid qf1 value that also carries decryptWith is NOT decrypted.
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    String ct =
+        Qf1TestSeal.seal(
+            "QUONFIG_KEYSET_C", key, "p".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    ConfigRow cfg =
+        new ConfigRow(
+            "s",
+            "s",
+            ConfigType.SECRET,
+            ValueType.STRING,
+            false,
+            new RuleSet(Collections.emptyList()),
+            Collections.emptyList());
+    Resolver r = new Resolver(null, null, k -> Optional.of(key.privateEntry));
+    ResolverException ex =
+        assertThrows(
+            ResolverException.class,
+            () ->
+                r.resolve(
+                    new Value(ValueType.STRING, ct, true, "old.key"), cfg, "", new ContextSet()));
+    assertEquals(ResolverException.Kind.UNABLE_TO_DECRYPT, ex.kind());
+    assertTrue(ex.getMessage().contains("decryptWith"), ex.getMessage());
+  }
+
   // ----- ReportableValueFor: telemetry redaction -----
 
   @Test

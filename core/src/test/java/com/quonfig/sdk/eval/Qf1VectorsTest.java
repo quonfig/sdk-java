@@ -529,20 +529,211 @@ class Qf1VectorsTest {
   }
 
   @Test
-  void invalidKeysetNameNeverReadsTheEnv() {
+  void invalidKeysetNameNeverReadsTheEnv() throws Exception {
+    // The lookup ANSWERS every name with a real key, so a reader that skipped the name rule would
+    // read it (and decrypt the mustReject cases).
     List<String> read = new ArrayList<>();
+    JsonNode env = vectors.get("positiveEnv");
+    String anyKey = env.get("QUONFIG_KEYSET_TEST").asText();
     Qf1Reader reader =
         new Qf1Reader(
             name -> {
               read.add(name);
-              return Optional.empty();
+              return Optional.of(anyKey);
             });
     for (JsonNode n : list("negative")) {
       if (!"invalid_keyset_name".equals(n.get("expectedError").asText())) continue;
-      assertThrows(
-          Qf1Reader.Qf1Exception.class, () -> reader.decrypt(n.get("ciphertext").asText()));
+      assertEquals(
+          Qf1Reader.ErrorClass.INVALID_KEYSET_NAME,
+          assertThrows(
+                  Qf1Reader.Qf1Exception.class, () -> reader.decrypt(n.get("ciphertext").asText()))
+              .errorClass());
+    }
+    // Hand-built names with line terminators, sealed under the valid key so only the name rule
+    // stops them.
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    for (String name :
+        List.of(
+            "QUONFIG_KEYSET_TEST\n",
+            "HOME\nQUONFIG_KEYSET",
+            "QUONFIG_KEYSET\r",
+            "QUONFIG_KEYSET\u2028")) {
+      String ct = Qf1TestSeal.seal(name, key, "x".getBytes(StandardCharsets.UTF_8));
+      Qf1Reader r2 =
+          new Qf1Reader(
+              n -> {
+                read.add(n);
+                return Optional.of(key.privateEntry);
+              });
+      assertEquals(
+          Qf1Reader.ErrorClass.INVALID_KEYSET_NAME,
+          assertThrows(Qf1Reader.Qf1Exception.class, () -> r2.decrypt(ct)).errorClass(),
+          name);
     }
     assertEquals(List.of(), read);
+  }
+
+  @Test
+  void nonStrippedCharactersAroundAnEnvEntryAreKeysetInvalid() throws Exception {
+    String good = firstPrivateEntryOf("QUONFIG_KEYSET_TEST");
+    for (char c :
+        new char[] {
+          '\u000b', '\u000c', '\u00a0', '\u2028', '\u2029', '\ufeff', '\u0085', '\u3000', '\u200b',
+          '\u0000'
+        }) {
+      for (String v : List.of(c + good, good + c, " " + c + good + "\n", good + "," + c)) {
+        Qf1Reader.Qf1Exception e =
+            assertThrows(
+                Qf1Reader.Qf1Exception.class,
+                () -> Qf1Reader.parseKeyset("QUONFIG_KEYSET_TEST", v),
+                String.format("U+%04X", (int) c));
+        assertEquals(Qf1Reader.ErrorClass.KEYSET_INVALID, e.errorClass());
+      }
+    }
+    // The four stripped characters are fine.
+    assertEquals(
+        1, Qf1Reader.parseKeyset("QUONFIG_KEYSET_TEST", " \t\r\n" + good + "\r\n\t ,").keys.size());
+  }
+
+  @Test
+  void nonCanonicalEphemeralEncodingsDecryptWithTheSaltOverTheTransmittedBytes() throws Exception {
+    java.math.BigInteger p =
+        java.math.BigInteger.ONE.shiftLeft(255).subtract(java.math.BigInteger.valueOf(19));
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    PrivateKey priv = Qf1TestSeal.privateKeyOf(key);
+    Qf1Reader reader = new Qf1Reader(n -> Optional.of(key.privateEntry));
+    for (int k = 2; k <= 18; k++) {
+      byte[] transmitted = littleEndian(p.add(java.math.BigInteger.valueOf(k)));
+      assertEquals(0, transmitted[31] & 0x80);
+      // S is computed over the CANONICAL u = k, independently of how the reader handles u >= p.
+      byte[] s = Qf1Reader.x25519(priv, littleEndian(java.math.BigInteger.valueOf(k)));
+      assertNotNull(s, "k=" + k);
+      String plain = "non-canonical-" + k;
+      String ct =
+          Qf1TestSeal.sealRaw(
+              "QUONFIG_KEYSET_NC", key, transmitted, s, plain.getBytes(StandardCharsets.UTF_8));
+      assertEquals(plain, reader.decrypt(ct), "p+" + k);
+      // Sealing with the salt over the canonical bytes instead must NOT decrypt.
+      String wrongSalt =
+          Qf1TestSeal.sealRaw(
+              "QUONFIG_KEYSET_NC",
+              key,
+              littleEndian(java.math.BigInteger.valueOf(k)),
+              s,
+              plain.getBytes(StandardCharsets.UTF_8));
+      String spliced =
+          wrongSalt.substring(0, wrongSalt.lastIndexOf(':') + 1)
+              + java.util.Base64.getUrlEncoder()
+                  .withoutPadding()
+                  .encodeToString(
+                      concat(
+                          transmitted,
+                          java.util.Arrays.copyOfRange(
+                              java.util.Base64.getUrlDecoder()
+                                  .decode(wrongSalt.substring(wrongSalt.lastIndexOf(':') + 1)),
+                              32,
+                              32 + plain.length() + 16)));
+      assertEquals(
+          Qf1Reader.ErrorClass.DECRYPT_FAILED,
+          assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(spliced)).errorClass());
+    }
+  }
+
+  private static byte[] littleEndian(java.math.BigInteger v) {
+    byte[] be = v.toByteArray();
+    byte[] le = new byte[32];
+    for (int i = 0; i < be.length && i < 32; i++) le[i] = be[be.length - 1 - i];
+    return le;
+  }
+
+  private static byte[] concat(byte[] a, byte[] b) {
+    byte[] out = java.util.Arrays.copyOf(a, a.length + b.length);
+    System.arraycopy(b, 0, out, a.length, b.length);
+    return out;
+  }
+
+  // ----- B: the authentication-failure path leaks no intermediate -----
+
+  @Test
+  void tamperedTagLeaksNoIntermediate() throws Exception {
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    byte[] ephRaw = new byte[32];
+    new java.security.SecureRandom().nextBytes(ephRaw);
+    String ct =
+        Qf1TestSeal.sealWithEphemeral(
+            "QUONFIG_KEYSET_LEAK",
+            key,
+            ephRaw,
+            "known-plaintext-value".getBytes(StandardCharsets.UTF_8));
+    String tampered = Qf1TestSeal.tamperTag(ct);
+    Qf1Reader reader = new Qf1Reader(n -> Optional.of(key.privateEntry));
+    Qf1Reader.Qf1Exception e =
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(tampered));
+    assertEquals(Qf1Reader.ErrorClass.DECRYPT_FAILED, e.errorClass());
+    byte[] base = new byte[32];
+    base[0] = 9;
+    PrivateKey eph = Qf1Reader.privateKey(ephRaw);
+    byte[] eBytes = Qf1Reader.x25519(eph, base);
+    byte[] s = Qf1Reader.x25519(eph, key.publicKey);
+    byte[] salt = concat(eBytes, key.publicKey);
+    byte[] prk = Qf1Reader.hkdfExtract(salt, s);
+    byte[] okm = Qf1Reader.deriveOkm(s, eBytes, key.publicKey);
+    assertSecretsAbsent(
+        e,
+        List.of(
+            s,
+            prk,
+            okm,
+            java.util.Arrays.copyOfRange(okm, 0, 32),
+            java.util.Arrays.copyOfRange(okm, 32, 44),
+            Qf1Reader.parsePrivateKeyEntry(key.privateEntry)),
+        List.of("known-plaintext"));
+  }
+
+  /** No hex or base64 (std/url, padded or not) of any secret byte string, nor any plain string. */
+  static void assertSecretsAbsent(Throwable e, List<byte[]> secrets, List<String> plains) {
+    java.io.StringWriter trace = new java.io.StringWriter();
+    e.printStackTrace(new java.io.PrintWriter(trace));
+    List<String> texts =
+        new ArrayList<>(List.of(String.valueOf(e.getMessage()), e.toString(), trace.toString()));
+    for (Throwable t = e.getCause(); t != null; t = t.getCause()) texts.add(t.toString());
+    for (Throwable sup : e.getSuppressed()) texts.add(sup.toString());
+    for (String text : texts) {
+      String lower = text.toLowerCase(java.util.Locale.ROOT);
+      for (byte[] b : secrets) {
+        String hx = HEX.formatHex(b);
+        String b64 = java.util.Base64.getEncoder().encodeToString(b);
+        String b64u = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+        assertFalse(lower.contains(hx.substring(0, 16)), text);
+        assertFalse(text.contains(b64.substring(0, 12)), text);
+        assertFalse(text.contains(b64u.substring(0, 12)), text);
+      }
+      for (String pl : plains) assertFalse(text.contains(pl), text);
+    }
+  }
+
+  // ----- E: a runtime without X25519 (e.g. FIPS) fails per value, without blaming the key -----
+
+  @Test
+  void missingX25519ProviderFailsPerValueAndDoesNotBlameTheKeyEntry() throws Exception {
+    JsonNode p = list("positive").get(0);
+    Qf1Reader reader = new Qf1Reader(envOf(vectors.get("positiveEnv")));
+    String saved = Qf1Reader.keyAgreementAlgorithm;
+    try {
+      Qf1Reader.keyAgreementAlgorithm = "X25519-NOT-PROVIDED";
+      Qf1Reader.Qf1Exception e =
+          assertThrows(
+              Qf1Reader.Qf1Exception.class, () -> reader.decrypt(p.get("ciphertext").asText()));
+      assertEquals(Qf1Reader.ErrorClass.DECRYPT_FAILED, e.errorClass());
+      assertTrue(e.getMessage().contains("does not provide X25519-NOT-PROVIDED"), e.getMessage());
+      assertTrue(e.getMessage().contains("FIPS"), e.getMessage());
+      assertFalse(e.getMessage().contains("not a qf1 private key"), e.getMessage());
+      assertFalse(e.getMessage().contains("keyset_invalid"), e.getMessage());
+    } finally {
+      Qf1Reader.keyAgreementAlgorithm = saved;
+    }
+    // Not cached: the same reader decrypts once the provider is back.
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(p.get("ciphertext").asText()));
   }
 
   @Test

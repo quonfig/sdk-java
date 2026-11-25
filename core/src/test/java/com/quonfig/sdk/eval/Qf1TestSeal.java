@@ -46,15 +46,28 @@ public final class Qf1TestSeal {
     return new Key(entry, pub);
   }
 
-  /**
-   * Seals {@code plaintext} to {@code recipient} under {@code keyset} (spec 7, no input checks).
-   */
+  /** Seals {@code plaintext} to {@code recipient} under {@code keyset} (spec 7, no checks). */
   public static String seal(String keyset, Key recipient, byte[] plaintext) throws Exception {
     byte[] ephRaw = new byte[32];
     RANDOM.nextBytes(ephRaw);
+    return sealWithEphemeral(keyset, recipient, ephRaw, plaintext);
+  }
+
+  /** {@link #seal} with a caller-chosen ephemeral private key, so tests know every intermediate. */
+  public static String sealWithEphemeral(
+      String keyset, Key recipient, byte[] ephRaw, byte[] plaintext) throws Exception {
     java.security.PrivateKey eph = Qf1Reader.privateKey(ephRaw);
     byte[] e = Qf1Reader.x25519(eph, basePoint());
     byte[] s = Qf1Reader.x25519(eph, recipient.publicKey);
+    return sealRaw(keyset, recipient, e, s, plaintext);
+  }
+
+  /**
+   * Seals with a caller-supplied transmitted ephemeral key {@code e} and shared secret {@code s}
+   * (for non-canonical encodings of E): the salt is over {@code e} as given.
+   */
+  public static String sealRaw(String keyset, Key recipient, byte[] e, byte[] s, byte[] plaintext)
+      throws Exception {
     byte[] okm = Qf1Reader.deriveOkm(s, e, recipient.publicKey);
     String header = "qf1:" + keyset + ":" + recipient.fingerprint() + ":";
     Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
@@ -68,5 +81,18 @@ public final class Qf1TestSeal {
     System.arraycopy(e, 0, blob, 0, 32);
     System.arraycopy(sealed, 0, blob, 32, sealed.length);
     return header + Base64.getUrlEncoder().withoutPadding().encodeToString(blob);
+  }
+
+  /** The recipient's private key, parsed back from its entry. */
+  public static java.security.PrivateKey privateKeyOf(Key k) throws Exception {
+    return Qf1Reader.privateKey(Qf1Reader.parsePrivateKeyEntry(k.privateEntry));
+  }
+
+  /** Flips one bit of the last payload byte (the GCM tag) and re-encodes canonically. */
+  public static String tamperTag(String qf1) {
+    int i = qf1.lastIndexOf(':');
+    byte[] blob = Base64.getUrlDecoder().decode(qf1.substring(i + 1));
+    blob[blob.length - 1] ^= 0x01;
+    return qf1.substring(0, i + 1) + Base64.getUrlEncoder().withoutPadding().encodeToString(blob);
   }
 }

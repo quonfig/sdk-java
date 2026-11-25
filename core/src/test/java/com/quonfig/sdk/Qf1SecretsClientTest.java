@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.quonfig.sdk.eval.Resolver;
 import com.quonfig.sdk.exceptions.QuonfigDecryptionException;
 import com.quonfig.sdk.telemetry.TelemetrySender;
 import com.quonfig.sdk.wire.ConfigEnvelope;
@@ -524,6 +525,136 @@ class Qf1SecretsClientTest {
       assertFalse(text.contains(ct.substring(ct.length() - 20)), text);
     }
     assertFalse(log.lines().isEmpty());
+  }
+
+  private static Quonfig tempClient(Path ws, Resolver.EnvLookup env, CaptureLogger log) {
+    Options.Builder b =
+        Options.builder()
+            .datadir(ws.toString())
+            .environment("production")
+            .envLookup(env)
+            .disableTelemetry(true)
+            .enableQuonfigUserContext(false);
+    if (log != null) b.logger(log);
+    return new Quonfig(b.build());
+  }
+
+  @Test
+  void decryptWithBeatsTheSecretPathInDatadirAndOnTheWire(@TempDir Path tmp) throws Exception {
+    JsonNode p = firstPositive();
+    String ct = p.get("ciphertext").asText();
+    String doc =
+        secretDoc("both", "secret", ct, true)
+            .replace("\"confidential\":true", "\"confidential\":true,\"decryptWith\":\"old.key\"");
+    Path ws = workspace(tmp);
+    Files.writeString(ws.resolve("secrets/both.json"), doc);
+    try (Quonfig q = tempClient(ws, k -> Optional.ofNullable(keysetEnv.get(k)), null)) {
+      assertEquals("d", q.getString("both", "d"));
+      QuonfigDecryptionException e =
+          assertThrows(QuonfigDecryptionException.class, () -> q.getStringOrThrow("both"));
+      assertTrue(e.getMessage().contains("decryptWith"), e.getMessage());
+    }
+    ConfigEnvelope envelope =
+        MAPPER.readValue(
+            "{\"meta\":{\"version\":\"v1\",\"environment\":\"production\"},\"configs\":["
+                + doc
+                + "]}",
+            ConfigEnvelope.class);
+    try (Quonfig q =
+        new Quonfig(
+            Options.builder()
+                .datafileEnvelope(envelope)
+                .envLookup(k -> Optional.ofNullable(keysetEnv.get(k)))
+                .disableTelemetry(true)
+                .enableQuonfigUserContext(false)
+                .build())) {
+      QuonfigDecryptionException e =
+          assertThrows(QuonfigDecryptionException.class, () -> q.getStringOrThrow("both"));
+      assertTrue(e.getMessage().contains("decryptWith"), e.getMessage());
+    }
+  }
+
+  @Test
+  void tamperedTagLeaksNothingThroughTheClientOrItsLogs(@TempDir Path tmp) throws Exception {
+    com.quonfig.sdk.eval.Qf1TestSeal.Key key = com.quonfig.sdk.eval.Qf1TestSeal.mint();
+    String sentinel = "SENTINEL-" + java.util.UUID.randomUUID();
+    String ct =
+        com.quonfig.sdk.eval.Qf1TestSeal.tamperTag(
+            com.quonfig.sdk.eval.Qf1TestSeal.seal(
+                "QUONFIG_KEYSET_T",
+                key,
+                sentinel.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    Path ws = workspace(tmp);
+    Files.writeString(ws.resolve("secrets/t.json"), secretDoc("t", "secret", ct, true));
+    CaptureLogger log = new CaptureLogger();
+    QuonfigDecryptionException e;
+    try (Quonfig q = tempClient(ws, k -> Optional.of(key.privateEntry), log)) {
+      assertEquals("d", q.getString("t", "d"));
+      e = assertThrows(QuonfigDecryptionException.class, () -> q.getStringOrThrow("t"));
+    }
+    assertEquals("decrypt_failed", e.errorClass());
+    java.io.StringWriter trace = new java.io.StringWriter();
+    e.printStackTrace(new java.io.PrintWriter(trace));
+    List<String> texts = new ArrayList<>(log.lines());
+    texts.add(trace.toString());
+    for (String text : texts) {
+      assertFalse(text.contains("SENTINEL"), text);
+      assertFalse(text.contains(key.privateEntry.substring(9, 21)), text);
+    }
+  }
+
+  @Test
+  void junkInSecretsIsTreatedExactlyAsInConfigs(@TempDir Path tmp) throws Exception {
+    JsonNode p = firstPositive();
+    Path ws = workspace(tmp);
+    Files.writeString(
+        ws.resolve("secrets/s.json"), secretDoc("s", "secret", p.get("ciphertext").asText(), true));
+    // Ignored in every directory on main: non-.json files, dotfiles, directories (empty or not).
+    Files.writeString(ws.resolve("secrets/README.md"), "not json, has a secret-looking qf1-priv-x");
+    Files.writeString(ws.resolve("secrets/.hidden.json"), "{ not json");
+    Files.createDirectories(ws.resolve("secrets/nested/empty"));
+    try (Quonfig q = tempClient(ws, k -> Optional.ofNullable(keysetEnv.get(k)), null)) {
+      assertEquals(p.get("plaintext").asText(), q.getString("s", null));
+    }
+    // A malformed *.json, or one with no "key", fails datadir init in configs/ on main; secrets/ is
+    // neither stricter nor more lenient. The error names the path, never the file's content.
+    for (String junk :
+        List.of(
+            "{ not json qf1-priv-content", "{\"type\":\"secret\",\"note\":\"qf1-priv-content\"}")) {
+      for (String dir : List.of("configs", "secrets")) {
+        Path w = Files.createTempDirectory(tmp, "junk");
+        workspace(w);
+        Files.writeString(w.resolve(dir + "/junk.json"), junk);
+        RuntimeException ex =
+            assertThrows(
+                RuntimeException.class, () -> tempClient(w, k -> Optional.empty(), null).close());
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+          assertFalse(String.valueOf(t.getMessage()).contains("qf1-priv-content"), t.toString());
+        }
+      }
+    }
+  }
+
+  @Test
+  void aRuntimeWithoutX25519FailsOnlySecretReads() throws Exception {
+    java.lang.reflect.Field f =
+        Class.forName("com.quonfig.sdk.eval.Qf1Reader").getDeclaredField("keyAgreementAlgorithm");
+    f.setAccessible(true);
+    Object saved = f.get(null);
+    try (Quonfig q = corpusClient(keysetEnv, null)) {
+      f.set(null, "X25519-NOT-PROVIDED");
+      assertEquals("my-test-value", q.getString("my-test-key", null));
+      assertEquals("d", q.getString("qf1.secret.short", "d"));
+      QuonfigDecryptionException e =
+          assertThrows(
+              QuonfigDecryptionException.class, () -> q.getStringOrThrow("qf1.secret.short"));
+      assertTrue(e.getMessage().contains("FIPS"), e.getMessage());
+      assertFalse(e.getMessage().contains("not a qf1 private key"), e.getMessage());
+      f.set(null, saved);
+      assertEquals("hello", q.getString("qf1.secret.short", null));
+    } finally {
+      f.set(null, saved);
+    }
   }
 
   // ---------------------------------------------------------------------------------------------

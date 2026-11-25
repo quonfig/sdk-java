@@ -10,6 +10,7 @@ import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.spec.NamedParameterSpec;
@@ -145,6 +146,23 @@ final class Qf1Reader {
    */
   String decrypt(String value) throws Qf1Exception {
     Ciphertext ct = parse(value);
+    try {
+      return decryptParsed(ct);
+    } catch (AlgorithmUnavailable u) {
+      // The runtime's JCA provider refuses an algorithm (for example a FIPS-restricted provider
+      // without X25519). Nothing is wrong with the value or the keyset; say so, per value.
+      throw new Qf1Exception(
+          ErrorClass.DECRYPT_FAILED,
+          "this Java runtime does not provide "
+              + u.algorithm
+              + " (a restricted JCA provider, for example FIPS mode), so it cannot read qf1"
+              + " secrets; the keyset "
+              + shown(ct.keyset)
+              + " and its entries were not checked");
+    }
+  }
+
+  private String decryptParsed(Ciphertext ct) throws Qf1Exception {
     Keyset ks;
     try {
       ks = keyset(ct.keyset);
@@ -481,11 +499,27 @@ final class Qf1Reader {
   // Primitives (spec 5)
   // ---------------------------------------------------------------------------------------------
 
+  /** A JCA algorithm the runtime refuses (no provider for it). Never cached; per value. */
+  static final class AlgorithmUnavailable extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+    final String algorithm;
+
+    AlgorithmUnavailable(String algorithm) {
+      super("qf1: this Java runtime does not provide " + algorithm, null, false, false);
+      this.algorithm = algorithm;
+    }
+  }
+
+  /** The X25519 KeyAgreement algorithm name. A test seam only, to simulate a FIPS provider. */
+  static volatile String keyAgreementAlgorithm = "X25519";
+
   /** A JDK X25519 private key from the raw 32-byte scalar; the JDK clamps it at use (5.2). */
   static PrivateKey privateKey(byte[] raw) {
     try {
       return KeyFactory.getInstance("XDH")
           .generatePrivate(new XECPrivateKeySpec(NamedParameterSpec.X25519, raw));
+    } catch (NoSuchAlgorithmException e) {
+      throw new AlgorithmUnavailable("XDH key factory (X25519)");
     } catch (GeneralSecurityException e) {
       throw new IllegalStateException(
           "qf1: X25519 is unavailable (" + e.getClass().getSimpleName() + ")");
@@ -503,11 +537,22 @@ final class Qf1Reader {
     try {
       byte[] be = new byte[KEY_LENGTH];
       for (int i = 0; i < KEY_LENGTH; i++) be[i] = uLittleEndian[KEY_LENGTH - 1 - i];
+      KeyFactory xdh;
+      try {
+        xdh = KeyFactory.getInstance("XDH");
+      } catch (NoSuchAlgorithmException e) {
+        throw new AlgorithmUnavailable("XDH key factory (X25519)");
+      }
       PublicKey pub =
-          KeyFactory.getInstance("XDH")
-              .generatePublic(
-                  new XECPublicKeySpec(NamedParameterSpec.X25519, new BigInteger(1, be)));
-      KeyAgreement ka = KeyAgreement.getInstance("X25519");
+          xdh.generatePublic(
+              new XECPublicKeySpec(NamedParameterSpec.X25519, new BigInteger(1, be)));
+      String alg = keyAgreementAlgorithm;
+      KeyAgreement ka;
+      try {
+        ka = KeyAgreement.getInstance(alg);
+      } catch (NoSuchAlgorithmException e) {
+        throw new AlgorithmUnavailable(alg + " key agreement");
+      }
       ka.init(priv);
       KEY_AGREEMENTS.increment();
       try {
@@ -535,7 +580,12 @@ final class Qf1Reader {
    */
   static byte[] gcmOpen(byte[] okm, byte[] aad, byte[] sealed) throws AEADBadTagException {
     try {
-      Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+      Cipher gcm;
+      try {
+        gcm = Cipher.getInstance("AES/GCM/NoPadding");
+      } catch (NoSuchAlgorithmException | javax.crypto.NoSuchPaddingException e) {
+        throw new AlgorithmUnavailable("AES/GCM/NoPadding");
+      }
       gcm.init(
           Cipher.DECRYPT_MODE,
           new SecretKeySpec(okm, 0, AES_KEY_LENGTH, "AES"),
@@ -589,7 +639,12 @@ final class Qf1Reader {
 
   private static byte[] hmacSha256(byte[] key, byte[]... parts) {
     try {
-      Mac mac = Mac.getInstance("HmacSHA256");
+      Mac mac;
+      try {
+        mac = Mac.getInstance("HmacSHA256");
+      } catch (NoSuchAlgorithmException e) {
+        throw new AlgorithmUnavailable("HmacSHA256");
+      }
       mac.init(new SecretKeySpec(key, "HmacSHA256"));
       for (byte[] p : parts) mac.update(p);
       return mac.doFinal();
