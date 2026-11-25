@@ -1,0 +1,853 @@
+package com.quonfig.sdk.eval;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.PrivateKey;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.TreeSet;
+import java.util.stream.Stream;
+import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
+
+/**
+ * Drives {@link Qf1Reader} with every reader-relevant case of the qf1 known-answer vectors (spec
+ * 14), read from the sibling integration-test-data checkout CI uses ({@code
+ * ../integration-test-data/tests/secrets/qf1-vectors.json}). No key material is written in this
+ * file: every private key entry comes from the vectors file at run time.
+ */
+class Qf1VectorsTest {
+
+  private static final HexFormat HEX = HexFormat.of();
+  private static JsonNode vectors;
+
+  @BeforeAll
+  static void load() throws Exception {
+    Path p =
+        Paths.get(
+                System.getProperty("user.dir"),
+                "..",
+                "integration-test-data",
+                "tests",
+                "secrets",
+                "qf1-vectors.json")
+            .normalize();
+    assertTrue(Files.isRegularFile(p), "qf1 vectors not found at " + p);
+    vectors = new ObjectMapper().readTree(Files.readAllBytes(p));
+    assertEquals("qf1", vectors.get("format").asText());
+  }
+
+  private static Resolver.EnvLookup envOf(JsonNode env) {
+    return name -> {
+      JsonNode v = env == null ? null : env.get(name);
+      return v == null || v.isNull() ? Optional.empty() : Optional.of(v.asText());
+    };
+  }
+
+  private static byte[] hex(JsonNode n) {
+    return HEX.parseHex(n.asText());
+  }
+
+  private static List<JsonNode> list(String member) {
+    List<JsonNode> out = new ArrayList<>();
+    vectors.get(member).forEach(out::add);
+    return out;
+  }
+
+  // ----- sanity: constants and RFC checks -----
+
+  @Test
+  void constantsMatchTheSpec() {
+    JsonNode c = vectors.get("constants");
+    assertEquals(c.get("hkdfInfoHex").asText(), HEX.formatHex(Qf1Reader.HKDF_INFO));
+    assertEquals(c.get("keysetNamePattern").asText(), Qf1Reader.KEYSET_NAME_PATTERN);
+    assertEquals(44, c.get("okmLength").asInt());
+  }
+
+  @Test
+  void rfc7748Section61() {
+    JsonNode r = vectors.get("rfcChecks").get("rfc7748_6_1");
+    byte[] base = new byte[32];
+    base[0] = 9;
+    PrivateKey alice = Qf1Reader.privateKey(hex(r.get("alicePrivateHex")));
+    PrivateKey bob = Qf1Reader.privateKey(hex(r.get("bobPrivateHex")));
+    assertEquals(r.get("alicePublicHex").asText(), HEX.formatHex(Qf1Reader.x25519(alice, base)));
+    assertEquals(r.get("bobPublicHex").asText(), HEX.formatHex(Qf1Reader.x25519(bob, base)));
+    assertEquals(
+        r.get("sharedSecretHex").asText(),
+        HEX.formatHex(Qf1Reader.x25519(alice, hex(r.get("bobPublicHex")))));
+  }
+
+  @Test
+  void rfc5869A1() {
+    JsonNode r = vectors.get("rfcChecks").get("rfc5869_A_1");
+    byte[] prk = Qf1Reader.hkdfExtract(hex(r.get("saltHex")), hex(r.get("ikmHex")));
+    assertEquals(r.get("prkHex").asText(), HEX.formatHex(prk));
+    byte[] okm = Qf1Reader.hkdfExpand(prk, hex(r.get("infoHex")), r.get("length").asInt());
+    assertEquals(r.get("okmHex").asText(), HEX.formatHex(okm));
+  }
+
+  // ----- positive: every intermediate, then the decrypt -----
+
+  @TestFactory
+  Stream<DynamicTest> positiveIntermediates() {
+    return list("positive").stream()
+        .map(
+            p ->
+                DynamicTest.dynamicTest(
+                    p.get("name").asText(),
+                    () -> {
+                      byte[] base = new byte[32];
+                      base[0] = 9;
+                      byte[] recipientRaw =
+                          Qf1Reader.parsePrivateKeyEntry(
+                              p.get("recipientPrivateKeyEntry").asText());
+                      PrivateKey recipient = Qf1Reader.privateKey(recipientRaw);
+                      byte[] pubR = Qf1Reader.x25519(recipient, base);
+                      assertEquals(p.get("recipientPublicKeyHex").asText(), HEX.formatHex(pubR));
+                      assertEquals(p.get("fingerprint").asText(), Qf1Reader.fingerprint(pubR));
+
+                      PrivateKey eph = Qf1Reader.privateKey(hex(p.get("ephemeralPrivateKeyHex")));
+                      byte[] e = Qf1Reader.x25519(eph, base);
+                      assertEquals(p.get("ephemeralPublicKeyHex").asText(), HEX.formatHex(e));
+
+                      // Both sides agree on S.
+                      byte[] sWriter = Qf1Reader.x25519(eph, pubR);
+                      byte[] sReader = Qf1Reader.x25519(recipient, e);
+                      assertEquals(p.get("sharedSecretHex").asText(), HEX.formatHex(sWriter));
+                      assertArrayEquals(sWriter, sReader);
+
+                      byte[] salt = new byte[64];
+                      System.arraycopy(e, 0, salt, 0, 32);
+                      System.arraycopy(pubR, 0, salt, 32, 32);
+                      assertEquals(p.get("hkdfSaltHex").asText(), HEX.formatHex(salt));
+                      assertEquals(
+                          p.get("hkdfInfoHex").asText(), HEX.formatHex(Qf1Reader.HKDF_INFO));
+                      byte[] prk = Qf1Reader.hkdfExtract(salt, sReader);
+                      assertEquals(p.get("prkHex").asText(), HEX.formatHex(prk));
+                      byte[] okm = Qf1Reader.deriveOkm(sReader, e, pubR);
+                      assertEquals(p.get("okmHex").asText(), HEX.formatHex(okm));
+                      assertEquals(p.get("aesKeyHex").asText(), HEX.formatHex(okm, 0, 32));
+                      assertEquals(p.get("nonceHex").asText(), HEX.formatHex(okm, 32, 44));
+
+                      Qf1Reader.Ciphertext ct = Qf1Reader.parse(p.get("ciphertext").asText());
+                      assertEquals(p.get("keyset").asText(), ct.keyset);
+                      assertEquals(p.get("fingerprint").asText(), ct.fingerprint);
+                      assertEquals(
+                          p.get("aadAscii").asText(),
+                          new String(ct.aad, StandardCharsets.US_ASCII));
+                      assertEquals(p.get("aadHex").asText(), HEX.formatHex(ct.aad));
+                      assertEquals(
+                          p.get("ephemeralPublicKeyHex").asText(), HEX.formatHex(ct.ephemeral));
+                      assertEquals(p.get("ciphertextAndTagHex").asText(), HEX.formatHex(ct.sealed));
+
+                      // Re-seal with the derived key and nonce: byte-for-byte the stored blob.
+                      Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+                      gcm.init(
+                          Cipher.ENCRYPT_MODE,
+                          new SecretKeySpec(okm, 0, 32, "AES"),
+                          new GCMParameterSpec(128, okm, 32, 12));
+                      gcm.updateAAD(ct.aad);
+                      byte[] sealed = gcm.doFinal(hex(p.get("plaintextHex")));
+                      assertEquals(p.get("ciphertextAndTagHex").asText(), HEX.formatHex(sealed));
+                      assertEquals(
+                          p.get("blobHex").asText(), HEX.formatHex(e) + HEX.formatHex(sealed));
+                      assertEquals(
+                          p.get("plaintextHex").asText(),
+                          HEX.formatHex(
+                              p.get("plaintext").asText().getBytes(StandardCharsets.UTF_8)));
+                    }));
+  }
+
+  @TestFactory
+  Stream<DynamicTest> positiveDecrypts() {
+    Qf1Reader reader = new Qf1Reader(envOf(vectors.get("positiveEnv")));
+    return list("positive").stream()
+        .map(
+            p ->
+                DynamicTest.dynamicTest(
+                    p.get("name").asText(),
+                    () -> {
+                      String out = reader.decrypt(p.get("ciphertext").asText());
+                      assertEquals(p.get("plaintext").asText(), out);
+                      assertEquals(
+                          p.get("plaintextHex").asText(),
+                          HEX.formatHex(out.getBytes(StandardCharsets.UTF_8)));
+                    }));
+  }
+
+  @TestFactory
+  Stream<DynamicTest> decryptOnly() {
+    List<JsonNode> cases = list("decryptOnly");
+    assertFalse(cases.isEmpty());
+    return cases.stream()
+        .map(
+            d ->
+                DynamicTest.dynamicTest(
+                    d.get("name").asText(),
+                    () -> {
+                      String out =
+                          new Qf1Reader(envOf(d.get("env"))).decrypt(d.get("ciphertext").asText());
+                      assertEquals(d.get("plaintext").asText(), out);
+                      assertEquals(
+                          d.get("plaintextHex").asText(),
+                          HEX.formatHex(out.getBytes(StandardCharsets.UTF_8)));
+                    }));
+  }
+
+  // ----- negative: the exact class, under the spec's reader order -----
+
+  @TestFactory
+  Stream<DynamicTest> negatives() {
+    List<JsonNode> cases = list("negative");
+    assertEquals(58, cases.size(), "vector count changed: review new cases");
+    return cases.stream()
+        .map(
+            n ->
+                DynamicTest.dynamicTest(
+                    n.get("name").asText()
+                        + (n.get("mustReject").asBoolean() ? " [mustReject]" : ""),
+                    () -> {
+                      Qf1Reader reader = new Qf1Reader(envOf(n.get("env")));
+                      Qf1Reader.Qf1Exception e =
+                          assertThrows(
+                              Qf1Reader.Qf1Exception.class,
+                              () -> reader.decrypt(n.get("ciphertext").asText()));
+                      String expected = n.get("expectedError").asText();
+                      assertEquals(expected, e.errorClass().wireName(), e.getMessage());
+                      assertTrue(
+                          e.getMessage().startsWith("qf1 " + expected + ": "), e.getMessage());
+                      assertNoLeak(e, n.get("env"), n.get("ciphertext").asText());
+                    }));
+  }
+
+  @Test
+  void mustRejectCasesArePresent() {
+    long n = list("negative").stream().filter(c -> c.get("mustReject").asBoolean()).count();
+    assertEquals(34, n);
+  }
+
+  // ----- key entries and env values -----
+
+  @TestFactory
+  Stream<DynamicTest> keyEntryCases() {
+    List<DynamicTest> out = new ArrayList<>();
+    for (JsonNode c : list("keyEntryCases")) {
+      String kind = c.get("kind").asText();
+      if ("publicKeyEntry".equals(kind)) continue; // readers never parse public entries (10.1)
+      out.add(
+          DynamicTest.dynamicTest(
+              kind + ": " + c.get("name").asText(),
+              () -> {
+                String input = c.get("input").asText();
+                if ("privateKeyEntry".equals(kind)) {
+                  if (c.has("expectedHex")) {
+                    assertEquals(
+                        c.get("expectedHex").asText(),
+                        HEX.formatHex(Qf1Reader.parsePrivateKeyEntry(input)));
+                  } else {
+                    Qf1Reader.Qf1Exception e =
+                        assertThrows(
+                            Qf1Reader.Qf1Exception.class,
+                            () -> Qf1Reader.parsePrivateKeyEntry(input));
+                    assertEquals(c.get("expectedError").asText(), e.errorClass().wireName());
+                    assertFalse(e.getMessage().contains(input));
+                  }
+                } else if ("envValue".equals(kind)) {
+                  String ks = c.get("keyset").asText();
+                  if (c.has("expectedFingerprints")) {
+                    Qf1Reader.Keyset parsed = Qf1Reader.parseKeyset(ks, input);
+                    TreeSet<String> want = new TreeSet<>();
+                    c.get("expectedFingerprints").forEach(f -> want.add(f.asText()));
+                    assertEquals(new ArrayList<>(want), parsed.fingerprints());
+                  } else {
+                    Qf1Reader.Qf1Exception e =
+                        assertThrows(
+                            Qf1Reader.Qf1Exception.class, () -> Qf1Reader.parseKeyset(ks, input));
+                    assertEquals(c.get("expectedError").asText(), e.errorClass().wireName());
+                    assertTrue(e.getMessage().contains(ks), e.getMessage());
+                    assertNoEnvLeak(e.getMessage(), input);
+                  }
+                } else {
+                  fail("unknown keyEntryCases kind " + kind);
+                }
+              }));
+    }
+    assertEquals(18, out.size());
+    return out.stream();
+  }
+
+  // ----- error text (9.2) -----
+
+  @Test
+  void keyNotHeldNamesTheKeysetAndFingerprintsHeldAndNeeded() {
+    JsonNode n = negativeNamed("fingerprint-not-held");
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class,
+            () -> new Qf1Reader(envOf(n.get("env"))).decrypt(n.get("ciphertext").asText()));
+    Qf1Reader.Ciphertext ct = parseOrFail(n.get("ciphertext").asText());
+    assertTrue(e.getMessage().contains(ct.keyset), e.getMessage());
+    assertTrue(e.getMessage().contains("fingerprint " + ct.fingerprint), e.getMessage());
+    assertTrue(e.getMessage().matches(".*fingerprints \\[[0-9a-f]{8}( [0-9a-f]{8})*\\]$"));
+  }
+
+  @Test
+  void keysetInvalidNamesTheEntryByPositionOnly() throws Exception {
+    // The second non-empty piece is bad; the empty pieces around it do not count (9.2).
+    String good = firstPrivateEntryOf("QUONFIG_KEYSET_TEST");
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class,
+            () -> Qf1Reader.parseKeyset("QUONFIG_KEYSET_TEST", " ,," + good + ", ,not-a-key,"));
+    assertEquals(
+        "qf1 keyset_invalid: QUONFIG_KEYSET_TEST entry 2 is not a qf1 private key", e.getMessage());
+  }
+
+  @Test
+  void keysetMissingNamesKeysetAndFingerprint() {
+    JsonNode n = negativeNamed("keyset-missing");
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class,
+            () -> new Qf1Reader(envOf(n.get("env"))).decrypt(n.get("ciphertext").asText()));
+    Qf1Reader.Ciphertext ct = parseOrFail(n.get("ciphertext").asText());
+    assertEquals(
+        "qf1 keyset_missing: value is encrypted to "
+            + ct.keyset
+            + " fingerprint "
+            + ct.fingerprint
+            + "; this runtime has no "
+            + ct.keyset,
+        e.getMessage());
+  }
+
+  @Test
+  void invalidKeysetNameIsNeverEchoedOnlyItsLength() throws Exception {
+    for (JsonNode n : list("negative")) {
+      if (!"invalid_keyset_name".equals(n.get("expectedError").asText())) continue;
+      String field = n.get("ciphertext").asText().split(":", -1)[1];
+      Qf1Reader.Qf1Exception e =
+          assertThrows(
+              Qf1Reader.Qf1Exception.class, () -> Qf1Reader.parse(n.get("ciphertext").asText()));
+      assertTrue(e.getMessage().contains("(" + field.length() + " characters)"), e.getMessage());
+      if (!field.isEmpty()) assertFalse(e.getMessage().contains(field), e.getMessage());
+    }
+    // A private key entry pasted into the keyset field never reaches the message.
+    String pasted = Qf1TestSeal.mint().privateEntry.replace("qf1-priv-", "PASTED");
+    String payload = list("positive").get(0).get("ciphertext").asText().split(":", -1)[3];
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class,
+            () -> Qf1Reader.parse("qf1:" + pasted + ":b3f48931:" + payload));
+    assertEquals(Qf1Reader.ErrorClass.INVALID_KEYSET_NAME, e.errorClass());
+    assertFalse(e.getMessage().contains(pasted.substring(6, 20)), e.getMessage());
+  }
+
+  @Test
+  void validLongKeysetNameIsTruncatedTo64InErrors() {
+    String name = "QUONFIG_KEYSET_" + "A".repeat(100);
+    String payload = list("positive").get(0).get("ciphertext").asText().split(":", -1)[3];
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class,
+            () ->
+                new Qf1Reader(k -> Optional.empty())
+                    .decrypt("qf1:" + name + ":b3f48931:" + payload));
+    assertEquals(Qf1Reader.ErrorClass.KEYSET_MISSING, e.errorClass());
+    assertFalse(e.getMessage().contains(name), e.getMessage());
+    assertTrue(e.getMessage().contains(name.substring(0, 64) + "..."), e.getMessage());
+  }
+
+  @Test
+  void versionsTheVectorsDoNotPin() {
+    String payload = list("positive").get(0).get("ciphertext").asText().split(":", -1)[3];
+    for (String v : List.of("qf0:", "qf01:", "qf00:")) {
+      Qf1Reader.Qf1Exception e =
+          assertThrows(
+              Qf1Reader.Qf1Exception.class,
+              () -> Qf1Reader.parse(v + "QUONFIG_KEYSET:b3f48931:" + payload));
+      assertEquals(Qf1Reader.ErrorClass.MALFORMED, e.errorClass(), v);
+    }
+    for (String v : List.of("qf2:", "qf10:", "qf19:")) {
+      Qf1Reader.Qf1Exception e =
+          assertThrows(
+              Qf1Reader.Qf1Exception.class,
+              () -> Qf1Reader.parse(v + "QUONFIG_KEYSET:b3f48931:" + payload));
+      assertEquals(Qf1Reader.ErrorClass.UNSUPPORTED_VERSION, e.errorClass(), v);
+    }
+  }
+
+  @Test
+  void badKeysetNameAndBadFingerprintReportsTheKeysetNameFirst() {
+    String payload = list("positive").get(0).get("ciphertext").asText().split(":", -1)[3];
+    Qf1Reader.Qf1Exception e =
+        assertThrows(
+            Qf1Reader.Qf1Exception.class, () -> Qf1Reader.parse("qf1:HOME:ZZZZ:" + payload));
+    assertEquals(Qf1Reader.ErrorClass.INVALID_KEYSET_NAME, e.errorClass());
+    e = assertThrows(Qf1Reader.Qf1Exception.class, () -> Qf1Reader.parse("qf1:HOME:ZZZZ:=="));
+    assertEquals(Qf1Reader.ErrorClass.INVALID_KEYSET_NAME, e.errorClass());
+  }
+
+  // ----- cache (6.2 / decision 33): hits, follows the env value, bounded -----
+
+  @Test
+  void keysetCacheHitsAndFollowsChangesToTheEnvValue() throws Exception {
+    JsonNode p = negativeOrPositive("two-key-keyset-write-key");
+    String ks = p.get("keyset").asText();
+    String value = vectors.get("positiveEnv").get(ks).asText();
+    Map<String, String> env = new java.util.HashMap<>();
+    env.put(ks, value);
+    Qf1Reader reader = new Qf1Reader(name -> Optional.ofNullable(env.get(name)));
+    String ct = p.get("ciphertext").asText();
+    int held = Qf1Reader.parseKeyset(ks, value).keys.size();
+    assertEquals(2, held);
+
+    long before = Qf1Reader.KEY_AGREEMENTS.sum();
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(ct));
+    assertEquals(held + 1, Qf1Reader.KEY_AGREEMENTS.sum() - before, "first read: parse + ECDH");
+
+    before = Qf1Reader.KEY_AGREEMENTS.sum();
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(ct));
+    assertEquals(1, Qf1Reader.KEY_AGREEMENTS.sum() - before, "cached: only the ECDH");
+
+    env.put(ks, "");
+    before = Qf1Reader.KEY_AGREEMENTS.sum();
+    assertEquals(
+        Qf1Reader.ErrorClass.KEYSET_MISSING,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+    assertEquals(0, Qf1Reader.KEY_AGREEMENTS.sum() - before);
+
+    env.remove(ks);
+    assertEquals(
+        Qf1Reader.ErrorClass.KEYSET_MISSING,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+
+    // A changed value (one key dropped) takes effect on the next read.
+    String otherOnly = firstPrivateEntryOf("QUONFIG_KEYSET");
+    env.put(ks, otherOnly);
+    assertEquals(
+        Qf1Reader.ErrorClass.KEY_NOT_HELD,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+
+    env.put(ks, value);
+    before = Qf1Reader.KEY_AGREEMENTS.sum();
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(ct));
+    assertEquals(held + 1, Qf1Reader.KEY_AGREEMENTS.sum() - before, "restored: re-parsed");
+  }
+
+  @Test
+  void keysetCacheIsBoundedAndNeverCachesAnUnsetName() throws Exception {
+    String entry = Qf1TestSeal.mint().privateEntry;
+    Qf1Reader reader =
+        new Qf1Reader(name -> name.endsWith("_UNSET") ? Optional.empty() : Optional.of(entry));
+    for (int i = 0; i < 200; i++) {
+      assertNotNull(reader.keyset("QUONFIG_KEYSET_N" + i));
+      assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.keyset("QUONFIG_KEYSET_UNSET"));
+    }
+    assertEquals(Qf1Reader.MAX_CACHED_KEYSETS, reader.cachedKeysetCount());
+  }
+
+  // ----- narrow JCA mapping -----
+
+  @Test
+  void onlyTheExpectedJcaExceptionsMapToQf1Classes() throws Exception {
+    // A small-order point at doPhase -> null (invalid_ephemeral_key); covered by the vectors.
+    byte[] zero = new byte[32];
+    assertNull(Qf1Reader.x25519(Qf1Reader.privateKey(new byte[32]), zero));
+    // An InvalidKeyException from init (wrong key type) is a bug, not the all-zero class.
+    java.security.PrivateKey ec =
+        java.security.KeyPairGenerator.getInstance("EC").generateKeyPair().getPrivate();
+    assertThrows(IllegalStateException.class, () -> Qf1Reader.x25519(ec, zero));
+    // A bad tag -> AEADBadTagException (decrypt_failed).
+    byte[] okm = new byte[44];
+    assertThrows(
+        javax.crypto.AEADBadTagException.class,
+        () -> Qf1Reader.gcmOpen(okm, new byte[0], new byte[16]));
+    // Any other JCA error (here a key/nonce buffer too short) is a bug, not decrypt_failed.
+    assertThrows(
+        IllegalStateException.class,
+        () -> Qf1Reader.gcmOpen(new byte[20], new byte[0], new byte[16]));
+  }
+
+  // ----- hygiene with a known plaintext on the invalid-UTF-8 path -----
+
+  @Test
+  void invalidUtf8PlaintextNeverLeaksItsKnownPrefix() throws Exception {
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    String sentinel = "SENTINEL-" + java.util.UUID.randomUUID();
+    byte[] sb = sentinel.getBytes(StandardCharsets.UTF_8);
+    byte[] plain = java.util.Arrays.copyOf(sb, sb.length + 2);
+    plain[sb.length] = (byte) 0xff;
+    plain[sb.length + 1] = (byte) 0xfe;
+    String ct = Qf1TestSeal.seal("QUONFIG_KEYSET_HYGIENE", key, plain);
+    Qf1Reader reader =
+        new Qf1Reader(
+            n ->
+                "QUONFIG_KEYSET_HYGIENE".equals(n)
+                    ? Optional.of(key.privateEntry)
+                    : Optional.empty());
+    Qf1Reader.Qf1Exception e = assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct));
+    assertEquals(Qf1Reader.ErrorClass.DECRYPT_FAILED, e.errorClass());
+    java.io.StringWriter trace = new java.io.StringWriter();
+    e.printStackTrace(new java.io.PrintWriter(trace));
+    for (String text : List.of(e.getMessage(), e.toString(), trace.toString())) {
+      assertFalse(text.contains("SENTINEL"), text);
+      assertFalse(text.contains(key.privateEntry.substring(9, 21)), text);
+    }
+    assertNull(e.getCause());
+    assertEquals(0, e.getSuppressed().length);
+  }
+
+  private static JsonNode negativeOrPositive(String name) {
+    for (JsonNode n : list("positive")) {
+      if (name.equals(n.get("name").asText())) return n;
+    }
+    throw new AssertionError("no positive vector " + name);
+  }
+
+  @Test
+  void invalidKeysetNameNeverReadsTheEnv() throws Exception {
+    // The lookup ANSWERS every name with a real key, so a reader that skipped the name rule would
+    // read it (and decrypt the mustReject cases).
+    List<String> read = new ArrayList<>();
+    JsonNode env = vectors.get("positiveEnv");
+    String anyKey = env.get("QUONFIG_KEYSET_TEST").asText();
+    Qf1Reader reader =
+        new Qf1Reader(
+            name -> {
+              read.add(name);
+              return Optional.of(anyKey);
+            });
+    for (JsonNode n : list("negative")) {
+      if (!"invalid_keyset_name".equals(n.get("expectedError").asText())) continue;
+      assertEquals(
+          Qf1Reader.ErrorClass.INVALID_KEYSET_NAME,
+          assertThrows(
+                  Qf1Reader.Qf1Exception.class, () -> reader.decrypt(n.get("ciphertext").asText()))
+              .errorClass());
+    }
+    // Hand-built names with line terminators, sealed under the valid key so only the name rule
+    // stops them.
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    for (String name :
+        List.of(
+            "QUONFIG_KEYSET_TEST\n",
+            "HOME\nQUONFIG_KEYSET",
+            "QUONFIG_KEYSET\r",
+            "QUONFIG_KEYSET\u2028")) {
+      String ct = Qf1TestSeal.seal(name, key, "x".getBytes(StandardCharsets.UTF_8));
+      Qf1Reader r2 =
+          new Qf1Reader(
+              n -> {
+                read.add(n);
+                return Optional.of(key.privateEntry);
+              });
+      assertEquals(
+          Qf1Reader.ErrorClass.INVALID_KEYSET_NAME,
+          assertThrows(Qf1Reader.Qf1Exception.class, () -> r2.decrypt(ct)).errorClass(),
+          name);
+    }
+    assertEquals(List.of(), read);
+  }
+
+  @Test
+  void nonStrippedCharactersAroundAnEnvEntryAreKeysetInvalid() throws Exception {
+    String good = firstPrivateEntryOf("QUONFIG_KEYSET_TEST");
+    for (char c :
+        new char[] {
+          '\u000b', '\u000c', '\u00a0', '\u2028', '\u2029', '\ufeff', '\u0085', '\u3000', '\u200b',
+          '\u0000'
+        }) {
+      for (String v : List.of(c + good, good + c, " " + c + good + "\n", good + "," + c)) {
+        Qf1Reader.Qf1Exception e =
+            assertThrows(
+                Qf1Reader.Qf1Exception.class,
+                () -> Qf1Reader.parseKeyset("QUONFIG_KEYSET_TEST", v),
+                String.format("U+%04X", (int) c));
+        assertEquals(Qf1Reader.ErrorClass.KEYSET_INVALID, e.errorClass());
+      }
+    }
+    // The four stripped characters are fine.
+    assertEquals(
+        1, Qf1Reader.parseKeyset("QUONFIG_KEYSET_TEST", " \t\r\n" + good + "\r\n\t ,").keys.size());
+  }
+
+  @Test
+  void nonCanonicalEphemeralEncodingsDecryptWithTheSaltOverTheTransmittedBytes() throws Exception {
+    java.math.BigInteger p =
+        java.math.BigInteger.ONE.shiftLeft(255).subtract(java.math.BigInteger.valueOf(19));
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    PrivateKey priv = Qf1TestSeal.privateKeyOf(key);
+    Qf1Reader reader = new Qf1Reader(n -> Optional.of(key.privateEntry));
+    for (int k = 2; k <= 18; k++) {
+      byte[] transmitted = littleEndian(p.add(java.math.BigInteger.valueOf(k)));
+      assertEquals(0, transmitted[31] & 0x80);
+      // S is computed over the CANONICAL u = k, independently of how the reader handles u >= p.
+      byte[] s = Qf1Reader.x25519(priv, littleEndian(java.math.BigInteger.valueOf(k)));
+      assertNotNull(s, "k=" + k);
+      String plain = "non-canonical-" + k;
+      String ct =
+          Qf1TestSeal.sealRaw(
+              "QUONFIG_KEYSET_NC", key, transmitted, s, plain.getBytes(StandardCharsets.UTF_8));
+      assertEquals(plain, reader.decrypt(ct), "p+" + k);
+      // Sealing with the salt over the canonical bytes instead must NOT decrypt.
+      String wrongSalt =
+          Qf1TestSeal.sealRaw(
+              "QUONFIG_KEYSET_NC",
+              key,
+              littleEndian(java.math.BigInteger.valueOf(k)),
+              s,
+              plain.getBytes(StandardCharsets.UTF_8));
+      String spliced =
+          wrongSalt.substring(0, wrongSalt.lastIndexOf(':') + 1)
+              + java.util.Base64.getUrlEncoder()
+                  .withoutPadding()
+                  .encodeToString(
+                      concat(
+                          transmitted,
+                          java.util.Arrays.copyOfRange(
+                              java.util.Base64.getUrlDecoder()
+                                  .decode(wrongSalt.substring(wrongSalt.lastIndexOf(':') + 1)),
+                              32,
+                              32 + plain.length() + 16)));
+      assertEquals(
+          Qf1Reader.ErrorClass.DECRYPT_FAILED,
+          assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(spliced)).errorClass());
+    }
+  }
+
+  private static byte[] littleEndian(java.math.BigInteger v) {
+    byte[] be = v.toByteArray();
+    byte[] le = new byte[32];
+    for (int i = 0; i < be.length && i < 32; i++) le[i] = be[be.length - 1 - i];
+    return le;
+  }
+
+  private static byte[] concat(byte[] a, byte[] b) {
+    byte[] out = java.util.Arrays.copyOf(a, a.length + b.length);
+    System.arraycopy(b, 0, out, a.length, b.length);
+    return out;
+  }
+
+  // ----- B: the authentication-failure path leaks no intermediate -----
+
+  @Test
+  void tamperedTagLeaksNoIntermediate() throws Exception {
+    Qf1TestSeal.Key key = Qf1TestSeal.mint();
+    byte[] ephRaw = new byte[32];
+    new java.security.SecureRandom().nextBytes(ephRaw);
+    String ct =
+        Qf1TestSeal.sealWithEphemeral(
+            "QUONFIG_KEYSET_LEAK",
+            key,
+            ephRaw,
+            "known-plaintext-value".getBytes(StandardCharsets.UTF_8));
+    String tampered = Qf1TestSeal.tamperTag(ct);
+    Qf1Reader reader = new Qf1Reader(n -> Optional.of(key.privateEntry));
+    Qf1Reader.Qf1Exception e =
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(tampered));
+    assertEquals(Qf1Reader.ErrorClass.DECRYPT_FAILED, e.errorClass());
+    byte[] base = new byte[32];
+    base[0] = 9;
+    PrivateKey eph = Qf1Reader.privateKey(ephRaw);
+    byte[] eBytes = Qf1Reader.x25519(eph, base);
+    byte[] s = Qf1Reader.x25519(eph, key.publicKey);
+    byte[] salt = concat(eBytes, key.publicKey);
+    byte[] prk = Qf1Reader.hkdfExtract(salt, s);
+    byte[] okm = Qf1Reader.deriveOkm(s, eBytes, key.publicKey);
+    assertSecretsAbsent(
+        e,
+        List.of(
+            s,
+            prk,
+            okm,
+            java.util.Arrays.copyOfRange(okm, 0, 32),
+            java.util.Arrays.copyOfRange(okm, 32, 44),
+            Qf1Reader.parsePrivateKeyEntry(key.privateEntry)),
+        List.of("known-plaintext"));
+  }
+
+  /** No hex or base64 (std/url, padded or not) of any secret byte string, nor any plain string. */
+  static void assertSecretsAbsent(Throwable e, List<byte[]> secrets, List<String> plains) {
+    java.io.StringWriter trace = new java.io.StringWriter();
+    e.printStackTrace(new java.io.PrintWriter(trace));
+    List<String> texts =
+        new ArrayList<>(List.of(String.valueOf(e.getMessage()), e.toString(), trace.toString()));
+    for (Throwable t = e.getCause(); t != null; t = t.getCause()) texts.add(t.toString());
+    for (Throwable sup : e.getSuppressed()) texts.add(sup.toString());
+    for (String text : texts) {
+      String lower = text.toLowerCase(java.util.Locale.ROOT);
+      for (byte[] b : secrets) {
+        String hx = HEX.formatHex(b);
+        String b64 = java.util.Base64.getEncoder().encodeToString(b);
+        String b64u = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+        assertFalse(lower.contains(hx.substring(0, 16)), text);
+        assertFalse(text.contains(b64.substring(0, 12)), text);
+        assertFalse(text.contains(b64u.substring(0, 12)), text);
+      }
+      for (String pl : plains) assertFalse(text.contains(pl), text);
+    }
+  }
+
+  // ----- E: a runtime without X25519 (e.g. FIPS) fails per value, without blaming the key -----
+
+  @Test
+  void missingX25519ProviderFailsPerValueAndDoesNotBlameTheKeyEntry() throws Exception {
+    JsonNode p = list("positive").get(0);
+    Qf1Reader reader = new Qf1Reader(envOf(vectors.get("positiveEnv")));
+    String saved = Qf1Reader.keyAgreementAlgorithm;
+    try {
+      Qf1Reader.keyAgreementAlgorithm = "X25519-NOT-PROVIDED";
+      Qf1Reader.Qf1Exception e =
+          assertThrows(
+              Qf1Reader.Qf1Exception.class, () -> reader.decrypt(p.get("ciphertext").asText()));
+      assertEquals(Qf1Reader.ErrorClass.DECRYPT_FAILED, e.errorClass());
+      assertTrue(e.getMessage().contains("does not provide X25519-NOT-PROVIDED"), e.getMessage());
+      assertTrue(e.getMessage().contains("FIPS"), e.getMessage());
+      assertFalse(e.getMessage().contains("not a qf1 private key"), e.getMessage());
+      assertFalse(e.getMessage().contains("keyset_invalid"), e.getMessage());
+    } finally {
+      Qf1Reader.keyAgreementAlgorithm = saved;
+    }
+    // Not cached: the same reader decrypts once the provider is back.
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(p.get("ciphertext").asText()));
+  }
+
+  @Test
+  void onlyTheNamedKeysetIsRead() throws Exception {
+    JsonNode p = list("positive").get(0);
+    List<String> read = new ArrayList<>();
+    JsonNode env = vectors.get("positiveEnv");
+    Qf1Reader reader =
+        new Qf1Reader(
+            name -> {
+              read.add(name);
+              return envOf(env).lookup(name);
+            });
+    reader.decrypt(p.get("ciphertext").asText());
+    assertEquals(List.of(p.get("keyset").asText()), read);
+  }
+
+  @Test
+  void cacheFollowsTheEnvValue() throws Exception {
+    // A shared client may first read a secret with the keyset unset, then with it set, then with
+    // another value: the result must follow the current value (never a stale cached failure).
+    JsonNode p = list("positive").get(0);
+    String ks = p.get("keyset").asText();
+    String good = vectors.get("positiveEnv").get(ks).asText();
+    Map<String, String> env = new java.util.HashMap<>();
+    Qf1Reader reader = new Qf1Reader(name -> Optional.ofNullable(env.get(name)));
+    String ct = p.get("ciphertext").asText();
+    assertEquals(
+        Qf1Reader.ErrorClass.KEYSET_MISSING,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+    env.put(ks, "garbage");
+    assertEquals(
+        Qf1Reader.ErrorClass.KEYSET_INVALID,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+    env.put(ks, good);
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(ct));
+    assertEquals(p.get("plaintext").asText(), reader.decrypt(ct));
+    env.remove(ks);
+    assertEquals(
+        Qf1Reader.ErrorClass.KEYSET_MISSING,
+        assertThrows(Qf1Reader.Qf1Exception.class, () -> reader.decrypt(ct)).errorClass());
+  }
+
+  @Test
+  void strictUtf8KeepsABomAndRejectsReplacementCandidates() throws Exception {
+    assertEquals(
+        "﻿x", Qf1Reader.decodeUtf8Strict(new byte[] {(byte) 0xef, (byte) 0xbb, (byte) 0xbf, 'x'}));
+    assertThrows(
+        java.nio.charset.CharacterCodingException.class,
+        () -> Qf1Reader.decodeUtf8Strict(new byte[] {(byte) 0xed, (byte) 0xa0, (byte) 0x80}));
+    assertThrows(
+        java.nio.charset.CharacterCodingException.class,
+        () -> Qf1Reader.decodeUtf8Strict(new byte[] {(byte) 0xc0, (byte) 0x80}));
+  }
+
+  @Test
+  void base64urlIsStrict() {
+    assertNotNull(Qf1Reader.decodeBase64url("AAAA"));
+    assertNull(Qf1Reader.decodeBase64url(""));
+    assertNull(Qf1Reader.decodeBase64url("AAA="));
+    assertNull(Qf1Reader.decodeBase64url("AA+A"));
+    assertNull(Qf1Reader.decodeBase64url("AAAAA"));
+    assertNull(Qf1Reader.decodeBase64url("AB")); // non-zero trailing bits
+    assertNull(Qf1Reader.decodeBase64url("AAAA\n"));
+  }
+
+  // ----- helpers -----
+
+  private static JsonNode negativeNamed(String name) {
+    for (JsonNode n : list("negative")) {
+      if (name.equals(n.get("name").asText())) return n;
+    }
+    throw new AssertionError("no negative vector " + name);
+  }
+
+  private static Qf1Reader.Ciphertext parseOrFail(String v) {
+    try {
+      return Qf1Reader.parse(v);
+    } catch (Qf1Reader.Qf1Exception e) {
+      throw new AssertionError(e.getMessage());
+    }
+  }
+
+  private static String firstPrivateEntryOf(String keyset) {
+    for (JsonNode ks : list("keysets")) {
+      if (keyset.equals(ks.get("name").asText())) {
+        return ks.get("keys").get(0).get("privateKeyEntry").asText();
+      }
+    }
+    throw new AssertionError("no keyset " + keyset);
+  }
+
+  /** The error carries no cause, no suppressed exceptions, and no env, key or payload text. */
+  static void assertNoLeak(Throwable e, JsonNode env, String ciphertext) {
+    assertNull(e.getCause());
+    assertEquals(0, e.getSuppressed().length);
+    String text = e.getMessage() + "\n" + e;
+    assertFalse(text.contains("qf1-priv-"), text);
+    if (env != null) {
+      Iterator<Map.Entry<String, JsonNode>> it = env.fields();
+      while (it.hasNext()) assertNoEnvLeak(text, it.next().getValue().asText());
+    }
+    String[] parts = ciphertext.split(":", -1);
+    String payload = parts[parts.length - 1];
+    if (payload.length() >= 16) assertFalse(text.contains(payload.substring(0, 16)), text);
+  }
+
+  /** No env entry body (or a 12-character slice of one) appears in {@code text}. */
+  static void assertNoEnvLeak(String text, String envValue) {
+    for (String piece : envValue.split(",", -1)) {
+      String p = piece.replaceAll("^[ \\t\\r\\n]+|[ \\t\\r\\n]+$", "");
+      int i = p.indexOf("qf1-priv-");
+      String body = i >= 0 ? p.substring(i + 9) : p;
+      if (body.length() >= 12) assertFalse(text.contains(body.substring(0, 12)), text);
+    }
+  }
+}

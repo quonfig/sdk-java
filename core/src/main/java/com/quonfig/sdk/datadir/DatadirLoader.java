@@ -2,6 +2,7 @@ package com.quonfig.sdk.datadir;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.quonfig.sdk.wire.ConfigEnvelope;
 import com.quonfig.sdk.wire.Meta;
 import java.io.IOException;
@@ -15,9 +16,9 @@ import java.util.stream.Stream;
 
 /**
  * Reads a Quonfig workspace directory tree (configs/, feature-flags/, segments/, log-levels/,
- * schemas/, plus quonfig.json) into a {@link ConfigEnvelope} — the same wire format api-delivery
- * returns over HTTP. This is the no-network code path used by integration tests and consumers who
- * bootstrap from a static distribution.
+ * schemas/, secrets/, plus quonfig.json) into a {@link ConfigEnvelope} — the same wire format
+ * api-delivery returns over HTTP. This is the no-network code path used by integration tests and
+ * consumers who bootstrap from a static distribution.
  *
  * <p>Mirrors {@code sdk-go/workspace_loader.go loadWorkspaceEnvelope} and {@code
  * sdk-node/src/datadir.ts loadEnvelopeFromDatadir} so an envelope produced from a datadir is
@@ -31,7 +32,7 @@ import java.util.stream.Stream;
 public final class DatadirLoader {
 
   private static final List<String> SUBDIRS =
-      List.of("configs", "feature-flags", "segments", "log-levels", "schemas");
+      List.of("configs", "feature-flags", "segments", "log-levels", "schemas", "secrets");
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private DatadirLoader() {}
@@ -63,7 +64,12 @@ public final class DatadirLoader {
             .forEach(
                 f -> {
                   try {
-                    configs.add(MAPPER.readTree(Files.readAllBytes(f)));
+                    JsonNode node = MAPPER.readTree(Files.readAllBytes(f));
+                    // secrets/ loads last and its directory decides the type (qf1 spec 13.7).
+                    if ("secrets".equals(subdir) && node instanceof ObjectNode) {
+                      ((ObjectNode) node).put("type", "secret");
+                    }
+                    configs.add(node);
                   } catch (IOException e) {
                     throw new UncheckedIOException("parse " + f, e);
                   }

@@ -71,7 +71,7 @@ public final class ValueDecoder {
     }
 
     boolean confidential = v.hasNonNull("confidential") && v.get("confidential").asBoolean();
-    String decryptWith = v.hasNonNull("decryptWith") ? v.get("decryptWith").asText() : null;
+    String decryptWith = decryptWithMarker(v.get("decryptWith"));
     return new Value(vt, payload, confidential, decryptWith);
   }
 
@@ -204,5 +204,16 @@ public final class ValueDecoder {
       default:
         return ValueType.STRING;
     }
+  }
+
+  /**
+   * The old-format {@code decryptWith} marker (qf1 spec 13.3 R1): absent, JSON null or {@code ""}
+   * mean none; any other JSON value (a string, number, boolean, array or object) is kept as a
+   * non-empty marker so the resolver fails that read. A non-string never fails the load.
+   */
+  static String decryptWithMarker(JsonNode n) {
+    if (n == null || n.isNull()) return null;
+    if (n.isTextual()) return n.asText().isEmpty() ? null : n.asText();
+    return n.toString();
   }
 }

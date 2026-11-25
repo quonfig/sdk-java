@@ -118,11 +118,51 @@ They share one contract with every Quonfig SDK (2.2.0+):
   rule), `QuonfigCoercionException` (a malformed value; a subclass of
   `QuonfigKeyNotFoundException`), `QuonfigEnvVarNotSetException`, `QuonfigDecryptionException` or
   `QuonfigTypeMismatchException` (a subclass of `IllegalArgumentException`). Use it for a config
-  that must not silently fall back, for example a secret whose decryption key may be wrong:
+  that must not silently fall back, for example a secret whose keyset may be missing:
 
   ```java
-  String dbPassword = quonfig.getStringOrThrow("db.password"); // throws on a bad decryption key
+  String dbPassword = quonfig.getStringOrThrow("db.password"); // throws if it cannot be decrypted
   ```
+
+## Secrets
+
+A secret is a document in the workspace's `secrets/` directory. Each value is a `qf1:` string,
+encrypted to a public key of a **keyset**. The SDK decrypts it when you read it, with a typed
+string getter, exactly like any other string config:
+
+```java
+String webhookSecret = quonfig.getStringOrThrow("stripe.webhook.secret");
+```
+
+- **Keys come from the environment.** A value names its keyset, for example
+  `qf1:QUONFIG_KEYSET_PROD:...`, and the SDK reads the private keys from the environment variable of
+  that exact name. Keyset names match `QUONFIG_KEYSET`, `QUONFIG_KEYSET_<NAME>` (uppercase letters,
+  digits and `_`-separated parts). The variable holds one or more `qf1-priv-...` entries separated
+  by commas; spaces, tabs and newlines around an entry are ignored. During a key rotation it holds
+  both the old and the new entry. The SDK reads keysets through `Options.Builder#envLookup`, so a
+  test can inject them.
+- **A missing or broken keyset fails only those reads.** The client still starts and serves every
+  other key. A read of an affected secret behaves like any value that cannot be decrypted: the typed
+  getter returns your default and logs one WARN, the `*Details` variant reports `Reason.ERROR`, and
+  `getStringOrThrow` throws `QuonfigDecryptionException`. The message starts with the qf1 error
+  class (for example `qf1 keyset_missing` or `qf1 key_not_held`) and names the keyset and the
+  fingerprints this runtime holds versus the one the value needs. It never contains a key, the
+  ciphertext or the plaintext.
+- **`secrets/` wins.** In datadir mode `secrets/` is loaded after `configs/`, `feature-flags/`,
+  `segments/` and `log-levels/`, so a secret replaces a document with the same key in `configs/`.
+  Over the network, entries of type `secret` are read the same way.
+- **Telemetry never sees the plaintext.** Evaluation summaries report a secret with type `SECRET`
+  and its value redacted (`*****` plus a short hash of the stored ciphertext).
+- **The old format is no longer read.** A value that still carries `decryptWith` (the old
+  `configs/` secrets keyed by `QUONFIG_ENCRYPTION_KEY*` configs) now fails like a value that cannot
+  be decrypted, instead of being decrypted. Move it to `secrets/` with the `qfg` CLI.
+- **Minimum version.** Only this release and later read secrets. An older sdk-java never opens
+  `secrets/` in datadir mode: a key that exists only in `secrets/` is missing, and a key that also
+  has an old copy in `configs/` serves that old copy. Over the network an older SDK returns the raw
+  `qf1:` string as the value. Upgrade every backend service that reads a secret before you create
+  it.
+- **Detecting the failure in code.** `QuonfigDecryptionException#errorClass()` returns the qf1
+  class (`key_not_held`, `keyset_missing`, ...), or `null` for a leftover `decryptWith` value.
 
 ## Untyped details read
 

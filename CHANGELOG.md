@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+Secrets in the qf1 format (qfg-8seuf.12, spec `project/plans/secrets-qf1-spec.md`). No version
+number yet: the release is the owner's decision.
+
+- **Reads secrets from `secrets/`.** Datadir mode loads `secrets/` last, after `configs/`,
+  `feature-flags/`, `segments/` and `log-levels/`, so a secret shadows a same-key document in
+  `configs/`; a document from `secrets/` is a secret because of its directory. Wire entries of type
+  `secret` are read too.
+- **qf1 decryption** on read: X25519, HKDF-SHA256 (written out over `HmacSHA256`), AES-256-GCM with
+  the `qf1:<KEYSET>:<FINGERPRINT>:` header as AAD, strict UTF-8. JDK only, no new dependency.
+- **Keysets are `QUONFIG_KEYSET*` environment variables**, read through `Options.envLookup`:
+  comma-separated `qf1-priv-...` entries; the key is found by (keyset name, fingerprint), never by
+  trying keys. A keyset name that does not match `^QUONFIG_KEYSET(_[A-Z0-9]+)*$` is refused before
+  any env var is read.
+- **A missing or invalid keyset, or a key this runtime does not hold, fails only that read** with
+  `QuonfigDecryptionException` (default value and one WARN on the plain getters, `Reason.ERROR` on
+  `*Details`). The message starts with the qf1 class (`qf1 keyset_missing: ...`) and names the
+  keyset and fingerprints; never a key, the ciphertext or the plaintext. Startup is never affected.
+- **`decryptWith` is no longer read.** A value that still carries `decryptWith` fails with
+  `QuonfigDecryptionException` (its message mentions `decryptWith`) instead of being decrypted.
+- **Telemetry:** secret evaluations are reported with type `SECRET`, the value redacted as
+  `*****` plus the first 5 hex characters of MD5 over the stored ciphertext, even when the stored
+  value lacks `confidential: true`.
+- **`decryptWith` of any JSON type** (a string, number, boolean, array or object; only JSON null
+  and `""` mean none) fails that read; it never fails the load and never reads a key config.
+- **An invalid keyset name is never echoed** in error text, only its length; valid names are
+  truncated to 64 characters.
+- **Minimum version:** an older sdk-java never opens `secrets/` in datadir mode (a secret-only key
+  is missing, a key with an old `configs/` copy serves that copy) and over the network returns the
+  raw `qf1:` string. Upgrade backend services before creating secrets.
+- **API additions:** `ConfigType.SECRET`; `QuonfigDecryptionException(String, Throwable, String)`
+  and `QuonfigDecryptionException#errorClass()` (the qf1 class, or `null` for a `decryptWith`
+  value).
+- **Deprecated:** `com.quonfig.sdk.eval.Encryption` and `Encryption.decrypt(String, String)`, the
+  old-format AES-GCM helper. Nothing in the SDK calls it any more; it will be removed in a future
+  major version.
+
 ## 2.4.1 - 2026-10-30
 
 Security patch for runtime dependencies (qfg-66ko.19). No API or behaviour change.

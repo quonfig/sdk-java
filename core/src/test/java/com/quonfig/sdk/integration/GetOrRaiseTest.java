@@ -23,6 +23,23 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class GetOrRaiseTest {
+  private static String qf1TestKeyset(String... labels) {
+    java.util.List<String> entries = new java.util.ArrayList<>();
+    for (String label : labels) {
+      try {
+        byte[] digest =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(
+                    ("qf1 test vector private key: " + label)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        entries.add(
+            "qf1-priv-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest));
+      } catch (java.security.NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+    return String.join(",", entries);
+  }
 
   @Test
   @DisplayName("get_or_raise can raise an error if value not found")
@@ -587,6 +604,30 @@ class GetOrRaiseTest {
   }
 
   @Test
+  @DisplayName(
+      "raises an error if a weighted variant is provided by a missing environment variable")
+  void raisesAnErrorIfAWeightedVariantIsProvidedByAMissingEnvironmentVariable() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertThrows(
+        QuonfigEnvVarNotSetException.class,
+        () ->
+            client.getStringOrThrow(
+                "weighted.variant.provided.missing",
+                TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
+  }
+
+  @Test
+  @DisplayName("get_or_raise on a weighted ENV_VAR variant returns the env var coerced to int")
+  void getOrRaiseOnAWeightedEnvVarVariantReturnsTheEnvVarCoercedToInt() throws Exception {
+    Quonfig client = TestSetup.client();
+    assertEquals(
+        1234L,
+        client.getLongOrThrow(
+            "weighted.variant.provided.int",
+            TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2")))));
+  }
+
+  @Test
   @DisplayName("raises an error if an env-var-provided config cannot be coerced to configured type")
   void raisesAnErrorIfAnEnvVarProvidedConfigCannotBeCoercedToConfiguredType() throws Exception {
     Quonfig client = TestSetup.client();
@@ -653,11 +694,215 @@ class GetOrRaiseTest {
   }
 
   @Test
-  @DisplayName("raises an error for decryption failure")
-  void raisesAnErrorForDecryptionFailure() throws Exception {
+  @DisplayName("get_or_raise decrypts a qf1 secret")
+  void getOrRaiseDecryptsAQf1Secret() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals("hello", client.getStringOrThrow("qf1.secret.short"));
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "raises unable_to_decrypt for a qf1 secret on a keyset the environment does not hold")
+  void raisesUnableToDecryptForAQf1SecretOnAKeysetTheEnvironmentDoesNotHold() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.keyset.missing"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a qf1 secret whose fingerprint is not held")
+  void raisesUnableToDecryptForAQf1SecretWhoseFingerprintIsNotHeld() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.key.not.held"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a qf1 secret held only under another keyset")
+  void raisesUnableToDecryptForAQf1SecretHeldOnlyUnderAnotherKeyset() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.cross.keyset"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a qf1 secret with a tampered header")
+  void raisesUnableToDecryptForAQf1SecretWithATamperedHeader() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.tampered.header"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName(
+      "raises unable_to_decrypt for a qf1 secret whose keyset name is invalid even when that env var holds its key")
+  void raisesUnableToDecryptForAQf1SecretWhoseKeysetNameIsInvalidEvenWhenThatEnvVarHoldsItsKey()
+      throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.keyset.name.invalid"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a qf1 secret with a trailing colon")
+  void raisesUnableToDecryptForAQf1SecretWithATrailingColon() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.trailing.colon"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a qf1 secret whose shared secret is all zero")
+  void raisesUnableToDecryptForAQf1SecretWhoseSharedSecretIsAllZero() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          QuonfigDecryptionException raised =
+              assertThrows(
+                  QuonfigDecryptionException.class,
+                  () -> client.getStringOrThrow("qf1.secret.low.order.ephemeral"));
+          String raisedMessage = String.valueOf(raised.getMessage());
+          assertFalse(
+              raisedMessage.contains("qf1-priv-"),
+              () -> "message contains " + "qf1-priv-" + ": " + raisedMessage);
+        });
+  }
+
+  @Test
+  @DisplayName("raises unable_to_decrypt for a value that still carries decryptWith")
+  void raisesUnableToDecryptForAValueThatStillCarriesDecryptwith() throws Exception {
     Quonfig client = TestSetup.client();
     assertThrows(
-        QuonfigDecryptionException.class, () -> client.getStringOrThrow("a.broken.secret.config"));
+        QuonfigDecryptionException.class, () -> client.getStringOrThrow("qf1.legacy.decrypt.with"));
   }
 
   @Test

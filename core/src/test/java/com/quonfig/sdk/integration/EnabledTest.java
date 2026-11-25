@@ -13,6 +13,23 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class EnabledTest {
+  private static String qf1TestKeyset(String... labels) {
+    java.util.List<String> entries = new java.util.ArrayList<>();
+    for (String label : labels) {
+      try {
+        byte[] digest =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(
+                    ("qf1 test vector private key: " + label)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        entries.add(
+            "qf1-priv-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest));
+      } catch (java.security.NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+    return String.join(",", entries);
+  }
 
   @Test
   @DisplayName("returns the correct value for a simple flag")
@@ -1631,7 +1648,19 @@ class EnabledTest {
   @Test
   @DisplayName("enabled on a decryption failure returns false")
   void enabledOnADecryptionFailureReturnsFalse() throws Exception {
-    Quonfig client = TestSetup.client();
-    assertEquals(false, client.featureIsOn("a.broken.secret.config", null));
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          Quonfig client = TestSetup.client();
+          assertEquals(false, client.featureIsOn("qf1.secret.key.not.held", null));
+        });
   }
 }

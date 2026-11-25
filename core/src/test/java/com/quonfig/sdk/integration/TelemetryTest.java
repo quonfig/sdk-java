@@ -16,6 +16,23 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class TelemetryTest {
+  private static String qf1TestKeyset(String... labels) {
+    java.util.List<String> entries = new java.util.ArrayList<>();
+    for (String label : labels) {
+      try {
+        byte[] digest =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(
+                    ("qf1 test vector private key: " + label)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        entries.add(
+            "qf1-priv-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest));
+      } catch (java.security.NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+    return String.join(",", entries);
+  }
 
   @Test
   @DisplayName("reason is STATIC for config with no targeting rules")
@@ -659,32 +676,44 @@ class TelemetryTest {
   }
 
   @Test
-  @DisplayName("confidential encrypted string is redacted using ciphertext hash")
-  void confidentialEncryptedStringIsRedactedUsingCiphertextHash() throws Exception {
-    try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
-      Quonfig client = t.client();
-      t.saw("a.secret.config", client.getString("a.secret.config", null));
-      assertEquals(
-          TestSetup.list(
-              TestSetup.map(
-                  "key",
-                  "a.secret.config",
-                  "type",
-                  "CONFIG",
-                  "value",
-                  "hello.world",
-                  "value_type",
-                  "string",
-                  "count",
-                  1L,
-                  "reason",
-                  1L,
-                  "selected_value",
-                  TestSetup.map("string", "*****936c9"),
-                  "summary",
-                  TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
-          t.evaluationSummaries());
-    }
+  @DisplayName("qf1 secret is redacted using the ciphertext hash and reported as a secret")
+  void qf1SecretIsRedactedUsingTheCiphertextHashAndReportedAsASecret() throws Exception {
+    TestSetup.withEnv(
+        TestSetup.map(
+            "QUONFIG_KEYSET",
+            qf1TestKeyset("QUONFIG_KEYSET/1"),
+            "QUONFIG_KEYSETX",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST/1"),
+            "QUONFIG_KEYSET_TEST_PROD",
+            qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old")),
+        () -> {
+          try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
+            Quonfig client = t.client();
+            t.saw("qf1.secret.short", client.getString("qf1.secret.short", null));
+            assertEquals(
+                TestSetup.list(
+                    TestSetup.map(
+                        "key",
+                        "qf1.secret.short",
+                        "type",
+                        "SECRET",
+                        "value",
+                        "hello",
+                        "value_type",
+                        "string",
+                        "count",
+                        1L,
+                        "reason",
+                        1L,
+                        "selected_value",
+                        TestSetup.map("string", "*****73985"),
+                        "summary",
+                        TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
+                t.evaluationSummaries());
+          }
+        });
   }
 
   @Test
@@ -798,6 +827,44 @@ class TelemetryTest {
                   TestSetup.map("int", 1234L),
                   "summary",
                   TestSetup.map("config_row_index", 0L, "conditional_value_index", 0L))),
+          t.evaluationSummaries());
+    }
+  }
+
+  @Test
+  @DisplayName("weighted ENV_VAR variant is reported as its resolved value with reason SPLIT")
+  void weightedEnvVarVariantIsReportedAsItsResolvedValueWithReasonSplit() throws Exception {
+    try (TestSetup.TelemetryClient t = TestSetup.telemetryClient(TestSetup.map(), null)) {
+      Quonfig client = t.client();
+      BoundQuonfig scoped =
+          client.withContext(
+              TestSetup.ctx(TestSetup.map("user", TestSetup.map("tracking_id", "92a202f2"))));
+      t.saw("weighted.variant.provided.int", scoped.getLong("weighted.variant.provided.int", null));
+      assertEquals(
+          TestSetup.list(
+              TestSetup.map(
+                  "key",
+                  "weighted.variant.provided.int",
+                  "type",
+                  "CONFIG",
+                  "value",
+                  1234L,
+                  "value_type",
+                  "int",
+                  "count",
+                  1L,
+                  "reason",
+                  3L,
+                  "selected_value",
+                  TestSetup.map("int", 1234L),
+                  "summary",
+                  TestSetup.map(
+                      "config_row_index",
+                      0L,
+                      "conditional_value_index",
+                      0L,
+                      "weighted_value_index",
+                      0L))),
           t.evaluationSummaries());
     }
   }

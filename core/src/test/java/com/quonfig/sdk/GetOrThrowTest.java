@@ -32,9 +32,6 @@ class GetOrThrowTest {
 
   @BeforeEach
   void setUp() {
-    env.put(
-        "PREFAB_INTEGRATION_TEST_ENCRYPTION_KEY",
-        "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221");
     env.put("NOT_A_NUMBER", "not_a_number");
     env.put("QUONFIG_ITD_DURATION_30S", "30s");
     env.put("QUONFIG_ITD_DURATION_PT0_5H", "PT0.5H");
@@ -105,7 +102,7 @@ class GetOrThrowTest {
   @Test
   void decryptionFailureThrowsDecryption() {
     assertThrows(
-        QuonfigDecryptionException.class, () -> client.getStringOrThrow("a.broken.secret.config"));
+        QuonfigDecryptionException.class, () -> client.getStringOrThrow("qf1.secret.key.not.held"));
   }
 
   @ParameterizedTest
